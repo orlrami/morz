@@ -27,6 +27,7 @@ import { RemotePanel } from './RemotePanel'
 import { SettingsPanel } from './SettingsPanel'
 import { WorkshopPanel } from './WorkshopPanel'
 import { ToastHost } from './Toast'
+import { IdePane } from './IdePane'
 import { spaces, builder1Blocks, builder2Blocks } from '@/lib/mock'
 import { colors } from '@/lib/tokens'
 import { springs } from '@/lib/springs'
@@ -174,6 +175,9 @@ export function Shell(): JSX.Element {
       <StatusBar onOpenCommit={() => setView('commit')} />
 
       <ToastHost />
+
+      {/* IDE editor pane — self-managed overlay; opens on ctrl-click 'open-file' events */}
+      <IdePane />
 
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
     </div>

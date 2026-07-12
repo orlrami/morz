@@ -5,7 +5,16 @@ import tailwindcss from '@tailwindcss/vite'
 
 export default defineConfig({
   main: {
-    plugins: [externalizeDepsPlugin()]
+    plugins: [externalizeDepsPlugin()],
+    build: {
+      rollupOptions: {
+        input: {
+          index: resolve('src/main/index.ts'),
+          // PTY-host runs as an Electron utilityProcess — needs its own entry bundle
+          'pty-host': resolve('src/main/pty-host/index.ts')
+        }
+      }
+    }
   },
   preload: {
     plugins: [externalizeDepsPlugin()]

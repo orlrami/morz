@@ -19,6 +19,17 @@ export interface TerminalSpawnOpts {
 }
 export interface PtyDataMsg { paneId: string; data: string }
 export interface PtyExitMsg { paneId: string; exitCode: number; signal?: number }
+/**
+ * Every message that travels over the PTY MessagePort (renderer↔PTY-host).
+ * Flow control: host pauses a PTY when unacked bytes to the renderer exceed a
+ * high watermark; renderer sends `ack` after xterm has consumed ~5k chars.
+ */
+export type PtyPortMsg =
+  | ({ type: 'write' } & PtyDataMsg) // renderer→host: keystrokes
+  | { type: 'ack'; paneId: string; bytes: number } // renderer→host: flow-control ack
+  | { type: 'attach'; paneId: string } // renderer→host: replay scrollback after window reopen
+  | ({ type: 'data' } & PtyDataMsg) // host→renderer: PTY output
+  | ({ type: 'exit' } & PtyExitMsg) // host→renderer: PTY exited
 /** MessagePort channel name posted from main→renderer once, carries all PTY data both ways. */
 export const PTY_PORT_CHANNEL = 'morz:pty-port'
 export const PtyApi = {
