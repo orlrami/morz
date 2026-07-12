@@ -1,0 +1,112 @@
+@import "tailwindcss";
+@import "./shadcn-theme.css";
+
+/*
+ * Morz — Tailwind v4 theme bridge.
+ * Locked palette: warm graphite + quartz + bronze. Neutrals carry structure,
+ * color carries meaning (status + agent tints only where they mean something).
+ */
+@theme {
+  /* surfaces */
+  --color-page: #26241e;
+  --color-panel: #2e2b24;
+  --color-card: #37332b;
+  --color-hover: #423d33;
+
+  /* neutrals */
+  --color-quartz: #eee6d9;
+  --color-quartz-dim: rgba(238, 230, 217, 0.45);
+  --color-quartz-faint: rgba(238, 230, 217, 0.25);
+
+  /* brand + interactive */
+  --color-bronze: #cba25a;
+  --color-bronze-hot: #e4bc77;
+
+  /* status — color = meaning */
+  --color-working: #3b82f6;
+  --color-blocked: #f59e0b;
+  --color-done: #22c55e;
+  --color-error: #ef4444;
+  --color-warning: #f97316;
+
+  /* per-agent identity tints */
+  --color-agent-claude: #fb923c;
+  --color-agent-codex: #2dd4bf;
+  --color-agent-gemini: #60a5fa;
+  --color-agent-opencode: #a78bfa;
+
+  /* hairlines */
+  --color-line: rgba(238, 230, 217, 0.08);
+  --color-line-strong: rgba(238, 230, 217, 0.14);
+
+  /* type — preset b3Z4dPIdAO: Geist headings/UI, Noto Sans body, mono terminal */
+  --font-display: "Geist Variable", "Segoe UI", system-ui, sans-serif;
+  --font-body: "Noto Sans Variable", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono Variable", "Cascadia Code", ui-monospace, monospace;
+
+  /* radius — rounded shell, crisp data */
+  --radius-shell: 16px;
+  --radius-card: 14px;
+  --radius-control: 10px;
+  --radius-data: 7px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-body);
+  background: var(--color-page);
+  color: var(--color-quartz);
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  overflow: hidden;
+  font-size: 14px;
+}
+
+::selection {
+  background: rgba(203, 162, 90, 0.28);
+}
+
+/* crisp, quiet scrollbars (Windows-first, custom chrome) */
+::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(238, 230, 217, 0.12);
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(238, 230, 217, 0.22);
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* visible keyboard focus — bronze ring */
+:focus-visible {
+  outline: 2px solid var(--color-bronze);
+  outline-offset: 1px;
+  border-radius: 4px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

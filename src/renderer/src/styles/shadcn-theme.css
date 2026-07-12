@@ -1,0 +1,45 @@
+/* Morz dark theme — maps warm graphite palette to shadcn CSS vars */
+/* Per Phase-0 brief: overrides the preset's .dark block entirely. Always dark. */
+.dark {
+  --background:         oklch(0.17 0.012 70);   /* #26241E graphite page */
+  --foreground:         oklch(0.93 0.015 80);   /* #EEE6D9 quartz text */
+
+  --card:               oklch(0.20 0.012 70);   /* #2E2B24 panel */
+  --card-foreground:    oklch(0.93 0.015 80);
+
+  --popover:            oklch(0.25 0.013 70);   /* #37332B raised */
+  --popover-foreground: oklch(0.93 0.015 80);
+
+  --primary:            oklch(0.73 0.11 75);    /* #CBA25A bronze */
+  --primary-foreground: oklch(0.17 0.012 70);
+
+  --secondary:          oklch(0.25 0.013 70);   /* #37332B card */
+  --secondary-foreground: oklch(0.93 0.015 80);
+
+  --muted:              oklch(0.20 0.012 70);
+  --muted-foreground:   oklch(0.60 0.010 75);   /* dimmed quartz */
+
+  --accent:             oklch(0.25 0.013 70);
+  --accent-foreground:  oklch(0.93 0.015 80);
+
+  --destructive:        oklch(0.577 0.245 27);  /* #EF4444 error red */
+
+  --border:             oklch(1 0 0 / 8%);
+  --input:              oklch(1 0 0 / 12%);
+  --ring:               oklch(0.73 0.11 75);    /* bronze focus ring */
+
+  /* Amber chart scale (matches preset chart color = Amber) */
+  --chart-1:            oklch(0.879 0.169 91);  /* yellow-amber */
+  --chart-2:            oklch(0.769 0.188 70);
+  --chart-3:            oklch(0.666 0.179 58);
+  --chart-4:            oklch(0.555 0.163 49);
+  --chart-5:            oklch(0.440 0.137 46);  /* deep amber */
+
+  --sidebar:            oklch(0.17 0.012 70);
+  --sidebar-foreground: oklch(0.93 0.015 80);
+  --sidebar-primary:    oklch(0.73 0.11 75);    /* bronze */
+  --sidebar-primary-foreground: oklch(0.17 0.012 70);
+  --sidebar-accent:     oklch(0.25 0.013 70);
+  --sidebar-accent-foreground: oklch(0.93 0.015 80);
+  --sidebar-border:     oklch(1 0 0 / 8%);
+}
