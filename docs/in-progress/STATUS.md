@@ -4,14 +4,18 @@
 
 ## Current target: **0.0.1 — "The Terminal"** ([spec](../roadmap/0.0.1.md))
 
-| Slice | Status | Branch | Notes |
-|-------|--------|--------|-------|
-| 1 — PTY-host + real terminals | ⏳ not started | `slice-1-pty` | next up |
-| 2 — Session restore + PTY survival | ⬜ pending | — | |
-| 3 — Ctrl-click → IDE pane | ⬜ pending | — | |
-| 4 — Spaces + git | ⬜ pending | — | |
-| 5 — Claude Code adapter | ⬜ pending | — | |
-| 6 — Mode gating | ⬜ pending | — | |
+Wave 1 (4 parallel Fable-5 agents) merged to `main` + integrated + fixed.
+
+| Slice | Status | Notes |
+|-------|--------|-------|
+| 1 — PTY-host + real terminals | ✅ verified | live pwsh/cmd/WSL prompts render in the Slate shell; smoke PASS; PATH resolves like Windows Terminal. PTY data relays through main (direct MessagePort didn't entangle). |
+| 2 — Session restore + PTY survival | ✅ mostly | tray-resident host; scrollback reattach verified by smoke. Full layout-restore across relaunch: needs a live pass. |
+| 3 — Ctrl-click → IDE pane | ⏳ built, wired | FileService + CodeMirror IdePane + editor handoff done; IdePane mounted in Shell. Live ctrl-click open: needs a manual pass. |
+| 4 — Spaces + git | ✅ verified | sidebar shows live branch/dirty per space + per-agent worktrees. |
+| 5 — Claude Code adapter | 🚧 built, not triggered | adapter + ClaudeLane + mode gating built; ClaudeLane not yet mounted in Shell (no start-a-lane UI). Next wire-up. |
+| 6 — Mode gating | ⏳ built | modeStore + Manual-inert logic present; dial UI wiring pending. |
+
+**Integration fixes applied:** register-fn signatures, chokidar 5→4 (ESM), CSP data: fonts, unified app-events.ts, and PTY MessagePort → main-relay (the big one). typecheck + build clean; smoke PASS; window screenshot confirms live terminals.
 
 Legend: ✅ done · ⏳ in progress · ⬜ pending · 🚧 blocked
 
