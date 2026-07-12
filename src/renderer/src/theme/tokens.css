@@ -1,0 +1,51 @@
+/*
+ * Morz design tokens — the single source of truth for the palette.
+ * Locked direction: cozy dark command center. Warm graphite + quartz + bronze.
+ * Rule: neutrals carry structure, color carries meaning.
+ * Keep this in sync with the Figma design system + any UI-builder output.
+ */
+:root {
+  /* graphite base (warm, clearer — NOT near-black) */
+  --graphite-page: #26241e;
+  --graphite-panel: #2e2b24;
+  --graphite-raised: #37332b;
+  --graphite-hover: #423d33;
+
+  /* quartz (warm pale) — text, active surfaces, accents */
+  --quartz: #eee6d9;
+  --quartz-dim: #c6bcab;
+  --quartz-faint: #8e8574;
+
+  /* bronze — brand + interactive (buttons, links, focus, orchestrator) */
+  --bronze: #cba25a;
+  --bronze-bright: #e4bc77;
+  --bronze-fill: rgba(203, 162, 90, 0.16);
+
+  /* hairlines */
+  --line: rgba(236, 227, 214, 0.1);
+  --line-strong: rgba(236, 227, 214, 0.17);
+
+  /* status — color = meaning */
+  --status-working: #7fa6f0; /* blue */
+  --status-blocked: #ecc450; /* amber */
+  --status-done: #77c97f;    /* green */
+  --status-error: #e56e61;   /* red */
+  --status-warning: #e7a24f; /* orange */
+
+  /* per-agent identity tint (subtle) */
+  --agent-claude: #e2986c;
+  --agent-codex: #77c9a4;
+  --agent-gemini: #7fa6f0;
+  --agent-opencode: #c09ae6;
+
+  /* radius — rounded shell, crisp data */
+  --radius-shell: 16px;
+  --radius-card: 14px;
+  --radius-control: 11px;
+  --radius-data: 8px;
+  --radius-pill: 999px;
+
+  /* type */
+  --font-ui: "Segoe UI", system-ui, -apple-system, sans-serif; /* TODO: pick a warm humanist face */
+  --font-mono: "Cascadia Code", "Consolas", ui-monospace, monospace;
+}

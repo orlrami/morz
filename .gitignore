@@ -1,0 +1,30 @@
+# deps & build
+node_modules/
+dist/
+out/
+build/
+*.tsbuildinfo
+
+# electron native rebuilds
+.electron-vite/
+
+# env & secrets
+.env
+.env.*
+!.env.example
+
+# logs
+*.log
+npm-debug.log*
+
+# os / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# local db (dev)
+*.sqlite
+*.sqlite3
+/data/
