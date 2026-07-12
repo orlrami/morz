@@ -30,14 +30,17 @@ export type PtyPortMsg =
   | { type: 'attach'; paneId: string } // renderer→host: replay scrollback after window reopen
   | ({ type: 'data' } & PtyDataMsg) // host→renderer: PTY output
   | ({ type: 'exit' } & PtyExitMsg) // host→renderer: PTY exited
-/** MessagePort channel name posted from main→renderer once, carries all PTY data both ways. */
+/** (legacy) MessagePort channel — kept for compatibility; PTY data now relays through main. */
 export const PTY_PORT_CHANNEL = 'morz:pty-port'
 export const PtyApi = {
   spawn: 'pty:spawn', // (TerminalSpawnOpts) => Promise<{ok:boolean}>
-  write: 'pty:write', // over MessagePort: {paneId, data}
+  write: 'pty:write', // ({paneId, data}) renderer→main→host keystrokes
+  ack: 'pty:ack', // ({paneId, bytes}) flow-control ack
+  attach: 'pty:attach', // ({paneId}) replay scrollback after reopen
   resize: 'pty:resize', // ({paneId, cols, rows})
   kill: 'pty:kill', // ({paneId})
-  list: 'pty:list' // () => Promise<string[]> live paneIds (for reattach)
+  list: 'pty:list', // () => Promise<string[]> live paneIds (for reattach)
+  data: 'pty:data' // push main→renderer: PtyDataMsg | PtyExitMsg (tagged)
 } as const
 
 /* ── Session (Slice 2) ───────────────────────────────────────── */
@@ -109,11 +112,14 @@ export type OpenFileEvent = { path: string; line?: number; col?: number }
 export interface MorzApi {
   pty: {
     spawn(o: TerminalSpawnOpts): Promise<{ ok: boolean }>
+    write(paneId: string, data: string): void
+    ack(paneId: string, bytes: number): void
+    attach(paneId: string): void
     resize(paneId: string, cols: number, rows: number): void
     kill(paneId: string): void
     list(): Promise<string[]>
-    /** renderer receives the MessagePort for PTY data; call once at startup. */
-    onPort(cb: (port: MessagePort) => void): void
+    /** PTY output/exit pushed from main. Returns an unsubscribe fn. */
+    onData(cb: (msg: PtyDataMsg | PtyExitMsg) => void): () => void
   }
   session: { save(s: SessionSnapshot): void; load(): Promise<SessionSnapshot | null> }
   file: {

@@ -11,7 +11,6 @@ import {
   FileApi,
   GitApi,
   PtyApi,
-  PTY_PORT_CHANNEL,
   SessionApi,
   type ClaudeEvent,
   type ClaudePermissionReq,
@@ -22,31 +21,25 @@ import {
   type FileSaveResult,
   type GitStatus,
   type MorzApi,
+  type PtyDataMsg,
+  type PtyExitMsg,
   type SessionSnapshot,
   type TerminalSpawnOpts
 } from '../shared/ipc'
 
-/* The PTY MessagePort arrives once per (window, pty-host generation). Buffer it
- * so the renderer can call onPort before or after it lands; re-deliver on
- * pty-host respawn (new port = fresh channel, old one closed with the host). */
-let currentPort: MessagePort | null = null
-const portCallbacks: ((port: MessagePort) => void)[] = []
-ipcRenderer.on(PTY_PORT_CHANNEL, (event) => {
-  const port = event.ports[0]
-  if (!port) return
-  currentPort = port
-  for (const cb of portCallbacks) cb(port)
-})
-
 const api: MorzApi = {
   pty: {
     spawn: (o: TerminalSpawnOpts) => ipcRenderer.invoke(PtyApi.spawn, o),
+    write: (paneId, data) => ipcRenderer.send(PtyApi.write, { paneId, data }),
+    ack: (paneId, bytes) => ipcRenderer.send(PtyApi.ack, { paneId, bytes }),
+    attach: (paneId) => ipcRenderer.send(PtyApi.attach, { paneId }),
     resize: (paneId, cols, rows) => ipcRenderer.send(PtyApi.resize, { paneId, cols, rows }),
     kill: (paneId) => ipcRenderer.send(PtyApi.kill, { paneId }),
     list: () => ipcRenderer.invoke(PtyApi.list),
-    onPort: (cb) => {
-      portCallbacks.push(cb)
-      if (currentPort) cb(currentPort)
+    onData: (cb) => {
+      const h = (_e: unknown, msg: PtyDataMsg | PtyExitMsg): void => cb(msg)
+      ipcRenderer.on(PtyApi.data, h)
+      return () => ipcRenderer.off(PtyApi.data, h)
     }
   },
   session: {

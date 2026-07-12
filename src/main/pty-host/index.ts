@@ -11,9 +11,12 @@ import { PtyManager } from './pty-manager'
 import { resolveRealPath } from './path-env'
 
 type MainReq =
-  | { type: 'renderer-port' } // ports[0] = renderer side channel
+  | { type: 'renderer-port' } // ports[0] = renderer side channel (legacy)
   | { type: 'renderer-gone' }
   | { type: 'shutdown' }
+  | { type: 'write'; paneId: string; data: string }
+  | { type: 'ack'; paneId: string; bytes: number }
+  | { type: 'attach'; paneId: string }
   | { type: 'req'; id: number; op: 'spawn' | 'resize' | 'kill' | 'list'; payload?: unknown }
 
 interface ParentPortLike {
@@ -26,7 +29,11 @@ const parentPort = (process as unknown as { parentPort: ParentPortLike }).parent
 let rendererPort: MessagePortMain | null = null
 let manager: PtyManager | null = null
 
-const toRenderer = (msg: PtyPortMsg): void => rendererPort?.postMessage(msg)
+// PTY data/exit relays through main (parentPort) → webContents → renderer.
+// (A direct utilityProcess↔renderer MessagePort did not entangle reliably here.)
+const toRenderer = (msg: PtyPortMsg): void => {
+  parentPort.postMessage({ type: 'pty', msg })
+}
 
 const init = (async () => {
   const realPath = await resolveRealPath()
@@ -74,6 +81,15 @@ function adoptRendererPort(port: MessagePortMain): void {
     }
   })
   port.start()
+  // Replay each live pane's scrollback to the freshly-connected renderer. Covers
+  // (1) the first-spawn race where a pane emitted its prompt before this port was
+  // adopted, and (2) Slice-2 reopen (window closed → reattach shows history).
+  if (manager) {
+    for (const paneId of manager.list()) {
+      const scrollback = manager.scrollback(paneId)
+      if (scrollback) toRenderer({ type: 'data', paneId, data: scrollback })
+    }
+  }
 }
 
 async function handleReq(id: number, op: string, payload: unknown): Promise<void> {
@@ -107,7 +123,7 @@ async function handleReq(id: number, op: string, payload: unknown): Promise<void
 }
 
 parentPort.on('message', (e) => {
-  const msg = e.data
+  const msg = e.data as MainReq & { paneId?: string; data?: string; bytes?: number }
   if (!msg || typeof msg !== 'object') return
   switch (msg.type) {
     case 'renderer-port':
@@ -115,6 +131,18 @@ parentPort.on('message', (e) => {
       break
     case 'renderer-gone':
       manager?.detachAll()
+      break
+    case 'write':
+      if (msg.paneId != null) manager?.write(msg.paneId, msg.data ?? '')
+      break
+    case 'ack':
+      if (msg.paneId != null) manager?.ack(msg.paneId, msg.bytes ?? 0)
+      break
+    case 'attach':
+      if (msg.paneId != null) {
+        const sb = manager?.scrollback(msg.paneId)
+        if (sb) toRenderer({ type: 'data', paneId: msg.paneId, data: sb })
+      }
       break
     case 'req':
       void handleReq(msg.id, msg.op, msg.payload)

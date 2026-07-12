@@ -16,7 +16,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { SerializeAddon } from '@xterm/addon-serialize'
 import '@xterm/xterm/css/xterm.css'
-import type { MorzApi, PtyDataMsg, PtyExitMsg } from '@shared/ipc'
+import type { MorzApi } from '@shared/ipc'
 import { activeXtermTheme, subscribeXtermTheme } from '@/lib/xterm-theme'
 import { attachCommandBlocks } from '@/lib/terminal-blocks'
 import { registerTerminalLinks } from '@/lib/terminal-links'
@@ -39,38 +39,29 @@ function ptyApi(): MorzApi['pty'] | null {
   return m?.pty && typeof m.pty.spawn === 'function' ? (m.pty as MorzApi['pty']) : null
 }
 
-/* ── shared MessagePort (received once from the preload) ── */
-let ptyPort: MessagePort | null = null
-let portRequested = false
-const pendingWrites: PtyDataMsg[] = []
+/* ── PTY output relay (main → renderer via window.morz.pty.onData) ── */
+let dataSubscribed = false
 
 function ensurePort(): void {
   const pty = ptyApi()
-  if (portRequested || !pty) return
-  portRequested = true
-  pty.onPort((port) => {
-    ptyPort = port
-    port.onmessage = (ev: MessageEvent) => {
-      const msg = ev.data as PtyDataMsg | PtyExitMsg
-      const s = sessions.get(msg.paneId)
-      if (!s) return
-      if ('exitCode' in msg) {
-        s.exited = true
-        s.term.write(
-          `\r\n\x1b[2m— process exited (${msg.exitCode}) —\x1b[0m\r\n`
-        )
-      } else {
-        s.term.write(msg.data)
-      }
+  if (dataSubscribed || !pty) return
+  dataSubscribed = true
+  pty.onData((msg) => {
+    const s = sessions.get(msg.paneId)
+    if (!s) return
+    if ('exitCode' in msg) {
+      s.exited = true
+      s.term.write(`\r\n\x1b[2m— process exited (${msg.exitCode}) —\x1b[0m\r\n`)
+    } else {
+      s.term.write(msg.data)
+      // flow-control ack so the host resumes past its high watermark
+      pty.ack(msg.paneId, msg.data.length)
     }
-    port.start?.()
-    for (const w of pendingWrites.splice(0)) port.postMessage(w)
   })
 }
 
 function portWrite(paneId: string, data: string): void {
-  if (ptyPort) ptyPort.postMessage({ paneId, data })
-  else pendingWrites.push({ paneId, data })
+  ptyApi()?.write(paneId, data)
 }
 
 /* ── theme: one subscription updates every live terminal ── */

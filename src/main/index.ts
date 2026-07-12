@@ -9,7 +9,6 @@ import {
   app,
   BrowserWindow,
   ipcMain,
-  MessageChannelMain,
   Menu,
   nativeImage,
   shell,
@@ -19,7 +18,7 @@ import {
 } from 'electron'
 import { join, basename } from 'path'
 import { spawnSync } from 'child_process'
-import { PtyApi, PTY_PORT_CHANNEL, type TerminalSpawnOpts } from '../shared/ipc'
+import { PtyApi, type TerminalSpawnOpts } from '../shared/ipc'
 import {
   journalAppend,
   journalDelete,
@@ -47,6 +46,8 @@ let reqId = 0
 const pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>()
 let restartTimestamps: number[] = []
 let shuttingDown = false
+/** MORZ_SMOKE only: taps relayed PTY output. */
+let smokeDataTap: ((paneId: string, data: string) => void) | null = null
 
 function startPtyHost(): void {
   const host = utilityProcess.fork(join(__dirname, 'pty-host.js'), [], {
@@ -75,6 +76,15 @@ function startPtyHost(): void {
         for (const row of journalEntries('pty-spawn')) {
           if ((row.payload as SpawnJournal | null)?.paneId === paneId) journalDelete(row.id)
         }
+        break
+      }
+      case 'pty': {
+        // relay PTY output/exit to every window's renderer
+        const relayed = msg.msg as { type: string; paneId: string; data?: string }
+        for (const win of BrowserWindow.getAllWindows()) {
+          if (!win.isDestroyed()) win.webContents.send(PtyApi.data, relayed)
+        }
+        if (smokeDataTap && relayed.type === 'data') smokeDataTap(relayed.paneId, relayed.data ?? '')
         break
       }
     }
@@ -112,12 +122,15 @@ function hostRequest<T>(op: 'spawn' | 'resize' | 'kill' | 'list', payload?: unkn
   })
 }
 
-/** New MessageChannel per (window, host) pair: one side to the host, one to the renderer. */
+/** On (re)load, ask the host to replay each live pane's scrollback so a reopened
+ * or reloaded window shows current terminal state (PTY data relays through main). */
 function wirePtyPort(win: BrowserWindow): void {
   if (!ptyHost || win.isDestroyed()) return
-  const { port1, port2 } = new MessageChannelMain()
-  ptyHost.postMessage({ type: 'renderer-port' }, [port1])
-  win.webContents.postMessage(PTY_PORT_CHANNEL, null, [port2])
+  void hostRequest<string[]>('list')
+    .then((ids) => {
+      for (const paneId of ids) ptyHost?.postMessage({ type: 'attach', paneId })
+    })
+    .catch(() => {})
 }
 
 /* ── orphan sweep (previous crashed run) ─────────────────────── */
@@ -167,6 +180,16 @@ function registerPtyIpc(): void {
   ipcMain.on(PtyApi.kill, (_e, p: { paneId: string }) => {
     hostRequest('kill', p).catch(() => {})
   })
+  // keystrokes / flow-control ack / reattach — forwarded straight to the host
+  ipcMain.on(PtyApi.write, (_e, p: { paneId: string; data: string }) =>
+    ptyHost?.postMessage({ type: 'write', paneId: p.paneId, data: p.data })
+  )
+  ipcMain.on(PtyApi.ack, (_e, p: { paneId: string; bytes: number }) =>
+    ptyHost?.postMessage({ type: 'ack', paneId: p.paneId, bytes: p.bytes })
+  )
+  ipcMain.on(PtyApi.attach, (_e, p: { paneId: string }) =>
+    ptyHost?.postMessage({ type: 'attach', paneId: p.paneId })
+  )
 }
 
 /* ── window + tray ───────────────────────────────────────────── */
@@ -272,6 +295,7 @@ function runSmoke(): void {
   const finish = (ok: boolean, why: string): void => {
     if (done) return
     done = true
+    smokeDataTap = null
     console.log(ok ? `[smoke] PASS — ${why}` : `[smoke] FAIL at stage ${stage} — ${why}`)
     hostRequest('kill', { paneId: 'smoke' })
       .catch(() => {})
@@ -279,47 +303,38 @@ function runSmoke(): void {
   }
   setTimeout(() => finish(false, 'timeout'), 40_000)
 
-  const attachPort = (onData: (data: string) => void): Electron.MessagePortMain => {
-    const { port1, port2 } = new MessageChannelMain()
-    ptyHost!.postMessage({ type: 'renderer-port' }, [port1])
-    port2.on('message', (e) => {
-      const msg = e.data as { type: string; data?: string }
-      if (msg.type === 'data') onData(msg.data ?? '')
-    })
-    port2.start()
-    return port2
-  }
-
+  // PTY output relays through main via smokeDataTap (see the host 'pty' handler)
   let buffer = ''
-  const port = attachPort((data) => {
-    buffer += data
-    if (stage === 0 && buffer.includes('MORZ_SMOKE_OK_4')) {
-      stage = 1
-      console.log('[smoke] stage 0 ok: pwsh spawned, bytes flowed both ways')
-      port.postMessage({
-        type: 'write',
-        paneId: 'smoke',
-        data: '"MORZ_NPM_$($null -ne (Get-Command npm -ErrorAction SilentlyContinue))"\r'
-      })
-    } else if (stage === 1 && buffer.includes('MORZ_NPM_True')) {
-      stage = 2
-      console.log('[smoke] stage 1 ok: npm resolves on real PATH')
-      // simulate window close + reopen: fresh port, list + attach replay
-      let replay = ''
-      const port2 = attachPort((d) => {
-        replay += d
-        if (replay.includes('MORZ_SMOKE_OK_4')) {
-          finish(true, 'echo + PATH + reattach scrollback replay all good')
-        }
-      })
-      hostRequest<string[]>('list')
-        .then((ids) => {
-          if (!ids.includes('smoke')) return finish(false, `list() = ${JSON.stringify(ids)}`)
-          port2.postMessage({ type: 'attach', paneId: 'smoke' })
+  let replay = ''
+  smokeDataTap = (_paneId, data) => {
+    if (stage < 2) {
+      buffer += data
+      if (stage === 0 && buffer.includes('MORZ_SMOKE_OK_4')) {
+        stage = 1
+        console.log('[smoke] stage 0 ok: pwsh spawned, bytes flowed both ways')
+        ptyHost?.postMessage({
+          type: 'write',
+          paneId: 'smoke',
+          data: '"MORZ_NPM_$($null -ne (Get-Command npm -ErrorAction SilentlyContinue))"\r'
         })
-        .catch((e) => finish(false, e.message))
+      } else if (stage === 1 && buffer.includes('MORZ_NPM_True')) {
+        stage = 2
+        console.log('[smoke] stage 1 ok: npm resolves on real PATH')
+        // simulate reopen: request scrollback replay and expect the prompt back
+        hostRequest<string[]>('list')
+          .then((ids) => {
+            if (!ids.includes('smoke')) return finish(false, `list() = ${JSON.stringify(ids)}`)
+            ptyHost?.postMessage({ type: 'attach', paneId: 'smoke' })
+          })
+          .catch((e) => finish(false, e.message))
+      }
+    } else {
+      replay += data
+      if (replay.includes('MORZ_SMOKE_OK_4')) {
+        finish(true, 'echo + PATH + reattach scrollback replay all good')
+      }
     }
-  })
+  }
 
   hostRequest<{ ok: boolean; error?: string }>('spawn', {
     paneId: 'smoke',
@@ -330,7 +345,7 @@ function runSmoke(): void {
     .then((r) => {
       if (!r.ok) return finish(false, r.error ?? 'spawn failed')
       setTimeout(() => {
-        port.postMessage({ type: 'write', paneId: 'smoke', data: '"MORZ_SMOKE_OK_$(2+2)"\r' })
+        ptyHost?.postMessage({ type: 'write', paneId: 'smoke', data: '"MORZ_SMOKE_OK_$(2+2)"\r' })
       }, 3_000)
     })
     .catch((e) => finish(false, e.message))
