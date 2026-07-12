@@ -25,7 +25,7 @@ export const colors = {
   agentCodex: '#2DD4BF', // teal-green
   agentGemini: '#60A5FA', // blue
   agentOpenCode: '#A78BFA' // violet
-} as const
+}
 
 export type AgentStatus = 'working' | 'blocked' | 'done' | 'error' | 'idle'
 

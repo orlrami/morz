@@ -4,6 +4,7 @@ import { IconGauge, IconPalette, IconAdjustments, IconUpload } from '@tabler/ico
 import { cliUsages, cliTint, cliLabel } from '@/lib/mock'
 import { colors } from '@/lib/tokens'
 import { springs } from '@/lib/springs'
+import { themes, useThemeStore } from '@/lib/themes'
 
 type Tab = 'limits' | 'appearance' | 'control'
 
@@ -13,15 +14,10 @@ const TABS: { id: Tab; label: string; icon: typeof IconGauge }[] = [
   { id: 'control', label: 'Control', icon: IconAdjustments }
 ]
 
-const THEMES = [
-  { name: 'Morz Graphite', active: true, chips: ['#26241E', '#EEE6D9', '#CBA25A'] },
-  { name: 'Catppuccin Mocha', active: false, chips: ['#1E1E2E', '#CDD6F4', '#F5C2E7'] },
-  { name: 'Gruvbox Dark', active: false, chips: ['#282828', '#EBDBB2', '#FE8019'] }
-]
-
 /* Settings: per-CLI membership limits, theme importer, and the control defaults. */
 export function SettingsPanel(): JSX.Element {
   const [tab, setTab] = useState<Tab>('limits')
+  const { themeId, setTheme } = useThemeStore()
 
   return (
     <section className="flex min-w-0 flex-1" style={{ background: colors.page }} aria-label="Settings">
@@ -120,28 +116,32 @@ export function SettingsPanel(): JSX.Element {
               Import any base16, VS Code, or Ghostty theme — terminal and app chrome share one palette.
             </p>
             <div className="mt-4 grid grid-cols-3 gap-2.5">
-              {THEMES.map((t) => (
-                <button
-                  key={t.name}
-                  className="cursor-pointer rounded-xl border p-3 text-left"
-                  style={{
-                    background: colors.panel,
-                    borderColor: t.active ? 'rgba(203,162,90,0.5)' : 'var(--color-line)'
-                  }}
-                >
-                  <span className="flex gap-1">
-                    {t.chips.map((c) => (
-                      <span key={c} className="size-4 rounded-md border" style={{ background: c, borderColor: 'var(--color-line)' }} />
-                    ))}
-                  </span>
-                  <span className="mt-2 block text-[11px] font-semibold" style={{ fontFamily: 'var(--font-display)' }}>
-                    {t.name}
-                  </span>
-                  <span className="text-[9.5px]" style={{ color: t.active ? colors.bronzeHot : colors.quartzDim }}>
-                    {t.active ? 'active' : 'imported'}
-                  </span>
-                </button>
-              ))}
+              {themes.map((t) => {
+                const active = themeId === t.id
+                return (
+                  <button
+                    key={t.id}
+                    onClick={() => setTheme(t.id)}
+                    className="cursor-pointer rounded-xl border p-3 text-left transition-transform hover:scale-[1.02]"
+                    style={{
+                      background: colors.panel,
+                      borderColor: active ? 'rgba(203,162,90,0.55)' : 'var(--color-line)'
+                    }}
+                  >
+                    <span className="flex gap-1">
+                      {[t.page, t.quartz, t.bronze].map((c) => (
+                        <span key={c} className="size-4 rounded-md border" style={{ background: c, borderColor: 'var(--color-line)' }} />
+                      ))}
+                    </span>
+                    <span className="mt-2 block text-[11px] font-semibold" style={{ fontFamily: 'var(--font-display)' }}>
+                      {t.name}
+                    </span>
+                    <span className="text-[9.5px]" style={{ color: active ? colors.bronzeHot : colors.quartzDim }}>
+                      {active ? 'active' : t.note}
+                    </span>
+                  </button>
+                )
+              })}
             </div>
             <button
               className="mt-3 flex cursor-pointer items-center gap-2 rounded-[10px] border border-dashed px-3.5 py-2 text-xs"

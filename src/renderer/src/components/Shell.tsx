@@ -8,7 +8,8 @@ import {
   IconFolders,
   IconWorld,
   IconDeviceMobile,
-  IconSettings
+  IconSettings,
+  IconSquareRoundedPlus
 } from '@tabler/icons-react'
 import { TitleBar } from './TitleBar'
 import { SpacesSidebar } from './SpacesSidebar'
@@ -24,12 +25,13 @@ import { DagView } from './DagView'
 import { BrowserPanel } from './BrowserPanel'
 import { RemotePanel } from './RemotePanel'
 import { SettingsPanel } from './SettingsPanel'
+import { WorkshopPanel } from './WorkshopPanel'
 import { ToastHost } from './Toast'
 import { spaces, builder1Blocks, builder2Blocks } from '@/lib/mock'
 import { colors } from '@/lib/tokens'
 import { springs } from '@/lib/springs'
 
-type CenterView = 'terminals' | 'commit' | 'review' | 'dag' | 'browser' | 'remote' | 'settings'
+type CenterView = 'terminals' | 'commit' | 'review' | 'dag' | 'browser' | 'remote' | 'settings' | 'workshop'
 
 const VIEWS: { id: CenterView; label: string; icon: typeof IconTerminal2 }[] = [
   { id: 'terminals', label: 'Terminals', icon: IconTerminal2 },
@@ -127,8 +129,17 @@ export function Shell(): JSX.Element {
             </nav>
 
             <button
+              onClick={() => setView('workshop')}
+              className="ml-auto flex cursor-pointer items-center rounded-md p-1.5 transition-colors hover:bg-[#37332B]"
+              title="Workshop — add skills, MCP servers, plugins, models"
+              aria-label="Workshop"
+              style={{ color: view === 'workshop' ? colors.bronzeHot : colors.quartzDim }}
+            >
+              <IconSquareRoundedPlus size={15} stroke={1.5} />
+            </button>
+            <button
               onClick={() => setView('settings')}
-              className="ml-auto mr-2 flex cursor-pointer items-center rounded-md p-1.5 transition-colors hover:bg-[#37332B]"
+              className="mr-2 flex cursor-pointer items-center rounded-md p-1.5 transition-colors hover:bg-[#37332B]"
               title="Settings"
               aria-label="Settings"
               style={{ color: view === 'settings' ? colors.bronzeHot : colors.quartzDim }}
@@ -152,6 +163,7 @@ export function Shell(): JSX.Element {
           {view === 'browser' && <BrowserPanel />}
           {view === 'remote' && <RemotePanel />}
           {view === 'settings' && <SettingsPanel />}
+          {view === 'workshop' && <WorkshopPanel />}
         </main>
 
         <OrchestratorPanel />
