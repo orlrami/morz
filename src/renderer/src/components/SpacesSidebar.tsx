@@ -3,8 +3,6 @@ import { IconChevronDown, IconChevronRight, IconGitBranch, IconPlus } from '@tab
 import { spaces, cliTint, cliLabel } from '@/lib/mock'
 import { colors, statusColor } from '@/lib/tokens'
 import { staggerContainer, staggerItem } from '@/lib/springs'
-import { ModeDial } from './ModeDial'
-
 /* Spaces sidebar: projects → agents with live status, CLI + model badges, branch. */
 export function SpacesSidebar(): JSX.Element {
   const active = spaces[0]
@@ -108,7 +106,6 @@ export function SpacesSidebar(): JSX.Element {
       </div>
 
       <div className="border-t pt-2" style={{ borderColor: 'var(--color-line)' }}>
-        <ModeDial />
         <div className="flex flex-wrap gap-x-3 gap-y-1 px-4 pb-3 text-[10px]" style={{ color: colors.quartzDim }}>
           <Legend color={statusColor.working} label="working" />
           <Legend color={statusColor.blocked} label="blocked" />

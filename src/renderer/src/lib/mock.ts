@@ -181,12 +181,169 @@ export const spawnPlan: PlanRow[] = [
   { id: 'p4', role: 'reviewer', task: 'refute + gate', cli: 'codex' }
 ]
 
+export interface CliUsage {
+  cli: CliKind
+  /** % of the current rate-limit window consumed (membership-dependent). */
+  used: number
+  resetIn: string
+  plan: string
+}
+
+/* Hourly/rolling limit consumption per CLI — depends on each membership. */
+export const cliUsages: CliUsage[] = [
+  { cli: 'claude', used: 62, resetIn: '2h 10m', plan: 'Max' },
+  { cli: 'codex', used: 41, resetIn: '3h 45m', plan: 'Pro' },
+  { cli: 'agy', used: 78, resetIn: '55m', plan: 'Pro' },
+  { cli: 'opencode', used: 12, resetIn: '4h', plan: 'BYOK' }
+]
+
 export interface PaletteAction {
   id: string
   group: string
   label: string
   hint?: string
 }
+
+/* ── P2 surfaces ─────────────────────────────────────────────── */
+
+export interface TreeNode {
+  name: string
+  kind: 'dir' | 'file'
+  change?: 'M' | 'A' | 'D'
+  children?: TreeNode[]
+}
+
+export const fileTree: TreeNode[] = [
+  {
+    name: 'src',
+    kind: 'dir',
+    children: [
+      {
+        name: 'api',
+        kind: 'dir',
+        children: [
+          { name: 'limiter.ts', kind: 'file', change: 'M' },
+          { name: 'limiter.test.ts', kind: 'file', change: 'A' },
+          { name: 'routes.ts', kind: 'file' }
+        ]
+      },
+      {
+        name: 'db',
+        kind: 'dir',
+        children: [
+          { name: 'schema.sql', kind: 'file', change: 'M' },
+          { name: 'migrate.ts', kind: 'file', change: 'M' }
+        ]
+      },
+      { name: 'index.ts', kind: 'file' }
+    ]
+  },
+  {
+    name: 'docs',
+    kind: 'dir',
+    children: [{ name: 'phase-5.md', kind: 'file' }]
+  },
+  { name: 'package.json', kind: 'file' },
+  { name: 'README.md', kind: 'file' }
+]
+
+export interface ChangedFile {
+  path: string
+  change: 'M' | 'A' | 'D'
+  staged: boolean
+  agent: string
+}
+
+export const changedFiles: ChangedFile[] = [
+  { path: 'src/api/limiter.ts', change: 'M', staged: true, agent: 'builder-1' },
+  { path: 'src/api/limiter.test.ts', change: 'A', staged: true, agent: 'builder-1' },
+  { path: 'src/db/schema.sql', change: 'M', staged: false, agent: 'builder-2' },
+  { path: 'src/db/migrate.ts', change: 'M', staged: false, agent: 'builder-2' }
+]
+
+export interface DiffLine {
+  kind: 'ctx' | 'add' | 'del' | 'hunk'
+  text: string
+}
+
+export const limiterDiff: DiffLine[] = [
+  { kind: 'hunk', text: '@@ -12,6 +12,9 @@ export function createApi(app: Express)' },
+  { kind: 'ctx', text: "import { tokenBucket } from './util/bucket'" },
+  { kind: 'ctx', text: '' },
+  { kind: 'add', text: 'export const limiter = tokenBucket(60, 60_000)' },
+  { kind: 'add', text: 'app.use(limiter)' },
+  { kind: 'ctx', text: 'app.use(json())' },
+  { kind: 'hunk', text: '@@ -40,4 +43,8 @@ export function createApi(app: Express)' },
+  { kind: 'del', text: 'const RATE = Infinity // TODO' },
+  { kind: 'add', text: 'const RATE = 60 // requests / minute / key' },
+  { kind: 'ctx', text: 'export default createApi' }
+]
+
+export interface Finding {
+  id: string
+  severity: 'high' | 'medium' | 'low'
+  file: string
+  line: number
+  title: string
+  detail: string
+  refutedBy: string
+}
+
+export const findings: Finding[] = [
+  {
+    id: 'f1',
+    severity: 'high',
+    file: 'src/api/limiter.ts',
+    line: 14,
+    title: 'Limiter keyed globally, not per client',
+    detail:
+      'tokenBucket(60, 60_000) creates one shared bucket. One noisy client exhausts the window for everyone. Key the bucket by API key or IP.',
+    refutedBy: 'reviewer (Codex) — cross-model'
+  },
+  {
+    id: 'f2',
+    severity: 'medium',
+    file: 'src/db/migrate.ts',
+    line: 8,
+    title: 'Migration lacks a down() path',
+    detail: 'users.plan column is added with no rollback. A failed deploy leaves the schema stranded.',
+    refutedBy: 'reviewer (Codex) — cross-model'
+  },
+  {
+    id: 'f3',
+    severity: 'low',
+    file: 'src/api/limiter.test.ts',
+    line: 31,
+    title: 'Burst test never asserts recovery',
+    detail: 'The test drains the bucket but never verifies refill after the window elapses.',
+    refutedBy: 'reviewer (Codex) — cross-model'
+  }
+]
+
+export interface DagNode {
+  id: string
+  label: string
+  cli: CliKind
+  wave: 1 | 2
+  status: 'done' | 'working' | 'blocked' | 'pending'
+  dod: string
+}
+
+export const dagNodes: DagNode[] = [
+  { id: 'n1', label: 'decompose phase 5', cli: 'claude', wave: 1, status: 'done', dod: 'tasks.md written' },
+  { id: 'n2', label: 'pricing formulas', cli: 'agy', wave: 1, status: 'done', dod: 'curve verified' },
+  { id: 'n3', label: 'rate limiter', cli: 'codex', wave: 2, status: 'working', dod: 'tests green' },
+  { id: 'n4', label: 'plan migration', cli: 'codex', wave: 2, status: 'blocked', dod: 'migration applied' },
+  { id: 'n5', label: 'refute + gate', cli: 'codex', wave: 2, status: 'pending', dod: 'no open findings' }
+]
+
+export const dagEdges: [string, string][] = [
+  ['n1', 'n3'],
+  ['n1', 'n4'],
+  ['n2', 'n4'],
+  ['n3', 'n5'],
+  ['n4', 'n5']
+]
 
 export const paletteActions: PaletteAction[] = [
   { id: 'a1', group: 'agent', label: 'agent: focus builder-2 (blocked)', hint: 'needs you' },
