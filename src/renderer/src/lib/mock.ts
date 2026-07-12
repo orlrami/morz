@@ -18,7 +18,7 @@ export const cliTint: Record<CliKind, string> = {
 export const cliLabel: Record<CliKind, string> = {
   claude: 'Claude',
   codex: 'Codex',
-  agy: 'agy',
+  agy: 'Antigravity',
   opencode: 'OpenCode'
 }
 

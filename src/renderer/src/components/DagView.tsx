@@ -49,15 +49,23 @@ export function DagView(): JSX.Element {
           const x2 = pb.x
           const y2 = pb.y + NODE_H / 2
           const done = a.status === 'done'
+          const d = `M ${x1} ${y1} C ${x1 + 50} ${y1}, ${x2 - 50} ${y2}, ${x2} ${y2}`
           return (
-            <path
-              key={`${from}-${to}`}
-              d={`M ${x1} ${y1} C ${x1 + 50} ${y1}, ${x2 - 50} ${y2}, ${x2} ${y2}`}
-              fill="none"
-              stroke={done ? 'rgba(34,197,94,0.45)' : 'rgba(238,230,217,0.15)'}
-              strokeWidth={1.5}
-              strokeDasharray={done ? 'none' : '4 4'}
-            />
+            <g key={`${from}-${to}`}>
+              <path
+                d={d}
+                fill="none"
+                stroke={done ? 'rgba(34,197,94,0.45)' : 'rgba(238,230,217,0.15)'}
+                strokeWidth={1.5}
+                strokeDasharray={done ? 'none' : '4 4'}
+              />
+              {done && (
+                /* handoff pulse — a message traveling from producer to consumer */
+                <circle r={2.5} fill={colors.bronzeHot}>
+                  <animateMotion dur="2.4s" repeatCount="indefinite" path={d} />
+                </circle>
+              )}
+            </g>
           )
         })}
       </svg>

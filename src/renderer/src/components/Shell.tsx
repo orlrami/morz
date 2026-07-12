@@ -1,6 +1,15 @@
 import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
-import { IconTerminal2, IconGitCommit, IconShieldCheck, IconTopologyStar3, IconFolders } from '@tabler/icons-react'
+import {
+  IconTerminal2,
+  IconGitCommit,
+  IconShieldCheck,
+  IconTopologyStar3,
+  IconFolders,
+  IconWorld,
+  IconDeviceMobile,
+  IconSettings
+} from '@tabler/icons-react'
 import { TitleBar } from './TitleBar'
 import { SpacesSidebar } from './SpacesSidebar'
 import { AgentPillBar } from './AgentPillBar'
@@ -12,17 +21,23 @@ import { FileExplorer } from './FileExplorer'
 import { CommitPanel } from './CommitPanel'
 import { ReviewerPanel } from './ReviewerPanel'
 import { DagView } from './DagView'
+import { BrowserPanel } from './BrowserPanel'
+import { RemotePanel } from './RemotePanel'
+import { SettingsPanel } from './SettingsPanel'
+import { ToastHost } from './Toast'
 import { spaces, builder1Blocks, builder2Blocks } from '@/lib/mock'
 import { colors } from '@/lib/tokens'
 import { springs } from '@/lib/springs'
 
-type CenterView = 'terminals' | 'commit' | 'review' | 'dag'
+type CenterView = 'terminals' | 'commit' | 'review' | 'dag' | 'browser' | 'remote' | 'settings'
 
 const VIEWS: { id: CenterView; label: string; icon: typeof IconTerminal2 }[] = [
   { id: 'terminals', label: 'Terminals', icon: IconTerminal2 },
   { id: 'commit', label: 'Commit', icon: IconGitCommit },
   { id: 'review', label: 'Review', icon: IconShieldCheck },
-  { id: 'dag', label: 'Waves', icon: IconTopologyStar3 }
+  { id: 'dag', label: 'Waves', icon: IconTopologyStar3 },
+  { id: 'browser', label: 'Browser', icon: IconWorld },
+  { id: 'remote', label: 'Remote', icon: IconDeviceMobile }
 ]
 
 /* Dev-only: allow ?view=commit&explorer=1 so surfaces can be screenshot-verified. */
@@ -110,6 +125,16 @@ export function Shell(): JSX.Element {
                 )
               })}
             </nav>
+
+            <button
+              onClick={() => setView('settings')}
+              className="ml-auto mr-2 flex cursor-pointer items-center rounded-md p-1.5 transition-colors hover:bg-[#37332B]"
+              title="Settings"
+              aria-label="Settings"
+              style={{ color: view === 'settings' ? colors.bronzeHot : colors.quartzDim }}
+            >
+              <IconSettings size={15} stroke={1.5} />
+            </button>
           </div>
 
           {view === 'terminals' && (
@@ -124,6 +149,9 @@ export function Shell(): JSX.Element {
           {view === 'commit' && <CommitPanel />}
           {view === 'review' && <ReviewerPanel />}
           {view === 'dag' && <DagView />}
+          {view === 'browser' && <BrowserPanel />}
+          {view === 'remote' && <RemotePanel />}
+          {view === 'settings' && <SettingsPanel />}
         </main>
 
         <OrchestratorPanel />
@@ -132,6 +160,8 @@ export function Shell(): JSX.Element {
       </div>
 
       <StatusBar onOpenCommit={() => setView('commit')} />
+
+      <ToastHost />
 
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
     </div>
