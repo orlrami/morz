@@ -38,10 +38,14 @@ db/           SQLite schema (spaces/sessions/agents/tasks/checkpoints)
 
 ## Docs
 
-- `MORZ-Design-Direction.md` — locked visual + control direction
-- `MORZ-Build-Plan.md` — phased roadmap
-- `MORZ-Research-and-Vision.md` — competitive + technical research
-- `BUILD-BREAKDOWN.md` — everything that will be built, by phase/module
+All docs live under [`docs/`](docs/):
+- [`docs/roadmap/`](docs/roadmap/) — **source of truth**: one file per version (0.0.1 → 0.0.4), each with deliverables + architecture.
+- [`docs/in-progress/STATUS.md`](docs/in-progress/STATUS.md) — live build status.
+- [`docs/MORZ-Backend-Plan.md`](docs/MORZ-Backend-Plan.md) — backend architecture.
+- [`docs/MORZ-Design-Direction.md`](docs/MORZ-Design-Direction.md) — locked visual + control direction (Slate).
+- [`docs/BUILD-BREAKDOWN.md`](docs/BUILD-BREAKDOWN.md) — full feature catalog.
+- [`docs/research/`](docs/research/) — competitive + technical research (rounds 1–4).
+- [`docs/archive/`](docs/archive/) — superseded plans (history only).
 
 ## Build process
 
