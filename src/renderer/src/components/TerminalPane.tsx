@@ -1,8 +1,17 @@
+import { useEffect, useState, type ReactNode } from 'react'
 import { motion } from 'framer-motion'
-import { IconFolder } from '@tabler/icons-react'
+import {
+  IconClipboard,
+  IconCopy,
+  IconFolder,
+  IconLayoutColumns,
+  IconLayoutRows,
+  IconX
+} from '@tabler/icons-react'
 import type { MockAgent, MockBlock } from '@/lib/mock'
 import { colors, statusColor } from '@/lib/tokens'
-import { useTerminal } from '@/hooks/useTerminal'
+import { useTerminal, copyTerminalSelection, pasteIntoTerminal } from '@/hooks/useTerminal'
+import { emit } from '@/lib/app-events'
 
 interface TerminalPaneProps {
   agent: MockAgent
@@ -15,12 +24,77 @@ interface TerminalPaneProps {
  * Terminal pane — real xterm.js bound to the PTY-host (0.0.1 Slice 1).
  * One continuous buffer; OSC-133 command blocks render as marker-anchored
  * decorations (terminal-blocks.ts); ctrl/shift-click links emit 'open-file'
- * (terminal-links.ts). Pane-header chrome unchanged from Phase 0.
+ * (terminal-links.ts). Micro-UX: copy-on-select + zoom live in useTerminal;
+ * this file adds header split/close buttons (emit-only — the shell owns
+ * layout) and the right-click context menu.
  * blocks/tail props kept for Shell.tsx compatibility; the mock stream is gone.
  */
+
+function HeaderButton({
+  title,
+  onClick,
+  children
+}: {
+  title: string
+  onClick: () => void
+  children: ReactNode
+}): JSX.Element {
+  return (
+    <button
+      type="button"
+      title={title}
+      aria-label={title}
+      onClick={onClick}
+      className="rounded p-0.5 transition-colors hover:bg-white/10"
+      style={{ color: colors.quartzDim }}
+    >
+      {children}
+    </button>
+  )
+}
+
+function MenuItem({
+  label,
+  icon,
+  onClick
+}: {
+  label: string
+  icon?: ReactNode
+  onClick: () => void
+}): JSX.Element {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition-colors hover:bg-white/10"
+      style={{ color: colors.quartz }}
+    >
+      {icon}
+      {label}
+    </button>
+  )
+}
+
 export function TerminalPane({ agent }: TerminalPaneProps): JSX.Element {
   const blocked = agent.status === 'blocked'
-  const { containerRef } = useTerminal(agent.id)
+  const paneId = agent.id
+  const { containerRef } = useTerminal(paneId)
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
+
+  useEffect(() => {
+    if (!menu) return
+    const onKey = (ev: KeyboardEvent): void => {
+      if (ev.key === 'Escape') setMenu(null)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [menu])
+
+  const closeMenu = (): void => setMenu(null)
+  const menuAction = (fn: () => void) => () => {
+    fn()
+    closeMenu()
+  }
 
   return (
     <section
@@ -60,6 +134,23 @@ export function TerminalPane({ agent }: TerminalPaneProps): JSX.Element {
           <IconFolder size={11} stroke={1.5} />
           {agent.worktree}
         </span>
+        <span className="flex items-center gap-0.5">
+          <HeaderButton
+            title="Split right"
+            onClick={() => emit('split-pane', { paneId, dir: 'right' })}
+          >
+            <IconLayoutColumns size={13} stroke={1.5} />
+          </HeaderButton>
+          <HeaderButton
+            title="Split down"
+            onClick={() => emit('split-pane', { paneId, dir: 'down' })}
+          >
+            <IconLayoutRows size={13} stroke={1.5} />
+          </HeaderButton>
+          <HeaderButton title="Close pane" onClick={() => emit('close-pane', { paneId })}>
+            <IconX size={13} stroke={1.5} />
+          </HeaderButton>
+        </span>
       </div>
 
       {/* xterm mount — pl-3 leaves room for the block accent strips */}
@@ -67,7 +158,62 @@ export function TerminalPane({ agent }: TerminalPaneProps): JSX.Element {
         ref={containerRef}
         className="min-h-0 flex-1 py-2 pl-3 pr-1"
         style={{ background: colors.page }}
+        onContextMenu={(ev) => {
+          ev.preventDefault()
+          setMenu({ x: ev.clientX, y: ev.clientY })
+        }}
       />
+
+      {/* right-click context menu */}
+      {menu && (
+        <div
+          className="fixed inset-0 z-50"
+          onClick={closeMenu}
+          onContextMenu={(ev) => {
+            ev.preventDefault()
+            closeMenu()
+          }}
+        >
+          <div
+            className="absolute min-w-[170px] rounded-md border py-1 shadow-lg"
+            style={{
+              left: Math.min(menu.x, window.innerWidth - 190),
+              top: Math.min(menu.y, window.innerHeight - 190),
+              background: colors.panel,
+              borderColor: 'var(--color-line)'
+            }}
+            onClick={(ev) => ev.stopPropagation()}
+          >
+            <MenuItem
+              label="Copy"
+              icon={<IconCopy size={13} stroke={1.5} />}
+              onClick={menuAction(() => copyTerminalSelection(paneId))}
+            />
+            <MenuItem
+              label="Paste"
+              icon={<IconClipboard size={13} stroke={1.5} />}
+              onClick={menuAction(() => pasteIntoTerminal(paneId))}
+            />
+            <div className="my-1 border-t" style={{ borderColor: 'var(--color-line)' }} />
+            <MenuItem
+              label="Split right"
+              icon={<IconLayoutColumns size={13} stroke={1.5} />}
+              onClick={menuAction(() => emit('split-pane', { paneId, dir: 'right' }))}
+            />
+            <MenuItem
+              label="Split down"
+              icon={<IconLayoutRows size={13} stroke={1.5} />}
+              onClick={menuAction(() => emit('split-pane', { paneId, dir: 'down' }))}
+            />
+            <div className="my-1 border-t" style={{ borderColor: 'var(--color-line)' }} />
+            <MenuItem
+              label="Close pane"
+              icon={<IconX size={13} stroke={1.5} />}
+              onClick={menuAction(() => emit('close-pane', { paneId }))}
+            />
+          </div>
+        </div>
+      )}
     </section>
   )
 }
