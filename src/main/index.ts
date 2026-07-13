@@ -57,6 +57,11 @@ function startPtyHost(): void {
   ptyHost = host
   hostGeneration++
 
+  host.on('spawn', () => {
+    // e2e handle: the torture spec reads this pid to hard-kill the host
+    ;(globalThis as Record<string, unknown>).__MORZ_PTY_HOST_PID = host.pid
+  })
+
   host.on('message', (msg: { type: string; [k: string]: unknown }) => {
     if (!msg || typeof msg !== 'object') return
     switch (msg.type) {
@@ -97,17 +102,42 @@ function startPtyHost(): void {
     pending.clear()
     if (shuttingDown) return
     console.error(`[morz] pty-host exited (code ${code}) — watchdog respawn`)
-    // watchdog: at most 5 respawns per minute, then give up (dead panes stay dead)
+
+    // every pane died with the host — the journal rows ARE the live-pane set
+    // (pane-exit messages prune rows as panes die, so what's left was alive).
+    // Broadcast a tagged exit per pane so the UI shows dead-pane state.
+    const deadPanes = new Set<string>()
+    for (const row of journalEntries('pty-spawn')) {
+      const info = row.payload as SpawnJournal | null
+      if (info?.paneId) deadPanes.add(info.paneId)
+    }
+    console.error(`[morz] dead panes: ${[...deadPanes].join(',')}`)
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (win.isDestroyed()) continue
+      for (const paneId of deadPanes) {
+        win.webContents.send(PtyApi.data, { type: 'exit', paneId, exitCode: -1 })
+      }
+    }
+    // the dead host's shells lost their ConPTY handles — unreachable forever;
+    // reap them now via the same journal+PID-guard path as the startup sweep
+    sweepOrphans()
+
+    // watchdog: at most 3 respawns per minute, then give up (dead panes stay dead)
     const now = Date.now()
     restartTimestamps = restartTimestamps.filter((t) => now - t < 60_000)
-    if (restartTimestamps.length >= 5) {
+    if (restartTimestamps.length >= 3) {
       console.error('[morz] pty-host crash-looping — not respawning')
       return
     }
     restartTimestamps.push(now)
     startPtyHost()
-    // renderer's old MessagePort closed with the host; hand every open window a fresh one
-    for (const win of BrowserWindow.getAllWindows()) wirePtyPort(win)
+    // renderer's old MessagePort closed with the host; hand every open window a
+    // fresh one and let the UI toast "terminal engine restarted"
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (win.isDestroyed()) continue
+      win.webContents.send('pty:host-restarted', { generation: hostGeneration })
+      wirePtyPort(win)
+    }
   })
 }
 
