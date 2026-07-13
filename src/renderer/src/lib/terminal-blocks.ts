@@ -27,6 +27,8 @@ export interface CommandBlock {
 interface Live {
   block: CommandBlock
   decorations: IDecoration[]
+  rowHighlight?: HTMLElement
+  hovered: boolean
 }
 
 export function attachCommandBlocks(
@@ -45,6 +47,28 @@ export function attachCommandBlocks(
     const failed = block.exitCode !== undefined && block.exitCode !== 0
     const accent = failed ? colors.error : colors.done
 
+    // One bottom-layer decoration spans the completed block. The gutter owns
+    // hover input, so terminal selection and links remain unobstructed.
+    const active = term.buffer.active
+    const currentLine = active.baseY + active.cursorY
+    const height = Math.max(1, currentLine - block.promptMarker.line + 1)
+    const rows = term.registerDecoration({
+      marker: block.promptMarker,
+      x: 0,
+      width: term.cols,
+      height,
+      layer: 'bottom'
+    })
+    if (rows) {
+      rows.onRender((el) => {
+        l.rowHighlight = el
+        el.dataset.morzBlockRows = 'true'
+        el.style.background = l.hovered ? `${colors.quartz}09` : 'transparent'
+        el.style.pointerEvents = 'none'
+      })
+      l.decorations.push(rows)
+    }
+
     // Left accent strip on the prompt row — the block's visual anchor.
     const strip = term.registerDecoration({
       marker: block.promptMarker,
@@ -53,11 +77,26 @@ export function attachCommandBlocks(
     })
     if (strip) {
       strip.onRender((el) => {
+        el.dataset.morzBlockGutter = 'true'
+        el.dataset.morzBlockState = failed ? 'error' : 'done'
+        if (block.exitCode !== undefined) el.dataset.morzExitCode = String(block.exitCode)
         el.style.background = 'transparent'
         el.style.borderLeft = `2px solid ${accent}`
         el.style.marginLeft = '-6px'
         el.style.borderRadius = '2px'
-        el.style.pointerEvents = 'none'
+        el.style.pointerEvents = 'auto'
+        el.style.cursor = 'default'
+        if (!el.dataset.morzHoverBound) {
+          el.dataset.morzHoverBound = 'true'
+          el.addEventListener('mouseenter', () => {
+            l.hovered = true
+            if (l.rowHighlight) l.rowHighlight.style.background = `${colors.quartz}09`
+          })
+          el.addEventListener('mouseleave', () => {
+            l.hovered = false
+            if (l.rowHighlight) l.rowHighlight.style.background = 'transparent'
+          })
+        }
       })
       l.decorations.push(strip)
     }
@@ -84,6 +123,11 @@ export function attachCommandBlocks(
         l.decorations.push(badge)
       }
     }
+
+    // OSC marks can arrive inside one batched write. Guarantee a viewport pass
+    // after registration so xterm materializes decoration DOM without waiting
+    // for unrelated output or a resize.
+    term.refresh(0, term.rows - 1)
   }
 
   const closeCurrent = (exitCode?: number): void => {
@@ -106,7 +150,7 @@ export function attachCommandBlocks(
         closeCurrent(undefined)
         const promptMarker = term.registerMarker(0)
         if (promptMarker) {
-          current = { block: { promptMarker, done: false }, decorations: [] }
+          current = { block: { promptMarker, done: false }, decorations: [], hovered: false }
           live.push(current)
         }
         break

@@ -23,8 +23,7 @@ import {
   type FileSaveResult,
   type GitStatus,
   type MorzApi,
-  type PtyDataMsg,
-  type PtyExitMsg,
+  type PtyRendererMsg,
   type SessionSnapshot,
   type TerminalSpawnOpts
 } from '../shared/ipc'
@@ -39,7 +38,7 @@ const api: MorzApi = {
     kill: (paneId) => ipcRenderer.send(PtyApi.kill, { paneId }),
     list: () => ipcRenderer.invoke(PtyApi.list),
     onData: (cb) => {
-      const h = (_e: unknown, msg: PtyDataMsg | PtyExitMsg): void => cb(msg)
+      const h = (_e: unknown, msg: PtyRendererMsg): void => cb(msg)
       ipcRenderer.on(PtyApi.data, h)
       return () => ipcRenderer.off(PtyApi.data, h)
     }

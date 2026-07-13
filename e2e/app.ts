@@ -67,6 +67,12 @@ export async function launchMorz(opts?: { appDataDir?: string }): Promise<MorzAp
   })
   const page = await app.firstWindow()
   await page.waitForLoadState('domcontentloaded')
+  await app.evaluate(({ BrowserWindow }) => {
+    const win = BrowserWindow.getAllWindows()[0]
+    win?.show()
+    win?.focus()
+  })
+  await page.bringToFront()
   await installCollector(page)
   return { app, page, appDataDir }
 }

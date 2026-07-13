@@ -8,6 +8,28 @@ directories:
 files:
   - out/**
   - resources/**
+  # npm alias dependencies are not discovered reliably by electron-builder's
+  # production-dependency walker. Include the prebuilt ConPTY package explicitly;
+  # asarUnpack below keeps its native binary and DLLs on disk.
+  - from: node_modules/@lydell/node-pty-win32-x64
+    to: node_modules/@lydell/node-pty-win32-x64
+    filter:
+      - '**/*'
+  # chokidar is bundled, but its transitive dependency lives through the
+  # workspace node_modules junction and is missed by electron-builder.
+  - from: node_modules/readdirp
+    to: node_modules/readdirp
+    filter:
+      - '**/*'
+  # better-sqlite3 loads its prebuilt binary through bindings at runtime.
+  - from: node_modules/bindings
+    to: node_modules/bindings
+    filter:
+      - '**/*'
+  - from: node_modules/file-uri-to-path
+    to: node_modules/file-uri-to-path
+    filter:
+      - '**/*'
   - '!src/**'
   - '!docs/**'
   - '!db/**'
