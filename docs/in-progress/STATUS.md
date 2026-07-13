@@ -4,18 +4,20 @@
 
 ## Current target: **0.0.1 — "The Terminal"** ([spec](../roadmap/0.0.1.md))
 
-Wave 1 (4 parallel Fable-5 agents) merged to `main` + integrated + fixed.
+Waves 1+2 (4 then 6 parallel Fable-5 agents) merged to `main` + integrated. E2E suite: 5 passed, 1 skipped.
 
 | Slice | Status | Notes |
 |-------|--------|-------|
-| 1 — PTY-host + real terminals | ✅ verified | live pwsh/cmd/WSL prompts render in the Slate shell; smoke PASS; PATH resolves like Windows Terminal. PTY data relays through main (direct MessagePort didn't entangle). |
-| 2 — Session restore + PTY survival | ✅ mostly | tray-resident host; scrollback reattach verified by smoke. Full layout-restore across relaunch: needs a live pass. |
-| 3 — Ctrl-click → IDE pane | ⏳ built, wired | FileService + CodeMirror IdePane + editor handoff done; IdePane mounted in Shell. Live ctrl-click open: needs a manual pass. |
-| 4 — Spaces + git | ✅ verified | sidebar shows live branch/dirty per space + per-agent worktrees. |
-| 5 — Claude Code adapter | 🚧 built, not triggered | adapter + ClaudeLane + mode gating built; ClaudeLane not yet mounted in Shell (no start-a-lane UI). Next wire-up. |
-| 6 — Mode gating | ⏳ built | modeStore + Manual-inert logic present; dial UI wiring pending. |
+| 1 — PTY-host + real terminals | ✅ verified | live pwsh/cmd/WSL; PATH gate Playwright-asserted. Micro-UX in (copy-on-select, ctrl+scroll zoom, context menu, split/close). **GAP: OSC-133 prompt hook never injected by PTY-host → blocks don't render (wave 3). Framed-TUI detection missing (wave 3).** |
+| 2 — Session restore + PTY survival | ✅ verified | E2E: window-close reattach + scrollback replay PASS; hard-kill → SQLite layout restore PASS. Scrollback-into-dead-pane not restored (accepted). |
+| 3 — Ctrl-click → IDE pane | ⏳ mostly | IdePane polished (tabs, save/conflict, silent reload, open-in-VSCode). **GAP: link ACTIVATION bug in terminal-links (E2E ide.spec is fixme on it) — wave 3.** |
+| 4 — Spaces + git | ✅ verified | live branch/dirty per space. File explorer real (fs:list IPC, lazy tree). |
+| 5 — Claude Code adapter | ⏳ wired, untested live | ClaudeLane mounted; Start-Claude button + cmd-K entry; permission dialog wired. **Needs live pass with real `claude` + meters (wave 3).** |
+| 6 — Mode gating | ✅ wired | dial live; Manual strips lanes + never calls claude. **CI zero-LLM-call gate test missing (wave 3).** |
 
-**Integration fixes applied:** register-fn signatures, chokidar 5→4 (ESM), CSP data: fonts, unified app-events.ts, and PTY MessagePort → main-relay (the big one). typecheck + build clean; smoke PASS; window screenshot confirms live terminals.
+**Wave-2 integration:** merged w2/{shell,termux,ide,explorer,pkg,e2e}; seams fixed (context menu → ShellTerminalPane, e2e pane IDs, idempotent closeMorz); packaging seam in (electron-builder NSIS, BUILD.md); typecheck+build clean.
+
+**Wave 3 (in flight):** OSC-133 hook + blocks e2e, Claude lane live + meters, link-activation fix, PTY-host watchdog + torture tests, real split layout (dockview-style tree), Manual CI gate + protocol.md freeze.
 
 Legend: ✅ done · ⏳ in progress · ⬜ pending · 🚧 blocked
 
