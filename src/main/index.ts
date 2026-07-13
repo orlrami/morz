@@ -26,6 +26,7 @@ import {
   registerSessionIpc
 } from './store/db'
 import { registerFileIpc } from './services/file-service'
+import { registerFsIpc } from './services/fs-service'
 import { registerGitIpc } from './services/git-service'
 import { registerEditorIpc } from './services/editor-detect'
 import { registerClaudeIpc } from './adapters/claude'
@@ -358,6 +359,7 @@ app.whenReady().then(() => {
   registerPtyIpc()
   registerSessionIpc()
   registerFileIpc(ipcMain)
+  registerFsIpc(ipcMain)
   registerGitIpc()
   registerEditorIpc(ipcMain)
   registerClaudeIpc()
