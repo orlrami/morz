@@ -96,6 +96,12 @@ export const ClaudeApi = {
   permissionRespond: 'claude:permission-respond' // (ClaudePermissionResp)
 } as const
 
+/* ── FsService (explorer) — owner: Agent 4 ───────────────────── */
+export interface FsEntry { name: string; kind: 'dir' | 'file'; path: string }
+export const FsApi = {
+  list: 'fs:list' // (dir) => Promise<FsEntry[]> — shallow listing, scoped (no '..'), node_modules/.git hidden
+} as const
+
 /* ── Editor handoff (Slice 3) ────────────────────────────────── */
 export const EditorApi = {
   detectEditors: 'editor:detect', // () => Promise<('vscode'|'cursor')[]>
@@ -130,6 +136,7 @@ export interface MorzApi {
     onChanged(cb: (m: FileChangedMsg) => void): void
   }
   git: { status(cwd: string): Promise<GitStatus>; watch(cwd: string): void; onChanged(cb: (s: GitStatus) => void): void }
+  fs: { list(dir: string): Promise<FsEntry[]> }
   claude: {
     start(o: ClaudeStartOpts): Promise<{ agentId: string }>
     send(agentId: string, text: string): void

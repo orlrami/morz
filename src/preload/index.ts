@@ -9,6 +9,7 @@ import {
   ClaudeApi,
   EditorApi,
   FileApi,
+  FsApi,
   GitApi,
   PtyApi,
   SessionApi,
@@ -18,6 +19,7 @@ import {
   type ClaudeStartOpts,
   type FileChangedMsg,
   type FileReadResult,
+  type FsEntry,
   type FileSaveResult,
   type GitStatus,
   type MorzApi,
@@ -55,6 +57,9 @@ const api: MorzApi = {
     onChanged: (cb) => {
       ipcRenderer.on(FileApi.changed, (_e, m: FileChangedMsg) => cb(m))
     }
+  },
+  fs: {
+    list: (dir): Promise<FsEntry[]> => ipcRenderer.invoke(FsApi.list, dir)
   },
   git: {
     status: (cwd): Promise<GitStatus> => ipcRenderer.invoke(GitApi.status, cwd),
