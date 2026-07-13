@@ -87,4 +87,30 @@ const api: MorzApi = {
   }
 }
 
+/* ── w4/bus: bus namespace — must attach BEFORE exposeInMainWorld
+ * (contextBridge snapshots the object at expose time). ── */
+import { BusApi } from '../shared/ipc'
+import type { Task } from '../shared/bus'
+
+api.bus = {
+  listTasks: (filter) => ipcRenderer.invoke(BusApi.listTasks, filter),
+  createTask: (input) => ipcRenderer.invoke(BusApi.createTask, input),
+  acceptTask: (taskId) => ipcRenderer.invoke(BusApi.acceptTask, taskId),
+  withdrawTask: (taskId) => ipcRenderer.invoke(BusApi.withdrawTask, taskId),
+  claimTask: (taskId, agentId, leaseMs) =>
+    ipcRenderer.invoke(BusApi.claimTask, { taskId, agentId, leaseMs }),
+  completeTask: (taskId, agentId, artifact) =>
+    ipcRenderer.invoke(BusApi.completeTask, { taskId, agentId, artifact }),
+  blockTask: (taskId, agentId, reason) =>
+    ipcRenderer.invoke(BusApi.blockTask, { taskId, agentId, reason }),
+  resumeTask: (taskId, agentId, leaseMs) =>
+    ipcRenderer.invoke(BusApi.resumeTask, { taskId, agentId, leaseMs }),
+  send: (input) => ipcRenderer.invoke(BusApi.send, input),
+  onTasksChanged: (cb) => {
+    const h = (_e: unknown, tasks: Task[]): void => cb(tasks)
+    ipcRenderer.on(BusApi.tasksChanged, h)
+    return () => ipcRenderer.off(BusApi.tasksChanged, h)
+  }
+}
+
 contextBridge.exposeInMainWorld('morz', api)

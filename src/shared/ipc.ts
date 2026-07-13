@@ -147,3 +147,61 @@ export interface MorzApi {
   }
   editor: { detect(): Promise<('vscode' | 'cursor')[]>; openExternal(editor: string, path: string, line?: number, col?: number): void }
 }
+
+/* ── Bus v0 (0.0.2) — w4/bus — owner: Agent 1 ────────────────── */
+// Task board + mailbox IPC. Payload shapes come from the FROZEN protocol
+// (src/shared/bus.ts mirrors docs/protocol.md) — imported, never redefined.
+import type { AgentId, Message, Part, Task, TaskId, TaskState } from './bus'
+
+export interface BusCreateTaskInput {
+  title: string
+  createdBy: AgentId
+  dependsOn?: TaskId[]
+}
+/** Artifact minus what Main stamps (id, producedBy, ts). */
+export interface BusArtifactInput {
+  label: string
+  files?: { path: string; mtimeMs: number }[]
+  commits?: { sha: string; branch: string; message: string }[]
+}
+/** Message minus what Main stamps (id, from, ts) — `from` is NEVER accepted from the sender. */
+export interface BusSendInput {
+  to: AgentId
+  taskId: TaskId | null
+  parts: Part[]
+}
+export interface BusTaskFilter {
+  state?: TaskState
+  assignee?: AgentId
+}
+export const BusApi = {
+  listTasks: 'bus:list-tasks', // (BusTaskFilter?) => Promise<Task[]>
+  createTask: 'bus:create-task', // (BusCreateTaskInput) => Promise<Task>  (state 'proposed')
+  acceptTask: 'bus:accept-task', // (taskId) => Promise<Task>  proposed→accepted
+  withdrawTask: 'bus:withdraw-task', // (taskId) => Promise<Task>  proposed→done (rejected)
+  claimTask: 'bus:claim-task', // ({taskId, agentId, leaseMs?}) => Promise<Task|null>  CAS: null = lost race / deps unmet
+  completeTask: 'bus:complete-task', // ({taskId, agentId, artifact}) => Promise<Task>  working→done
+  blockTask: 'bus:block-task', // ({taskId, agentId, reason}) => Promise<Task>  working→blocked
+  resumeTask: 'bus:resume-task', // ({taskId, agentId, leaseMs?}) => Promise<Task>  blocked→working
+  send: 'bus:send', // (BusSendInput) => Promise<Message>  mailbox delivery; Main stamps from+ts
+  tasksChanged: 'bus:tasks-changed' // push → Task[]  (full board, on every board write)
+} as const
+
+export interface MorzBusApi {
+  listTasks(filter?: BusTaskFilter): Promise<Task[]>
+  createTask(input: BusCreateTaskInput): Promise<Task>
+  acceptTask(taskId: TaskId): Promise<Task>
+  withdrawTask(taskId: TaskId): Promise<Task>
+  claimTask(taskId: TaskId, agentId: AgentId, leaseMs?: number): Promise<Task | null>
+  completeTask(taskId: TaskId, agentId: AgentId, artifact: BusArtifactInput): Promise<Task>
+  blockTask(taskId: TaskId, agentId: AgentId, reason: string): Promise<Task>
+  resumeTask(taskId: TaskId, agentId: AgentId, leaseMs?: number): Promise<Task>
+  send(input: BusSendInput): Promise<Message>
+  /** Full board pushed on every write. Returns an unsubscribe fn. */
+  onTasksChanged(cb: (tasks: Task[]) => void): () => void
+}
+// declaration-merged into MorzApi above; optional because the preload attaches
+// it in its own w4/bus block after the base api literal is built
+export interface MorzApi {
+  bus?: MorzBusApi
+}

@@ -432,3 +432,8 @@ app.on('before-quit', (e) => {
   // journal for panes that died, and sweepOrphans() next run covers the rest
   void shutdownHost().then(() => app.exit(0))
 })
+
+/* ── w4/bus: agent bus — task board + mailbox + lease sweeper ── */
+// import hoists; registration chains onto whenReady after the block above
+import { registerBusIpc } from './bus'
+app.whenReady().then(() => registerBusIpc())
