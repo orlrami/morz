@@ -14,6 +14,14 @@
 | **0.0.4** | Cross-agent learning memory, browser element-pick, routing, minor voice | [0.0.4.md](0.0.4.md) |
 | Future | Remote mobile app ("Morz remote"), SaaS tier, open-source release, deep LSP | parked — see notes in each file |
 
+## Distribution — ship as a real installable app (Windows + macOS)
+
+Morz is a real desktop **program**, not a dev-only build. It must install and run like any native app on both platforms:
+- **Windows** (primary): electron-builder NSIS one-click installer + auto-update (electron-updater / GitHub releases); **Azure Trusted / Artifact Signing** so SmartScreen + Defender don't flag it. (Signing is unsigned-personal for pre-alpha; set it up before wider distribution — an unsigned→signed switch breaks the updater chain.)
+- **macOS** (after the Windows line is solid): electron-builder `.dmg` (+ optionally the App Store target); **Apple Developer ID signing + notarization** (`electron/notarize`) so Gatekeeper allows it; universal binary (arm64 + x64). Keep the PTY layer portable (node-pty already cross-platform; ConPTY → real PTY on macOS).
+- **Cross-platform hygiene now:** keep the renderer/UI OS-agnostic; isolate Windows-specifics (ConPTY, DPAPI safeStorage, Job Objects, registry editor-probes, `%APPDATA%` paths) behind small platform modules so the macOS port is additive, not a rewrite. Native modules (node-pty via @lydell prebuilts, better-sqlite3) already ship macOS prebuilds.
+- Installers/updates land alongside each version; real signed builds gate the first non-personal release.
+
 **Global engineering rules (every version):**
 - Own the PTY: node-pty/ConPTY inside an Electron `utilityProcess` PTY-host; renderer sandboxed (`contextIsolation`, no `nodeIntegration`).
 - Structured over scraped; PTY injection only as fallback (agy).
