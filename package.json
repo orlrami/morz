@@ -38,6 +38,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "codemirror": "^6.0.2",
+    "dependency-cruiser": "^17.4.3",
     "dockview": "^7.0.2",
     "electron-updater": "^6.8.9",
     "framer-motion": "^12.42.2",
@@ -45,6 +46,7 @@
     "node-pty": "npm:@lydell/node-pty@1.2.0-beta.12",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "syncpack": "^15.3.2",
     "tailwind-merge": "^3.6.0",
     "zustand": "^4.5.5"
   },

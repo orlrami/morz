@@ -1,0 +1,10 @@
+{
+  "name": "messy-repo",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": ["packages/*"],
+  "devDependencies": {
+    "electron": "^32.0.0",
+    "typescript": "^5.5.0"
+  }
+}

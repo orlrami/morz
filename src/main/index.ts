@@ -432,3 +432,7 @@ app.on('before-quit', (e) => {
   // journal for panes that died, and sweepOrphans() next run covers the rest
   void shutdownHost().then(() => app.exit(0))
 })
+
+// w4/organizer
+import { registerOrganizerIpc } from './organizer'
+registerOrganizerIpc(ipcMain)

@@ -147,3 +147,48 @@ export interface MorzApi {
   }
   editor: { detect(): Promise<('vscode' | 'cursor')[]>; openExternal(editor: string, path: string, line?: number, col?: number): void }
 }
+
+// w4/organizer
+export interface OrganizerViolation {
+  rule: string
+  path: string
+  detail: string
+  cite: string
+}
+export type OrganizerInverseOperation =
+  | { kind: 'move'; from: string; to: string }
+  | { kind: 'delete'; to: string }
+export type OrganizerOperation =
+  | { kind: 'move'; from: string; to: string; inverse: OrganizerInverseOperation }
+  | { kind: 'create'; to: string; content: string; inverse: OrganizerInverseOperation }
+export interface OrganizerPlan {
+  version: 1
+  root: string
+  baseCommit: string | null
+  operations: OrganizerOperation[]
+  beforeTree: string[]
+  afterTree: string[]
+  planHash: string
+}
+export interface OrganizerExplanation { rule: string; explanation: string; cite: string }
+export interface OrganizerApplyResult {
+  runTag: string
+  branch: string
+  commit: string
+  worktreePath: string
+  journalPath: string
+  diff: string
+}
+export const OrganizerApi = {
+  audit: 'organizer:audit',
+  propose: 'organizer:propose',
+  explain: 'organizer:explain',
+  apply: 'organizer:apply'
+} as const
+export interface OrganizerApi {
+  audit(root: string): Promise<OrganizerViolation[]>
+  propose(root: string): Promise<OrganizerPlan>
+  explain(ruleId: string): Promise<OrganizerExplanation>
+  apply(root: string, planHash: string): Promise<OrganizerApplyResult>
+}
+export interface MorzApi { organizer: OrganizerApi }
