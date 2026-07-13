@@ -2,7 +2,24 @@
 
 *Live status of what's being built. Update as slices land. Roadmap: [`../roadmap/`](../roadmap/).*
 
-## Current target: **0.0.1 — "The Terminal"** ([spec](../roadmap/0.0.1.md))
+## Current target: **0.0.2 — "The Bus + Additions"** ([spec](../roadmap/0.0.2.md))
+
+Wave 4 (8 agents: 4 Fable-5 + 4 GPT-5.6 Sol) merged. **E2E: 29 passed + 3 live handoff tests passed (real claude). Full suite green.**
+
+| 0.0.2 deliverable | Status | Notes |
+|---|---|---|
+| Bus v0 (board+mailbox+sweeper) | ✅ verified | SQLite CAS claim (one winner), lease reclaim, Maildir tmp→fsync→rename, identity stamped by Main; 4 e2e tests |
+| Named pipe + morz-mcp shim | ✅ verified | 5 tools over token-handshake pipe; squatter defeated; single-file CJS shim; smoke green. Integration wired SqliteBoardPort (real board) into the pipe tools |
+| Auto-handoff + chips + blackboard | ✅ live-verified | chip-gated dispatch → Maildir → pointer prompt lands in a REAL claude lane → task working (CAS). Integration swapped StubBus → real board/mailbox |
+| Workshop marketplace | ✅ | real MCP Registry ingest + GitHub stars + OpenRouter models; offline-graceful; Add wired to config writer (feature-detected) |
+| Config writer | ✅ verified | diff-first propose/apply for .mcp.json / config.toml / opencode.json; backups, atomic, mtime-guard; 5 fixture tests |
+| Obsidian (optional) | ✅ | Local REST API connect (key in safeStorage), read/search, MADR ADR write w/ no-clobber; fixture-server e2e |
+| **Organizer MCP** | ❌ NOT DELIVERED | Agent 4 (Fable) produced zero commits — re-run in wave 5 |
+| 0.0.1 exit (w4/finish) | ✅ | NSIS installer built+installed+verified+uninstalled (BUILD.md documents flow); TUI registry + alt-screen signal; block gutter polish; blocks e2e (4 tests) |
+
+**Integration notes:** unified ONE `window.morz.bus` (board API + blackboard UI API); `SqliteBoardPort` bridges MCP tools onto the real board; handoff rewired from stub to board+Maildir; workshop spec updated for live config writer.
+
+## Previous target: **0.0.1 — "The Terminal"** ([spec](../roadmap/0.0.1.md)) — COMPLETE
 
 Waves 1+2+3 (4 then 6 then 6 parallel Fable-5 agents) merged to `main` + integrated. **E2E suite: 13/13 passed.**
 

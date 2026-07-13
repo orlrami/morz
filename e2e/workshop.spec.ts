@@ -81,11 +81,8 @@ test.describe.serial('Workshop catalog', () => {
     await expect(morz.page.getByRole('heading', { name: 'Search Server' })).toBeVisible()
     await expect(morz.page.getByText('4.2k')).toBeVisible()
     await expect(morz.page.getByText('offline', { exact: true })).toBeVisible()
-    await expect(morz.page.getByRole('button', { name: 'Add Search Server' })).toBeDisabled()
-    await expect(morz.page.getByRole('button', { name: 'Add Search Server' })).toHaveAttribute(
-      'title',
-      'config writer pending'
-    )
+    // config writer merged (w4/config) → the feature-detected Add button is live
+    await expect(morz.page.getByRole('button', { name: 'Add Search Server' })).toBeEnabled()
   })
 
   test('filters catalog rows and refreshes through IPC', async () => {
