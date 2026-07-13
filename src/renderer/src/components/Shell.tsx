@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
 import {
   IconTerminal2,
@@ -38,7 +38,17 @@ import { colors } from '@/lib/tokens'
 import { springs } from '@/lib/springs'
 import { claudeAllowed, useModeStore } from '@/store/modeStore'
 import { useLaneStore } from '@/store/laneStore'
-import { newPaneId, useLayoutStore, type PaneDef } from '@/store/layoutStore'
+import {
+  clampRatio,
+  newPaneId,
+  panesOf,
+  removePaneFromTree,
+  rowOf,
+  useLayoutStore,
+  type LayoutNode,
+  type PaneDef,
+  type SplitNode
+} from '@/store/layoutStore'
 import { getMorz, useSpaceStore } from '@/store/spaceStore'
 import type { SessionSnapshot } from '@shared/ipc'
 
@@ -65,9 +75,10 @@ function initialFromUrl(): { view: CenterView; explorer: boolean } {
 
 /* ── session snapshot (Slice 2) ──────────────────────────────── */
 
-function buildSnapshot(panes: PaneDef[]): SessionSnapshot {
+function buildSnapshot(root: LayoutNode | null, panes: PaneDef[]): SessionSnapshot {
   return {
-    layout: { panes },
+    // `panes` rides along so pre-tree builds (and the parse fallback) still hydrate.
+    layout: { tree: root, panes },
     panes: panes
       .filter((p) => p.kind === 'terminal')
       .map((p) => ({
@@ -79,32 +90,60 @@ function buildSnapshot(panes: PaneDef[]): SessionSnapshot {
   }
 }
 
-/** layout is opaque in the contract — validate our own shape, fall back to panes[]. */
-function panesFromSnapshot(snap: SessionSnapshot | null): PaneDef[] | null {
+function parsePane(v: unknown): PaneDef | null {
+  const p = v as Partial<PaneDef> | null | undefined
+  if (!p || typeof p.paneId !== 'string') return null
+  if (p.kind !== 'terminal' && p.kind !== 'claude') return null
+  return { paneId: p.paneId, kind: p.kind, cwd: p.cwd ?? '', shell: p.shell ?? '', agentId: p.agentId }
+}
+
+/** Recovering parse: a corrupt child collapses to its sibling, never the whole tree. */
+function parseNode(v: unknown): LayoutNode | null {
+  const n = v as { type?: unknown } | null | undefined
+  if (!n || typeof n !== 'object') return null
+  if (n.type === 'leaf') {
+    const pane = parsePane((n as { pane?: unknown }).pane)
+    return pane ? { type: 'leaf', pane } : null
+  }
+  if (n.type === 'split') {
+    const s = n as Partial<SplitNode>
+    const a = parseNode(s.a)
+    const b = parseNode(s.b)
+    if (!a) return b
+    if (!b) return a
+    return {
+      type: 'split',
+      id: typeof s.id === 'string' ? s.id : newPaneId('split'),
+      dir: s.dir === 'col' ? 'col' : 'row',
+      ratio: clampRatio(typeof s.ratio === 'number' ? s.ratio : 0.5),
+      a,
+      b
+    }
+  }
+  return null
+}
+
+/** layout is opaque in the contract — try tree, then flat layout.panes, then snap.panes. */
+function layoutFromSnapshot(snap: SessionSnapshot | null): LayoutNode | null {
   if (!snap) return null
-  const layout = snap.layout as { panes?: unknown } | null | undefined
+  const layout = snap.layout as { tree?: unknown; panes?: unknown } | null | undefined
+  if (layout?.tree) {
+    const tree = parseNode(layout.tree)
+    if (tree) return tree
+  }
   if (layout && Array.isArray(layout.panes)) {
-    const parsed = (layout.panes as Partial<PaneDef>[])
-      .filter(
-        (p): p is PaneDef =>
-          typeof p?.paneId === 'string' && (p.kind === 'terminal' || p.kind === 'claude')
-      )
-      .map((p) => ({
-        paneId: p.paneId,
-        kind: p.kind,
-        cwd: p.cwd ?? '',
-        shell: p.shell ?? '',
-        agentId: p.agentId
-      }))
-    if (parsed.length > 0) return parsed
+    const parsed = layout.panes.map(parsePane).filter((p): p is PaneDef => p !== null)
+    if (parsed.length > 0) return rowOf(parsed)
   }
   if (Array.isArray(snap.panes) && snap.panes.length > 0) {
-    return snap.panes.map((p) => ({
-      paneId: p.paneId,
-      kind: 'terminal' as const,
-      cwd: p.cwd,
-      shell: p.shell
-    }))
+    return rowOf(
+      snap.panes.map((p) => ({
+        paneId: p.paneId,
+        kind: 'terminal' as const,
+        cwd: p.cwd,
+        shell: p.shell
+      }))
+    )
   }
   return null
 }
@@ -117,7 +156,7 @@ export function Shell(): JSX.Element {
   const [view, setView] = useState<CenterView>(initial.view)
 
   const mode = useModeStore((s) => s.mode)
-  const panes = useLayoutStore((s) => s.panes)
+  const root = useLayoutStore((s) => s.root)
   const hydrated = useLayoutStore((s) => s.hydrated)
   const lanes = useLaneStore((s) => s.lanes)
   const spaceRoot = useSpaceStore((s) => s.spaces[0]?.root ?? '')
@@ -141,14 +180,18 @@ export function Shell(): JSX.Element {
    * PTY-host replays scrollback. Lane panes only survive outside Manual. */
   useEffect(() => {
     if (useLayoutStore.getState().hydrated) return
-    const finish = (loaded: PaneDef[] | null): void => {
+    const finish = (loaded: LayoutNode | null): void => {
       if (useLayoutStore.getState().hydrated) return
       const currentMode = useModeStore.getState().mode
-      const usable =
-        currentMode === 'manual' ? (loaded?.filter((p) => p.kind !== 'claude') ?? null) : loaded
+      let usable = loaded
+      if (currentMode === 'manual' && usable) {
+        for (const p of panesOf(usable)) {
+          if (p.kind === 'claude') usable = removePaneFromTree(usable, p.paneId)
+        }
+      }
       useLayoutStore.getState().hydrate(usable)
       if (currentMode !== 'manual' && usable) {
-        for (const p of usable) {
+        for (const p of panesOf(usable)) {
           if (p.kind === 'claude' && p.agentId) {
             useLaneStore.getState().addLane({ paneId: p.paneId, agentId: p.agentId, cwd: p.cwd })
           }
@@ -162,7 +205,7 @@ export function Shell(): JSX.Element {
     }
     sess
       .load()
-      .then((snap) => finish(panesFromSnapshot(snap)))
+      .then((snap) => finish(layoutFromSnapshot(snap)))
       .catch(() => finish(null))
   }, [])
 
@@ -173,11 +216,11 @@ export function Shell(): JSX.Element {
     if (!sess) return
     let timer: number | undefined
     const save = (): void => {
-      const { panes: current, hydrated: ready } = useLayoutStore.getState()
-      if (ready) sess.save(buildSnapshot(current))
+      const { root: tree, panes: current, hydrated: ready } = useLayoutStore.getState()
+      if (ready) sess.save(buildSnapshot(tree, current))
     }
     const unsub = useLayoutStore.subscribe((s, prev) => {
-      if (!s.hydrated || s.panes === prev.panes) return
+      if (!s.hydrated || s.root === prev.root) return
       window.clearTimeout(timer)
       timer = window.setTimeout(save, 1000)
     })
@@ -209,11 +252,20 @@ export function Shell(): JSX.Element {
     const onSplitPane = ({ paneId, dir }: { paneId: string; dir: 'right' | 'down' }): void => {
       useLayoutStore.getState().splitPane(paneId, dir)
     }
+    const onFocusPane = ({ paneId }: { paneId: string }): void => {
+      useLayoutStore.getState().setActivePane(paneId)
+      // xterm's hidden textarea owns keyboard input — focus it directly.
+      document
+        .querySelector<HTMLElement>(`[data-pane-id="${paneId}"] .xterm-helper-textarea`)
+        ?.focus()
+    }
     on('close-pane', onClosePane)
     on('split-pane', onSplitPane)
+    on('focus-pane', onFocusPane)
     return () => {
       off('close-pane', onClosePane)
       off('split-pane', onSplitPane)
+      off('focus-pane', onFocusPane)
     }
   }, [])
 
@@ -314,7 +366,7 @@ export function Shell(): JSX.Element {
           {view === 'terminals' && (
             <>
               <AgentPillBar />
-              <div className="flex min-h-0 flex-1 gap-px" style={{ background: 'var(--color-line)' }}>
+              <div className="flex min-h-0 flex-1" style={{ background: colors.page }}>
                 {!hydrated && (
                   <div
                     className="flex flex-1 items-center justify-center text-[11px]"
@@ -323,20 +375,24 @@ export function Shell(): JSX.Element {
                     Restoring session…
                   </div>
                 )}
-                {hydrated &&
-                  panes.map((pane) =>
-                    pane.kind === 'terminal' ? (
-                      <ShellTerminalPane
-                        key={pane.paneId}
-                        pane={pane}
-                        showStartLane={claudeAllowed(mode)}
-                        laneTaken={lanes.length > 0}
-                        onStartLane={() => startClaudeLane(pane.paneId)}
-                      />
-                    ) : (
-                      <LanePaneSlot key={pane.paneId} pane={pane} manual={mode === 'manual'} />
-                    )
-                  )}
+                {hydrated && root && (
+                  <LayoutNodeView
+                    node={root}
+                    renderLeaf={(pane) =>
+                      pane.kind === 'terminal' ? (
+                        <ShellTerminalPane
+                          key={pane.paneId}
+                          pane={pane}
+                          showStartLane={claudeAllowed(mode)}
+                          laneTaken={lanes.length > 0}
+                          onStartLane={() => startClaudeLane(pane.paneId)}
+                        />
+                      ) : (
+                        <LanePaneSlot key={pane.paneId} pane={pane} manual={mode === 'manual'} />
+                      )
+                    }
+                  />
+                )}
               </div>
             </>
           )}
@@ -373,6 +429,89 @@ export function Shell(): JSX.Element {
   )
 }
 
+/* ── split tree ──────────────────────────────────────────────── */
+
+function LayoutNodeView({
+  node,
+  renderLeaf
+}: {
+  node: LayoutNode
+  renderLeaf(pane: PaneDef): JSX.Element
+}): JSX.Element {
+  if (node.type === 'leaf') return renderLeaf(node.pane)
+  return <SplitView node={node} renderLeaf={renderLeaf} />
+}
+
+function SplitView({
+  node,
+  renderLeaf
+}: {
+  node: SplitNode
+  renderLeaf(pane: PaneDef): JSX.Element
+}): JSX.Element {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const row = node.dir === 'row'
+  return (
+    <div
+      ref={containerRef}
+      className={`flex min-h-0 min-w-0 flex-1 ${row ? 'flex-row' : 'flex-col'}`}
+    >
+      <div className="flex min-h-0 min-w-0" style={{ flex: `${node.ratio} 1 0%` }}>
+        <LayoutNodeView node={node.a} renderLeaf={renderLeaf} />
+      </div>
+      <SplitDivider row={row} splitId={node.id} containerRef={containerRef} />
+      <div className="flex min-h-0 min-w-0" style={{ flex: `${1 - node.ratio} 1 0%` }}>
+        <LayoutNodeView node={node.b} renderLeaf={renderLeaf} />
+      </div>
+    </div>
+  )
+}
+
+/* Pointer-drag resizer: ratio = pointer position within the split container. */
+function SplitDivider({
+  row,
+  splitId,
+  containerRef
+}: {
+  row: boolean
+  splitId: string
+  containerRef: React.RefObject<HTMLDivElement>
+}): JSX.Element {
+  const [dragging, setDragging] = useState(false)
+  return (
+    <div
+      role="separator"
+      aria-orientation={row ? 'vertical' : 'horizontal'}
+      onPointerDown={(e) => {
+        e.preventDefault()
+        e.currentTarget.setPointerCapture(e.pointerId)
+        setDragging(true)
+      }}
+      onPointerMove={(e) => {
+        if (!dragging) return
+        const rect = containerRef.current?.getBoundingClientRect()
+        if (!rect) return
+        const ratio = row
+          ? (e.clientX - rect.left) / rect.width
+          : (e.clientY - rect.top) / rect.height
+        useLayoutStore.getState().setRatio(splitId, ratio) // store clamps 0.15–0.85
+      }}
+      onPointerUp={(e) => {
+        e.currentTarget.releasePointerCapture(e.pointerId)
+        setDragging(false)
+      }}
+      className="shrink-0 transition-colors"
+      style={{
+        width: row ? 4 : undefined,
+        height: row ? undefined : 4,
+        cursor: row ? 'col-resize' : 'row-resize',
+        background: dragging ? colors.bronze : 'var(--color-line)',
+        touchAction: 'none'
+      }}
+    />
+  )
+}
+
 /* ── panes ───────────────────────────────────────────────────── */
 
 /*
@@ -396,12 +535,18 @@ function ShellTerminalPane({
     cwd: pane.cwd || undefined
   })
   const ctxMenu = useTerminalContextMenu(pane.paneId)
+  const active = useLayoutStore((s) => s.activePaneId === pane.paneId)
 
   return (
     <section
       className="relative flex min-w-0 flex-1 flex-col overflow-hidden"
-      style={{ background: colors.page }}
+      style={{
+        background: colors.page,
+        boxShadow: active ? `inset 0 0 0 1px ${colors.bronze}66` : undefined
+      }}
       aria-label={`Terminal — ${pane.paneId}`}
+      data-pane-id={pane.paneId}
+      onPointerDownCapture={() => useLayoutStore.getState().setActivePane(pane.paneId)}
     >
       <div
         className="flex shrink-0 items-center gap-2 border-b px-3 py-1.5"
@@ -468,11 +613,17 @@ function ShellTerminalPane({
  * belt-and-braces placeholder, not a code path that talks to the adapter.
  */
 function LanePaneSlot({ pane, manual }: { pane: PaneDef; manual: boolean }): JSX.Element {
+  const active = useLayoutStore((s) => s.activePaneId === pane.paneId)
   return (
     <section
       className="relative flex min-w-0 flex-1 flex-col overflow-hidden"
-      style={{ background: colors.page }}
+      style={{
+        background: colors.page,
+        boxShadow: active ? `inset 0 0 0 1px ${colors.bronze}66` : undefined
+      }}
       aria-label={`Claude lane — ${pane.agentId ?? pane.paneId}`}
+      data-pane-id={pane.paneId}
+      onPointerDownCapture={() => useLayoutStore.getState().setActivePane(pane.paneId)}
     >
       <div
         className="flex shrink-0 items-center gap-2 border-b px-3 py-1.5"
