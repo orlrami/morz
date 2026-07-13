@@ -1,17 +1,16 @@
 /*
  * Morz IDE pane (0.0.1 Slice 3) — editable CodeMirror 6 "Beside" panel.
  *
- * Self-mounting: importing this module mounts the pane as a fixed right-side
- * overlay above the shell (no Shell.tsx/App.tsx wiring needed). It stays hidden
- * until an 'open-file' event arrives on the renderer bus (terminal ctrl-click,
- * morz:// deep link), then opens the file at line:col.
+ * Rendered by Shell.tsx as a fixed right-side overlay above the shell. It
+ * stays mounted but hidden until an 'open-file' event arrives on the renderer
+ * bus (terminal ctrl-click, morz:// deep link), then opens the file at
+ * line:col.
  *
  * Behaviors (Backend Plan §4): dirty tracking · Ctrl+S atomic save with mtime
  * conflict banner · agent-rewrites-open-file → silent reload preserving
  * scroll+cursor when not dirty, banner when dirty · Open in VS Code / Cursor.
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import ReactDOM from 'react-dom/client'
 import { EditorView } from '@codemirror/view'
 import { EditorState, EditorSelection, Prec } from '@codemirror/state'
 import { keymap } from '@codemirror/view'
@@ -285,8 +284,12 @@ export function IdePane(): React.JSX.Element | null {
     morz().editor.openExternal(editor, path, line, col)
   }
 
-  if (!open) return null
-
+  /*
+   * The pane stays mounted and is hidden via display — the editor host div
+   * must exist BEFORE loadFile's mountDoc runs (setOpen(true) has not
+   * committed yet on the first open, so a conditional render would leave
+   * hostRef null and silently drop the editor).
+   */
   const btn =
     'px-2 py-1 rounded-[var(--radius-data)] border border-line-strong text-[11px] font-body transition-colors'
   const btnLive = `${btn} text-quartz hover:bg-hover cursor-pointer`
@@ -294,8 +297,15 @@ export function IdePane(): React.JSX.Element | null {
 
   return (
     <div
-      className="fixed right-0 flex flex-col bg-panel border-l border-line-strong shadow-2xl"
-      style={{ top: 38, bottom: 0, width: 'min(48vw, 760px)', minWidth: 420, zIndex: 60 }}
+      className="fixed right-0 flex-col bg-panel border-l border-line-strong shadow-2xl"
+      style={{
+        top: 38,
+        bottom: 0,
+        width: 'min(48vw, 760px)',
+        minWidth: 420,
+        zIndex: 60,
+        display: open ? 'flex' : 'none'
+      }}
     >
       {/* header */}
       <div className="flex items-center gap-2 px-3 h-9 border-b border-line shrink-0">
@@ -441,11 +451,8 @@ export function IdePane(): React.JSX.Element | null {
   )
 }
 
-/* ── self-mount (import side effect; HMR-safe) ───────────────── */
-const MOUNT_ID = 'morz-ide-pane-root'
-if (typeof document !== 'undefined' && !document.getElementById(MOUNT_ID)) {
-  const el = document.createElement('div')
-  el.id = MOUNT_ID
-  document.body.appendChild(el)
-  ReactDOM.createRoot(el).render(<IdePane />)
-}
+/*
+ * No self-mount side effect: Shell.tsx renders <IdePane /> directly. The old
+ * import-side-effect mount plus Shell's render produced TWO live panes (both
+ * subscribed to 'open-file', stacked overlays, duplicate DOM for tests).
+ */

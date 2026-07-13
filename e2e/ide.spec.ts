@@ -8,15 +8,17 @@
  * path (scanning the first few rows — where the output lands depends on how
  * the prompt + typed command wrapped at pane width).
  *
- * STATUS: fixme. Harness verified end-to-end EXCEPT link activation:
- *   - mousemove/click events reach the .xterm element (listener probe),
- *   - window.morz.file.read() resolves for the target (the tier-2 stat gate),
- *   - yet hovering any cell of the printed path with Ctrl held never fires the
- *     provider's hover callback (it would set an inline text-decoration), and
- *     ctrl-click never opens the IDE pane.
- * So the file-link provider isn't surfacing links under the WebGL renderer —
- * an app-side Slice-3 issue (suspect: xterm v6 registerLinkProvider buffer-row
- * semantics), not a test-side one. Un-fixme once terminal-links is fixed.
+ * STATUS: PASSING. The earlier "link provider never fires" evidence was
+ * environmental, not a terminal-links bug: the layout store restores panes
+ * from the REAL user DB (app.getPath('appData') resolves via the Windows
+ * shell, ignoring the harness's APPDATA env override), so stray split panes
+ * from earlier suite runs squeezed term-1 to ~19 cols and the pixel→cell
+ * math clicked the wrong cells. With the panes cleaned up, the provider
+ * surfaces links fine under the WebGL renderer. Two real app bugs were fixed
+ * in IdePane.tsx along the way: (1) the pane rendered null until open, so the
+ * first-ever 'open-file' ran mountDoc before the editor host div existed and
+ * silently dropped the editor; (2) the module's self-mount side effect plus
+ * Shell's <IdePane /> produced two stacked pane instances.
  */
 import { test, expect } from '@playwright/test'
 import { join } from 'path'
@@ -42,21 +44,44 @@ test.describe.serial('IDE pane (Slice 3, best-effort)', () => {
     if (morz) await closeMorz(morz.app)
   })
 
-  test.fixme('ctrl-click a printed path opens the IDE pane', async () => {
+  test('ctrl-click a printed path opens the IDE pane', async () => {
     const page = morz.page
     await waitForTerm(page, PANE_1, PROMPT_RE, 90_000)
 
-    // Shell-reported grid — authoritative for the pixel→cell mapping.
-    await runInPane(
-      page,
-      PANE_1,
-      '"MORZ_SZ_$($Host.UI.RawUI.WindowSize.Width)x$($Host.UI.RawUI.WindowSize.Height)_END"'
+    // The layout store may hold stray split panes from earlier suite runs
+    // (APPDATA isolation is not airtight on Windows — app.getPath('appData')
+    // resolves via the shell, not the env var). Close everything except the
+    // default panes so term-1 is wide enough to print the path unwrapped.
+    const strayPanes = page.locator(
+      `section[aria-label^="Terminal"]:not([aria-label$="${PANE_1}"]):not([aria-label$="term-2"])`
     )
-    const buf = await waitForTerm(page, PANE_1, /MORZ_SZ_\d+x\d+_END/)
-    const m = /MORZ_SZ_(\d+)x(\d+)_END/.exec(buf)!
-    const cols = Number(m[1])
-    const rows = Number(m[2])
-    expect(cols).toBeGreaterThan(20)
+    while ((await strayPanes.count()) > 0) {
+      await strayPanes
+        .first()
+        .locator('button[aria-label="Close pane"]')
+        .click({ force: true })
+      await page.waitForTimeout(500)
+    }
+
+    // Shell-reported grid — authoritative for the pixel→cell mapping. The fit
+    // addon resizes the PTY shortly after launch, so poll until the size is
+    // stable and wide enough for the target path to print unwrapped.
+    let cols = 0
+    let rows = 0
+    for (let attempt = 0; attempt < 10 && cols <= 40; attempt++) {
+      await page.waitForTimeout(1_000)
+      await runInPane(
+        page,
+        PANE_1,
+        `"MORZ_SZ${attempt}_$($Host.UI.RawUI.WindowSize.Width)x$($Host.UI.RawUI.WindowSize.Height)_END"`
+      )
+      const re = new RegExp(`MORZ_SZ${attempt}_(\\d+)x(\\d+)_END`)
+      const buf = await waitForTerm(page, PANE_1, re)
+      const m = re.exec(buf)!
+      cols = Number(m[1])
+      rows = Number(m[2])
+    }
+    expect(cols).toBeGreaterThan(40)
     expect(rows).toBeGreaterThan(5)
 
     // Print an EXISTING file (the tier-2 link provider stat-verifies through
@@ -95,6 +120,9 @@ test.describe.serial('IDE pane (Slice 3, best-effort)', () => {
 
     // IDE pane = CodeMirror overlay with the file's full path on its header span.
     await expect(editor).toBeVisible({ timeout: 10_000 })
-    await expect(page.locator(`span[title="${target}"]`)).toBeVisible()
+    // getByTitle, not a CSS attribute selector — backslashes in the Windows
+    // path would be consumed as CSS escapes. Header span + tab both carry the
+    // full path as title.
+    await expect(page.getByTitle(target).first()).toBeVisible()
   })
 })
