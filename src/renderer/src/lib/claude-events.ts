@@ -49,10 +49,10 @@ export function reduceEvent(blocks: LaneBlock[], ev: ClaudeEvent): LaneBlock[] {
     case 'system': {
       if ((ev as { subtype?: string }).subtype !== 'init') return blocks
       const init = ev as { session_id?: string; model?: string }
-      return [
-        ...blocks,
-        { kind: 'info', id: id(), text: `session ${init.session_id ?? '?'} · ${init.model ?? '?'}` }
-      ]
+      const text = `session ${init.session_id ?? '?'} · ${init.model ?? '?'}`
+      // init re-fires on every prompt with the same session — only log changes.
+      if (blocks.some((b) => b.kind === 'info' && b.text === text)) return blocks
+      return [...blocks, { kind: 'info', id: id(), text }]
     }
     case 'stream_event':
       return reduceSse(blocks, (ev as { event?: SseEvent }).event ?? {})

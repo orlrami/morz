@@ -6,6 +6,7 @@ import {
   IconCoin,
   IconHandStop,
   IconPlayerStop,
+  IconRefresh,
   IconSend,
   IconSparkles,
   IconTerminal2,
@@ -16,6 +17,7 @@ import type { ClaudePermissionReq } from '@shared/ipc'
 import { reduceEvent, userBlock, type LaneBlock } from '@/lib/claude-events'
 import { colors } from '@/lib/tokens'
 import { springs } from '@/lib/springs'
+import { useLaneStore, type LaneMeter } from '@/store/laneStore'
 import { useModeStore } from '@/store/modeStore'
 import { getMorz } from '@/store/spaceStore'
 
@@ -54,12 +56,17 @@ function ManualNotice(): JSX.Element {
 /* All window.morz.claude access lives below this line, unmounted in Manual. */
 function ActiveLane({ agentId, cwd }: { agentId: string; cwd: string }): JSX.Element {
   const [blocks, setBlocks] = useState<LaneBlock[]>([])
-  const [started, setStarted] = useState(false)
+  const [status, setStatus] = useState<'idle' | 'live' | 'dead'>('idle')
   const [running, setRunning] = useState(false)
+  const [model, setModel] = useState<string | null>(null)
   const [permissions, setPermissions] = useState<ClaudePermissionReq[]>([])
   const [input, setInput] = useState('')
   const mounted = useRef(true)
+  /** Last result.total_cost_usd of the CURRENT process (cumulative per run). */
+  const lastRunCost = useRef(0)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const meter = useLaneStore((s) => s.meters[agentId])
+  const sessionId = useLaneStore((s) => s.sessions[agentId])
   const morz = getMorz()
   const bridge = morz && 'claude' in morz ? morz.claude : undefined
 
@@ -69,8 +76,38 @@ function ActiveLane({ agentId, cwd }: { agentId: string; cwd: string }): JSX.Ele
     // Contract has no unsubscribe — gate the callbacks on the mount flag.
     bridge.onEvent((m) => {
       if (!mounted.current || m.agentId !== agentId) return
-      setBlocks((b) => reduceEvent(b, m.event))
-      if (m.event.type === 'result' || m.event.type === 'process_exit') setRunning(false)
+      const ev = m.event
+      if (ev.type === 'system' && (ev as { subtype?: string }).subtype === 'init') {
+        const init = ev as { session_id?: string; model?: string }
+        if (init.session_id) useLaneStore.getState().setSessionId(agentId, init.session_id)
+        if (init.model) setModel(init.model)
+      } else if (ev.type === 'result') {
+        const r = ev as {
+          total_cost_usd?: number
+          usage?: { input_tokens?: number; output_tokens?: number }
+        }
+        // Cost is cumulative within one claude process and resets on respawn
+        // (verified live) — meter the delta. Tokens are per-run, add directly.
+        const cost = typeof r.total_cost_usd === 'number' ? r.total_cost_usd : null
+        const costDelta = cost != null ? Math.max(0, cost - lastRunCost.current) : undefined
+        if (cost != null) lastRunCost.current = cost
+        useLaneStore.getState().addUsage(agentId, {
+          costUsd: costDelta,
+          inputTokens: r.usage?.input_tokens,
+          outputTokens: r.usage?.output_tokens
+        })
+        setRunning(false)
+      } else if (ev.type === 'meter' && (ev as { source?: string }).source === 'jsonl') {
+        const u = ev as { inputTokens?: number; outputTokens?: number }
+        useLaneStore.getState().setFallbackUsage(agentId, {
+          inputTokens: u.inputTokens ?? 0,
+          outputTokens: u.outputTokens ?? 0
+        })
+      } else if (ev.type === 'process_exit' || ev.type === 'process_error') {
+        setStatus('dead')
+        setRunning(false)
+      }
+      setBlocks((b) => reduceEvent(b, ev))
     })
     bridge.onPermission((r) => {
       if (!mounted.current || r.agentId !== agentId) return
@@ -97,12 +134,21 @@ function ActiveLane({ agentId, cwd }: { agentId: string; cwd: string }): JSX.Ele
     )
   }
 
+  /** Spawn (or respawn) claude; resumes the persisted session when present. */
+  const startProc = (firstText?: string): void => {
+    lastRunCost.current = 0
+    setStatus('live')
+    const resume = useLaneStore.getState().sessions[agentId]
+    void bridge.start({ agentId, cwd, resume }).then(() => {
+      if (firstText) bridge.send(agentId, firstText)
+    })
+  }
+
   const submit = (): void => {
     const text = input.trim()
     if (!text) return
-    if (!started) {
-      void bridge.start({ agentId, cwd }).then(() => bridge.send(agentId, text))
-      setStarted(true)
+    if (status !== 'live') {
+      startProc(text)
     } else {
       bridge.send(agentId, text)
     }
@@ -157,6 +203,26 @@ function ActiveLane({ agentId, cwd }: { agentId: string; cwd: string }): JSX.Ele
         ))}
       </div>
 
+      {status === 'dead' && (
+        <div
+          className="flex items-center gap-2 border-t px-3 py-1.5"
+          style={{ borderColor: 'var(--color-line)', background: colors.page }}
+        >
+          <IconAlertTriangle size={12} style={{ color: colors.error }} />
+          <span className="text-[10.5px]" style={{ color: colors.quartzDim }}>
+            claude exited{sessionId ? ' — restart resumes this session' : ''}
+          </span>
+          <button
+            onClick={() => startProc()}
+            className="ml-auto flex cursor-pointer items-center gap-1 rounded-md border px-2 py-0.5 text-[10.5px] font-semibold"
+            style={{ borderColor: 'var(--color-line-strong)', color: colors.bronzeHot }}
+          >
+            <IconRefresh size={11} stroke={2} />
+            Restart
+          </button>
+        </div>
+      )}
+
       <div className="border-t p-2" style={{ borderColor: 'var(--color-line)' }}>
         <div
           className="flex items-end gap-1.5 rounded-lg border px-2 py-1.5"
@@ -185,6 +251,7 @@ function ActiveLane({ agentId, cwd }: { agentId: string; cwd: string }): JSX.Ele
             <IconSend size={14} stroke={1.75} />
           </button>
         </div>
+        <MeterRow meter={meter} model={model} />
       </div>
 
       <AnimatePresence>
@@ -196,6 +263,31 @@ function ActiveLane({ agentId, cwd }: { agentId: string; cwd: string }): JSX.Ele
           />
         )}
       </AnimatePresence>
+    </div>
+  )
+}
+
+/* ── meters (Slice 5) ────────────────────────────────────────── */
+
+/** Grey dash = "no data", a first-class meter state — never a fake $0. */
+function MeterRow({ meter, model }: { meter?: LaneMeter; model: string | null }): JSX.Element {
+  const dash = <span style={{ color: colors.quartzDim, opacity: 0.6 }}>—</span>
+  const cost = meter?.costUsd
+  const inTok = meter?.inputTokens
+  const outTok = meter?.outputTokens
+  return (
+    <div
+      className="mt-1.5 flex items-center gap-2.5 px-1 text-[10px]"
+      style={{ color: colors.quartzDim }}
+      data-testid="lane-meter"
+    >
+      <span className="flex items-center gap-0.5">
+        <IconCoin size={11} stroke={1.75} />
+        {cost != null ? `$${cost.toFixed(4)}` : dash}
+      </span>
+      <span>{inTok != null ? `${inTok.toLocaleString()} in` : dash}</span>
+      <span>{outTok != null ? `${outTok.toLocaleString()} out` : dash}</span>
+      {model && <span className="ml-auto truncate">{model}</span>}
     </div>
   )
 }
