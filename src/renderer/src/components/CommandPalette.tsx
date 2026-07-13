@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { IconSearch, IconRobot, IconRocket, IconSparkles, IconLayoutSidebar } from '@tabler/icons-react'
-import { paletteActions } from '@/lib/mock'
+import { paletteActions, type PaletteAction } from '@/lib/mock'
 import { colors } from '@/lib/tokens'
 import { springs } from '@/lib/springs'
 
@@ -15,13 +15,16 @@ const GROUP_ICON: Record<string, typeof IconRobot> = {
 interface CommandPaletteProps {
   open: boolean
   onClose: () => void
+  /** Live actions prepended to the mock list (wave-2 seam: Shell's Claude lane). */
+  extraActions?: PaletteAction[]
+  onAction?: (id: string) => void
 }
 
 /*
  * cmd-K palette with typed filters: `agent:` `spawn:` `skill:` `view:`.
  * Subsequence fuzzy match; spring-down entrance over a blurred backdrop.
  */
-export function CommandPalette({ open, onClose }: CommandPaletteProps): JSX.Element {
+export function CommandPalette({ open, onClose, extraActions, onAction }: CommandPaletteProps): JSX.Element {
   const [query, setQuery] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -33,10 +36,11 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps): JSX.Elem
   }, [open])
 
   const results = useMemo(() => {
+    const all = [...(extraActions ?? []), ...paletteActions]
     const q = query.trim().toLowerCase()
-    if (!q) return paletteActions
+    if (!q) return all
     const [prefix, ...rest] = q.split(':')
-    const scoped = rest.length > 0 ? paletteActions.filter((a) => a.group === prefix) : paletteActions
+    const scoped = rest.length > 0 ? all.filter((a) => a.group === prefix) : all
     const needle = (rest.length > 0 ? rest.join(':') : q).trim()
     if (!needle) return scoped
     return scoped.filter((a) => {
@@ -48,7 +52,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps): JSX.Elem
       }
       return false
     })
-  }, [query])
+  }, [query, extraActions])
 
   return (
     <AnimatePresence>
@@ -105,7 +109,10 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps): JSX.Elem
                     animate={{ opacity: 1, y: 0, transition: { ...springs.snappy, delay: i * 0.02 } }}
                   >
                     <button
-                      onClick={onClose}
+                      onClick={() => {
+                        onAction?.(action.id)
+                        onClose()
+                      }}
                       className="flex w-full cursor-pointer items-center gap-2.5 rounded-[10px] px-2.5 py-2 text-left text-xs transition-colors"
                       style={{ color: colors.quartz }}
                       onMouseEnter={(e) => (e.currentTarget.style.background = colors.card)}
