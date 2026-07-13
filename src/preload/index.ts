@@ -28,6 +28,14 @@ import {
   type SessionSnapshot,
   type TerminalSpawnOpts
 } from '../shared/ipc'
+// w4/handoff — bus bridge (blackboard + assisted handoff)
+import {
+  BusApi,
+  type BusApprovalResp,
+  type BusHandoffInput,
+  type BusSnapshot,
+  type MorzBusApi
+} from '../shared/bus-ipc'
 
 const api: MorzApi = {
   pty: {
@@ -87,4 +95,14 @@ const api: MorzApi = {
   }
 }
 
-contextBridge.exposeInMainWorld('morz', api)
+// w4/handoff — window.morz.bus, additive beside MorzApi (typed in bus-ipc.ts)
+const bus: MorzBusApi = {
+  snapshot: () => ipcRenderer.invoke(BusApi.snapshot),
+  post: (input: BusHandoffInput) => ipcRenderer.invoke(BusApi.post, input),
+  respondApproval: (resp: BusApprovalResp) => ipcRenderer.send(BusApi.approvalRespond, resp),
+  onChanged: (cb) => {
+    ipcRenderer.on(BusApi.changed, (_e, s: BusSnapshot) => cb(s))
+  }
+}
+
+contextBridge.exposeInMainWorld('morz', { ...api, bus })

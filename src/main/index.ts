@@ -41,6 +41,7 @@ import { registerFsIpc } from './services/fs-service'
 import { registerGitIpc } from './services/git-service'
 import { registerEditorIpc } from './services/editor-detect'
 import { registerClaudeIpc } from './adapters/claude'
+import { registerHandoffIpc } from './bus/handoff' // w4/handoff
 
 /* ── PTY-host supervisor ─────────────────────────────────────── */
 
@@ -404,6 +405,7 @@ app.whenReady().then(() => {
   registerGitIpc()
   registerEditorIpc(ipcMain)
   registerClaudeIpc()
+  registerHandoffIpc() // w4/handoff — handlers only; nothing runs until Assisted UI calls
   startPtyHost()
 
   if (process.env['MORZ_SMOKE']) {
