@@ -66,7 +66,9 @@ function probeAll(): Promise<Record<Editor, EditorProbe>> {
 function fileUrl(scheme: string, path: string, line?: number, col?: number): string {
   const fwd = path.replace(/\\/g, '/')
   const suffix = line ? `:${line}${col ? `:${col}` : ''}` : ''
-  return `${scheme}://file/${encodeURI(fwd)}${suffix}`
+  // encodeURI leaves # and ? alone — they'd truncate the URL path
+  const encoded = encodeURI(fwd).replace(/#/g, '%23').replace(/\?/g, '%3F')
+  return `${scheme}://file/${encoded}${suffix}`
 }
 
 async function openExternal(editor: Editor, path: string, line?: number, col?: number): Promise<void> {

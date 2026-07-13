@@ -26,7 +26,15 @@ type Banner =
   | { kind: 'external-change'; diskMtimeMs: number }
   | { kind: 'deleted' }
   | { kind: 'unsaved-switch'; pending: OpenFileEvent }
+  | { kind: 'close-dirty'; path: string }
+  | { kind: 'load-error'; path: string }
   | null
+
+/** Tab strip entry. Unpinned = preview (italic); editing pins it. */
+interface Tab {
+  path: string
+  pinned: boolean
+}
 
 function baseName(p: string): string {
   return p.replace(/\\/g, '/').split('/').pop() ?? p
@@ -39,6 +47,7 @@ export function IdePane(): React.JSX.Element | null {
   const [binary, setBinary] = useState(false)
   const [banner, setBanner] = useState<Banner>(null)
   const [editors, setEditors] = useState<('vscode' | 'cursor')[]>([])
+  const [tabs, setTabs] = useState<Tab[]>([])
 
   const hostRef = useRef<HTMLDivElement | null>(null)
   const viewRef = useRef<EditorView | null>(null)
@@ -46,10 +55,32 @@ export function IdePane(): React.JSX.Element | null {
   const mtimeRef = useRef(0)
   const dirtyRef = useRef(false)
   const saveRef = useRef<() => void>(() => {})
+  const loadSeqRef = useRef(0) // guards racing loadFile calls (fast successive ctrl-clicks)
 
   const markDirty = (d: boolean): void => {
     dirtyRef.current = d
     setDirty(d)
+  }
+
+  /** First edit pins the active preview tab. */
+  const pinActiveTab = (): void => {
+    const p = pathRef.current
+    if (!p) return
+    setTabs((ts) => ts.map((t) => (t.path === p && !t.pinned ? { ...t, pinned: true } : t)))
+  }
+
+  /** Register `path` in the strip: reuse existing tab, else replace the preview tab, else append. */
+  const upsertTab = (path: string): void => {
+    setTabs((ts) => {
+      if (ts.some((t) => t.path === path)) return ts
+      const preview = ts.findIndex((t) => !t.pinned)
+      if (preview >= 0) {
+        const next = ts.slice()
+        next[preview] = { path, pinned: false }
+        return next
+      }
+      return [...ts, { path, pinned: false }]
+    })
   }
 
   const destroyView = (): void => {
@@ -77,7 +108,10 @@ export function IdePane(): React.JSX.Element | null {
           ])
         ),
         EditorView.updateListener.of((u) => {
-          if (u.docChanged && !dirtyRef.current) markDirty(true)
+          if (u.docChanged && !dirtyRef.current) {
+            markDirty(true)
+            pinActiveTab()
+          }
         })
       ]
     })
@@ -86,9 +120,11 @@ export function IdePane(): React.JSX.Element | null {
 
   const loadFile = useCallback(
     async (ev: OpenFileEvent) => {
+      const seq = ++loadSeqRef.current
       const prev = pathRef.current
       try {
         const res = await morz().file.read(ev.path)
+        if (seq !== loadSeqRef.current) return // superseded by a newer open
         if (prev && prev !== ev.path) morz().file.unwatch(prev)
         pathRef.current = ev.path
         mtimeRef.current = res.mtimeMs
@@ -97,6 +133,7 @@ export function IdePane(): React.JSX.Element | null {
         markDirty(false)
         setOpen(true)
         setBinary(res.binary)
+        upsertTab(ev.path)
         if (res.binary) {
           destroyView()
           return
@@ -105,21 +142,25 @@ export function IdePane(): React.JSX.Element | null {
         morz().file.watch(ev.path)
         if (viewRef.current) revealPosition(viewRef.current, ev.line, ev.col)
         void languageFor(ev.path).then((lang) => {
+          if (pathRef.current !== ev.path) return // doc switched while the language chunk loaded
           viewRef.current?.dispatch({ effects: languageCompartment.reconfigure(lang) })
         })
       } catch (err) {
         console.error('[morz-ide] read failed', ev.path, err)
+        if (seq !== loadSeqRef.current) return
+        setBanner({ kind: 'load-error', path: ev.path })
+        setOpen(true)
       }
     },
     [mountDoc]
   )
 
-  /* open-file events from the terminal link pipeline / deep links */
-  useEffect(() => {
-    const onOpen = (ev: OpenFileEvent): void => {
+  /** Shared open entry: terminal ctrl-click, deep links, tab clicks. */
+  const requestOpen = useCallback(
+    (ev: OpenFileEvent): void => {
       if (pathRef.current === ev.path && viewRef.current) {
         setOpen(true)
-        revealPosition(viewRef.current, ev.line, ev.col)
+        if (ev.line !== undefined) revealPosition(viewRef.current, ev.line, ev.col)
         return
       }
       if (dirtyRef.current) {
@@ -128,10 +169,16 @@ export function IdePane(): React.JSX.Element | null {
         return
       }
       void loadFile(ev)
-    }
+    },
+    [loadFile]
+  )
+
+  /* open-file events from the terminal link pipeline / deep links */
+  useEffect(() => {
+    const onOpen = (ev: OpenFileEvent): void => requestOpen(ev)
     appEvents.on('open-file', onOpen)
     return () => appEvents.off('open-file', onOpen)
-  }, [loadFile])
+  }, [requestOpen])
 
   /* file:changed push — silent reload when clean, banner when dirty */
   useEffect(() => {
@@ -159,6 +206,7 @@ export function IdePane(): React.JSX.Element | null {
     const view = viewRef.current
     if (!path || !view) return
     const res = await morz().file.read(path)
+    if (pathRef.current !== path || viewRef.current !== view) return // doc switched mid-read
     if (res.binary) return
     const scrollTop = view.scrollDOM.scrollTop
     const head = view.state.selection.main.head
@@ -193,8 +241,33 @@ export function IdePane(): React.JSX.Element | null {
     pathRef.current = null
     setFilePath(null)
     setBanner(null)
+    setTabs([])
     markDirty(false)
     setOpen(false)
+  }
+
+  /** Remove a tab; guard the active-dirty case behind a banner. */
+  const closeTab = (path: string): void => {
+    if (path === pathRef.current && dirtyRef.current) {
+      setBanner({ kind: 'close-dirty', path })
+      return
+    }
+    reallyCloseTab(path)
+  }
+
+  const reallyCloseTab = (path: string): void => {
+    const idx = tabs.findIndex((t) => t.path === path)
+    const rest = tabs.filter((t) => t.path !== path)
+    setTabs(rest)
+    if (path !== pathRef.current) return
+    if (rest.length === 0) {
+      close()
+      return
+    }
+    markDirty(false) // edits discarded with the tab
+    setBanner(null)
+    const next = rest[Math.min(Math.max(idx - 1, 0), rest.length - 1)]
+    void loadFile({ path: next.path })
   }
 
   const openExternal = (editor: 'vscode' | 'cursor'): void => {
@@ -252,6 +325,38 @@ export function IdePane(): React.JSX.Element | null {
         </button>
       </div>
 
+      {/* tab strip */}
+      {tabs.length > 0 && (
+        <div className="flex items-center gap-0.5 px-1.5 h-7 border-b border-line overflow-x-auto shrink-0">
+          {tabs.map((t) => {
+            const active = t.path === filePath
+            return (
+              <div
+                key={t.path}
+                className={`group flex items-center gap-1 px-2 h-[22px] rounded-[var(--radius-data)] font-mono text-[11px] cursor-pointer shrink-0 ${
+                  active ? 'bg-card text-quartz' : 'text-quartz-dim hover:bg-hover'
+                }`}
+                title={t.path}
+                onClick={() => requestOpen({ path: t.path })}
+              >
+                <span className={t.pinned ? '' : 'italic'}>{baseName(t.path)}</span>
+                {active && dirty && <span className="w-1.5 h-1.5 rounded-full bg-bronze shrink-0" />}
+                <button
+                  className="text-quartz-faint hover:text-quartz leading-none px-0.5"
+                  title="Close tab"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    closeTab(t.path)
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
       {/* banners */}
       {banner && (
         <div className="flex items-center gap-2 px-3 py-1.5 text-[12px] font-body bg-card border-b border-line-strong text-quartz shrink-0">
@@ -282,6 +387,27 @@ export function IdePane(): React.JSX.Element | null {
           {banner.kind === 'deleted' && (
             <>
               <span className="text-error">File was deleted on disk.</span>
+              <div className="flex-1" />
+              <button className={btnLive} onClick={() => setBanner(null)}>
+                Dismiss
+              </button>
+            </>
+          )}
+          {banner.kind === 'close-dirty' && (
+            <>
+              <span className="text-blocked">Unsaved changes in {baseName(banner.path)}.</span>
+              <div className="flex-1" />
+              <button className={btnLive} onClick={() => reallyCloseTab(banner.path)}>
+                Discard &amp; close
+              </button>
+              <button className={btnLive} onClick={() => setBanner(null)}>
+                Keep
+              </button>
+            </>
+          )}
+          {banner.kind === 'load-error' && (
+            <>
+              <span className="text-error">Could not read {baseName(banner.path)}.</span>
               <div className="flex-1" />
               <button className={btnLive} onClick={() => setBanner(null)}>
                 Dismiss

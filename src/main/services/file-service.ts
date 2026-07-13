@@ -103,14 +103,23 @@ function startWatch(path: string, sender: WebContents): void {
     if (!sender.isDestroyed()) sender.send(FileApi.changed, msg)
   }
 
-  watcher.on('change', async () => {
+  const onChanged = async (): Promise<void> => {
     const st = await fs.stat(path).catch(() => null)
     if (!st) return
     const own = selfWriteMtime.get(k)
     if (own !== undefined && Math.abs(st.mtimeMs - own) <= MTIME_EPSILON) return // our own save echoing back
     push({ path, kind: 'changed', mtimeMs: st.mtimeMs })
+  }
+
+  watcher.on('change', () => void onChanged())
+  // agents delete-then-recreate; treat re-add as a change so the pane reloads
+  watcher.on('add', () => void onChanged())
+  watcher.on('unlink', async () => {
+    // atomic rename-over-target can surface as unlink+add — confirm it's really gone
+    const st = await fs.stat(path).catch(() => null)
+    if (st) return
+    push({ path, kind: 'deleted', mtimeMs: 0 })
   })
-  watcher.on('unlink', () => push({ path, kind: 'deleted', mtimeMs: 0 }))
 
   watchers.set(k, { watcher, sender })
 }
