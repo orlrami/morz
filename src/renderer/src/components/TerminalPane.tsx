@@ -75,10 +75,15 @@ function MenuItem({
   )
 }
 
-export function TerminalPane({ agent }: TerminalPaneProps): JSX.Element {
-  const blocked = agent.status === 'blocked'
-  const paneId = agent.id
-  const { containerRef } = useTerminal(paneId)
+/*
+ * Right-click context menu + its open/close state, reusable by any pane host
+ * (TerminalPane here, ShellTerminalPane in Shell.tsx). Attach `onContextMenu`
+ * to the xterm mount and render `element` inside a relative container.
+ */
+export function useTerminalContextMenu(paneId: string): {
+  onContextMenu: (ev: React.MouseEvent) => void
+  element: ReactNode
+} {
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
 
   useEffect(() => {
@@ -95,6 +100,71 @@ export function TerminalPane({ agent }: TerminalPaneProps): JSX.Element {
     fn()
     closeMenu()
   }
+
+  const element: ReactNode = menu ? (
+    <div
+      className="fixed inset-0 z-50"
+      onClick={closeMenu}
+      onContextMenu={(ev) => {
+        ev.preventDefault()
+        closeMenu()
+      }}
+    >
+      <div
+        className="absolute min-w-[170px] rounded-md border py-1 shadow-lg"
+        style={{
+          left: Math.min(menu.x, window.innerWidth - 190),
+          top: Math.min(menu.y, window.innerHeight - 190),
+          background: colors.panel,
+          borderColor: 'var(--color-line)'
+        }}
+        onClick={(ev) => ev.stopPropagation()}
+      >
+        <MenuItem
+          label="Copy"
+          icon={<IconCopy size={13} stroke={1.5} />}
+          onClick={menuAction(() => copyTerminalSelection(paneId))}
+        />
+        <MenuItem
+          label="Paste"
+          icon={<IconClipboard size={13} stroke={1.5} />}
+          onClick={menuAction(() => pasteIntoTerminal(paneId))}
+        />
+        <div className="my-1 border-t" style={{ borderColor: 'var(--color-line)' }} />
+        <MenuItem
+          label="Split right"
+          icon={<IconLayoutColumns size={13} stroke={1.5} />}
+          onClick={menuAction(() => emit('split-pane', { paneId, dir: 'right' }))}
+        />
+        <MenuItem
+          label="Split down"
+          icon={<IconLayoutRows size={13} stroke={1.5} />}
+          onClick={menuAction(() => emit('split-pane', { paneId, dir: 'down' }))}
+        />
+        <div className="my-1 border-t" style={{ borderColor: 'var(--color-line)' }} />
+        <MenuItem
+          label="Close pane"
+          icon={<IconX size={13} stroke={1.5} />}
+          onClick={menuAction(() => emit('close-pane', { paneId }))}
+        />
+      </div>
+    </div>
+  ) : null
+
+  return {
+    onContextMenu: (ev: React.MouseEvent) => {
+      ev.preventDefault()
+      setMenu({ x: ev.clientX, y: ev.clientY })
+    },
+    element
+  }
+}
+
+export function TerminalPane({ agent }: TerminalPaneProps): JSX.Element {
+  const blocked = agent.status === 'blocked'
+  const paneId = agent.id
+  const { containerRef } = useTerminal(paneId)
+  const ctxMenu = useTerminalContextMenu(paneId)
 
   return (
     <section
@@ -158,62 +228,11 @@ export function TerminalPane({ agent }: TerminalPaneProps): JSX.Element {
         ref={containerRef}
         className="min-h-0 flex-1 py-2 pl-3 pr-1"
         style={{ background: colors.page }}
-        onContextMenu={(ev) => {
-          ev.preventDefault()
-          setMenu({ x: ev.clientX, y: ev.clientY })
-        }}
+        onContextMenu={ctxMenu.onContextMenu}
       />
 
       {/* right-click context menu */}
-      {menu && (
-        <div
-          className="fixed inset-0 z-50"
-          onClick={closeMenu}
-          onContextMenu={(ev) => {
-            ev.preventDefault()
-            closeMenu()
-          }}
-        >
-          <div
-            className="absolute min-w-[170px] rounded-md border py-1 shadow-lg"
-            style={{
-              left: Math.min(menu.x, window.innerWidth - 190),
-              top: Math.min(menu.y, window.innerHeight - 190),
-              background: colors.panel,
-              borderColor: 'var(--color-line)'
-            }}
-            onClick={(ev) => ev.stopPropagation()}
-          >
-            <MenuItem
-              label="Copy"
-              icon={<IconCopy size={13} stroke={1.5} />}
-              onClick={menuAction(() => copyTerminalSelection(paneId))}
-            />
-            <MenuItem
-              label="Paste"
-              icon={<IconClipboard size={13} stroke={1.5} />}
-              onClick={menuAction(() => pasteIntoTerminal(paneId))}
-            />
-            <div className="my-1 border-t" style={{ borderColor: 'var(--color-line)' }} />
-            <MenuItem
-              label="Split right"
-              icon={<IconLayoutColumns size={13} stroke={1.5} />}
-              onClick={menuAction(() => emit('split-pane', { paneId, dir: 'right' }))}
-            />
-            <MenuItem
-              label="Split down"
-              icon={<IconLayoutRows size={13} stroke={1.5} />}
-              onClick={menuAction(() => emit('split-pane', { paneId, dir: 'down' }))}
-            />
-            <div className="my-1 border-t" style={{ borderColor: 'var(--color-line)' }} />
-            <MenuItem
-              label="Close pane"
-              icon={<IconX size={13} stroke={1.5} />}
-              onClick={menuAction(() => emit('close-pane', { paneId }))}
-            />
-          </div>
-        </div>
-      )}
+      {ctxMenu.element}
     </section>
   )
 }

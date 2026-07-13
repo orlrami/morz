@@ -31,6 +31,7 @@ import { WorkshopPanel } from './WorkshopPanel'
 import { ToastHost } from './Toast'
 import { IdePane } from './IdePane'
 import { ClaudeLane } from './ClaudeLane'
+import { useTerminalContextMenu } from './TerminalPane'
 import { serializeTerminal, useTerminal } from '@/hooks/useTerminal'
 import { emit, off, on } from '@/lib/app-events'
 import { colors } from '@/lib/tokens'
@@ -394,6 +395,7 @@ function ShellTerminalPane({
     shell: pane.shell || undefined,
     cwd: pane.cwd || undefined
   })
+  const ctxMenu = useTerminalContextMenu(pane.paneId)
 
   return (
     <section
@@ -447,7 +449,15 @@ function ShellTerminalPane({
       </div>
 
       {/* xterm mount — pl-3 leaves room for the block accent strips */}
-      <div ref={containerRef} className="min-h-0 flex-1 py-2 pl-3 pr-1" style={{ background: colors.page }} />
+      <div
+        ref={containerRef}
+        className="min-h-0 flex-1 py-2 pl-3 pr-1"
+        style={{ background: colors.page }}
+        onContextMenu={ctxMenu.onContextMenu}
+      />
+
+      {/* right-click context menu (copy/paste/split/close) */}
+      {ctxMenu.element}
     </section>
   )
 }

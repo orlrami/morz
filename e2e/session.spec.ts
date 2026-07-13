@@ -3,9 +3,9 @@
  * (tray-resident PTY-host); reopening reattaches and replays scrollback, and
  * the shell keeps its state (cwd survives because it is the SAME process).
  *
- * Full app-relaunch snapshot restore (SQLite layout+scrollback after a hard
- * kill) is scaffolded in main (store/db.ts + SessionApi) but the renderer does
- * not call session.save/load yet — that case is test.fixme below.
+ * Full app-relaunch snapshot restore: the renderer saves a debounced snapshot
+ * (Shell.tsx → session.save) and hydrates from session.load — the second test
+ * kills the app and asserts the pane layout comes back from SQLite.
  */
 import { test, expect } from '@playwright/test'
 import { tmpdir } from 'os'
@@ -74,13 +74,34 @@ test.describe.serial('session survival (Slice 2)', () => {
     expect(cwdAfter.toLowerCase()).toBe(cwdBefore.toLowerCase())
   })
 
-  test.fixme(
-    'hard-kill app → relaunch restores layout + scrollback from SQLite',
-    async () => {
-      // Blocked on renderer wiring: nothing calls window.morz.session.save/load
-      // yet (main-side SessionApi + snapshot table exist). When wired:
-      //   1. launchMorz() → mark pane → closeMorz() (full quit)
-      //   2. launchMorz({ appDataDir: same }) → assert scrollback/layout restored.
+  test('hard-kill app → relaunch restores pane layout from SQLite', async () => {
+    // Scrollback-into-a-dead-pane is NOT restored (host replay only covers live
+    // PTYs); this asserts the SQLite snapshot path: layout survives a full kill.
+    await closeMorz(morz.app) // one Electron instance at a time (workers: 1 rationale)
+    const morz2 = await launchMorz()
+    try {
+      const page = morz2.page
+      await waitForTerm(page, PANE_1, PROMPT_RE, 90_000)
+
+      // Change the layout (split via the pane header) so the snapshot differs
+      // from the default, then let the 1s debounced session.save land.
+      await page.getByLabel('Split pane').first().click()
+      await expect.poll(() => listPanes(page).then((p) => p.length)).toBeGreaterThan(2)
+      const panesBefore = await listPanes(page)
+      await page.waitForTimeout(2_000)
+
+      await closeMorz(morz2.app) // hard kill — tray teardown, no graceful quit
+
+      const morz3 = await launchMorz({ appDataDir: morz2.appDataDir })
+      try {
+        await waitForTerm(morz3.page, PANE_1, PROMPT_RE, 90_000)
+        expect((await listPanes(morz3.page)).sort()).toEqual(panesBefore.sort())
+      } finally {
+        await closeMorz(morz3.app)
+      }
+    } catch (err) {
+      await closeMorz(morz2.app).catch(() => {})
+      throw err
     }
-  )
+  })
 })

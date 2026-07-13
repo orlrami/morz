@@ -22,9 +22,9 @@ const MAIN_JS = join(ROOT, 'out', 'main', 'index.js')
 // node_modules junction lacks (postinstall scripts gated by allowScripts)
 const ELECTRON_EXE = join(ROOT, 'node_modules', 'electron', 'dist', 'electron.exe')
 
-/** Panes the shell auto-spawns on launch (Shell.tsx renders builder-1/builder-2). */
-export const PANE_1 = 'builder-1'
-export const PANE_2 = 'builder-2'
+/** Default panes the shell hydrates on a fresh launch (layoutStore DEFAULT_PANES). */
+export const PANE_1 = 'term-1'
+export const PANE_2 = 'term-2'
 
 /** pwsh/powershell prompt, or a bash-ish WSL prompt. */
 export const PROMPT_RE = /PS [^\r\n]*>|\w+@[\w.-]+:[^\r\n]*[$#]/
