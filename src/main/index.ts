@@ -479,3 +479,6 @@ registerCatalogIpc()
 // w4/config
 import { registerConfigWriterIpc } from './services/config-writer'
 app.whenReady().then(() => registerConfigWriterIpc(ipcMain))
+// w4/obsidian
+import { registerObsidianIpc } from './services/obsidian'
+app.whenReady().then(() => registerObsidianIpc(ipcMain))

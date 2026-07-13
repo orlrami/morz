@@ -5,6 +5,7 @@ import { cliUsages, cliTint, cliLabel } from '@/lib/mock'
 import { colors } from '@/lib/tokens'
 import { springs } from '@/lib/springs'
 import { themes, useThemeStore } from '@/lib/themes'
+import { ObsidianSettings } from './ObsidianSettings'
 
 type Tab = 'limits' | 'appearance' | 'control'
 
@@ -180,6 +181,7 @@ export function SettingsPanel(): JSX.Element {
                 </div>
               ))}
             </div>
+            {/* // w4/obsidian */}<ObsidianSettings />
           </div>
         )}
       </div>
