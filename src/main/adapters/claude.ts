@@ -10,6 +10,9 @@
  * and makes zero network calls.
  */
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process'
+import { readFile } from 'fs/promises'
+import { homedir } from 'os'
+import { join } from 'path'
 import { app, ipcMain, webContents } from 'electron'
 import {
   ClaudeApi,
@@ -22,6 +25,7 @@ import {
 interface ClaudeProc {
   agentId: string
   child: ChildProcessWithoutNullStreams
+  cwd: string
   buf: string
   sessionId: string | null
   model: string | null
@@ -37,6 +41,8 @@ const procs = new Map<string, ClaudeProc>()
 const pendingPermissions = new Map<string, { agentId: string; input: unknown }>()
 
 const CLAUDE_ARGS = [
+  // stream-json only works in print mode (verified against claude 2.1.187)
+  '-p',
   '--input-format',
   'stream-json',
   '--output-format',
@@ -46,6 +52,45 @@ const CLAUDE_ARGS = [
   '--permission-prompt-tool',
   'stdio'
 ]
+
+/** ~/.claude transcript dir slug: every non-alphanumeric path char becomes '-'. */
+function projectSlug(cwd: string): string {
+  return cwd.replace(/[^a-zA-Z0-9]/g, '-')
+}
+
+/** Sum assistant-message token usage from the session transcript JSONL. */
+async function jsonlUsage(
+  cwd: string,
+  sessionId: string
+): Promise<{ inputTokens: number; outputTokens: number } | null> {
+  try {
+    const file = join(homedir(), '.claude', 'projects', projectSlug(cwd), `${sessionId}.jsonl`)
+    const raw = await readFile(file, 'utf8')
+    let inputTokens = 0
+    let outputTokens = 0
+    let seen = false
+    for (const line of raw.split('\n')) {
+      if (!line.includes('"usage"')) continue
+      try {
+        const msg = JSON.parse(line) as {
+          type?: string
+          message?: { usage?: { input_tokens?: number; output_tokens?: number } }
+        }
+        const u = msg.type === 'assistant' ? msg.message?.usage : undefined
+        if (u) {
+          seen = true
+          inputTokens += u.input_tokens ?? 0
+          outputTokens += u.output_tokens ?? 0
+        }
+      } catch {
+        // malformed transcript line — skip, keep summing
+      }
+    }
+    return seen ? { inputTokens, outputTokens } : null
+  } catch {
+    return null
+  }
+}
 
 function broadcast(channel: string, payload: unknown): void {
   for (const wc of webContents.getAllWebContents()) wc.send(channel, payload)
@@ -87,8 +132,17 @@ function handleEvent(proc: ClaudeProc, event: ClaudeEvent): void {
     proc.model = init.model ?? null
     proc.capabilities = init.capabilities ?? null
   } else if (event.type === 'result') {
-    const cost = (event as { total_cost_usd?: number }).total_cost_usd
-    if (typeof cost === 'number') proc.totalCostUsd = cost
+    const r = event as { total_cost_usd?: number; usage?: unknown }
+    if (typeof r.total_cost_usd === 'number') proc.totalCostUsd = r.total_cost_usd
+    // Meter fallback: result carried no cost/usage → sum the ~/.claude JSONL
+    // transcript and push a synthetic meter event ("no data" if that fails too).
+    if (r.total_cost_usd == null && r.usage == null && proc.sessionId) {
+      void jsonlUsage(proc.cwd, proc.sessionId).then((u) => {
+        if (u && procs.get(proc.agentId) === proc) {
+          emit(proc.agentId, { type: 'meter', source: 'jsonl', ...u })
+        }
+      })
+    }
   } else if (event.type === 'control_request') {
     handleControlRequest(proc, event)
     return // surfaced on the permission channel, not as a lane event
@@ -132,6 +186,7 @@ function start(opts: ClaudeStartOpts): { agentId: string } {
   const proc: ClaudeProc = {
     agentId: opts.agentId,
     child,
+    cwd: opts.cwd,
     buf: '',
     sessionId: opts.resume ?? null,
     model: null,
@@ -146,8 +201,15 @@ function start(opts: ClaudeStartOpts): { agentId: string } {
   )
   child.on('error', (err) => emit(opts.agentId, { type: 'process_error', message: err.message }))
   child.on('close', (code) => {
-    emit(opts.agentId, { type: 'process_exit', code, sessionId: proc.sessionId })
+    // A restart re-registers the agentId before the old child's close fires —
+    // stay silent then, or the fresh lane would be flagged dead.
+    const current = procs.get(opts.agentId)
+    if (current && current !== proc) return
     procs.delete(opts.agentId)
+    for (const [rid, p] of pendingPermissions) {
+      if (p.agentId === opts.agentId) pendingPermissions.delete(rid)
+    }
+    emit(opts.agentId, { type: 'process_exit', code, sessionId: proc.sessionId })
   })
   return { agentId: opts.agentId }
 }
@@ -191,7 +253,13 @@ function stop(agentId: string): void {
   const proc = procs.get(agentId)
   if (!proc) return
   procs.delete(agentId)
-  proc.child.kill()
+  const pid = proc.child.pid
+  if (process.platform === 'win32' && pid) {
+    // shell:true wraps claude in cmd.exe — kill the whole tree, not just the shim
+    spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true })
+  } else {
+    proc.child.kill()
+  }
 }
 
 export function registerClaudeIpc(): void {
