@@ -70,7 +70,12 @@ export async function launchMorz(opts?: { appDataDir?: string }): Promise<MorzAp
 
 /** Quit gracefully (before-quit → PTY-host shutdown), then hard-kill the tree. */
 export async function closeMorz(app: ElectronApplication): Promise<void> {
-  const pid = app.process().pid
+  let pid: number | undefined
+  try {
+    pid = app.process().pid
+  } catch {
+    return // already closed (idempotent — specs + afterAll may both call this)
+  }
   try {
     await Promise.race([
       app.evaluate(({ app: a }) => a.quit()),
