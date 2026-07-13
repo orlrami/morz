@@ -32,3 +32,6 @@ Thumbs.db
 *.sqlite
 *.sqlite3
 /data/
+
+# runtime agent-bus mailbox (visible on disk, never tracked in this repo)
+.morz/
