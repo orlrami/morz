@@ -13,7 +13,8 @@
     "dist": "electron-vite build && electron-builder --win --publish never",
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "build:mcp": "node packages/morz-mcp/build.mjs"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.3",

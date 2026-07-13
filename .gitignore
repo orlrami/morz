@@ -1,6 +1,9 @@
 # deps & build
 node_modules/
 dist/
+# w4/mcp — the bundled shim ships in-repo so any CLI can spawn it without a build step
+!packages/morz-mcp/dist/
+!packages/morz-mcp/dist/morz-mcp.cjs
 out/
 build/
 release/

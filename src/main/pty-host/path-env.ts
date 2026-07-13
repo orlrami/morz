@@ -66,5 +66,12 @@ export function buildChildEnv(
   }
   env.Path = realPath
   env.MORZ_SESSION = sessionGuid
+  // w4/mcp — bus reachability: Main mints MORZ_BUS_PIPE/MORZ_BUS_TOKEN per run
+  // and sets them on its own process.env before forking this host (which the
+  // fork inherits). The copy loop above already forwards them; this pin keeps
+  // every CLI child able to spawn the morz-mcp shim even if that loop gains
+  // filters later.
+  if (process.env.MORZ_BUS_PIPE) env.MORZ_BUS_PIPE = process.env.MORZ_BUS_PIPE
+  if (process.env.MORZ_BUS_TOKEN) env.MORZ_BUS_TOKEN = process.env.MORZ_BUS_TOKEN
   return { ...env, ...extra }
 }
