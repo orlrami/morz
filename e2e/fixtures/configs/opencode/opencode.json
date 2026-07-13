@@ -1,0 +1,14 @@
+{
+  // Fixture comment must survive the targeted JSONC edit.
+  "$schema": "https://opencode.ai/config.json",
+  "permission": {
+    "bash": "ask"
+  },
+  "mcp": {
+    "existing": {
+      "type": "local",
+      "command": ["existing-command", "--existing"],
+      "enabled": false
+    },
+  },
+}

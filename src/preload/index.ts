@@ -145,4 +145,12 @@ Object.assign(api, {
   }
 })
 
+// w4/config
+import { ConfigWriterApi } from '../shared/ipc'
+api.configWriter = {
+  detect: () => ipcRenderer.invoke(ConfigWriterApi.detect),
+  propose: (spec, targets) => ipcRenderer.invoke(ConfigWriterApi.propose, spec, targets),
+  apply: (proposalId) => ipcRenderer.invoke(ConfigWriterApi.apply, proposalId)
+}
+
 contextBridge.exposeInMainWorld('morz', api)

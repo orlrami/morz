@@ -1,0 +1,12 @@
+{
+  "projectSetting": "keep-me",
+  "mcpServers": {
+    "existing": {
+      "command": "existing-command",
+      "args": ["--existing"],
+      "env": {
+        "EXISTING_TOKEN": "fixture-only"
+      }
+    }
+  }
+}

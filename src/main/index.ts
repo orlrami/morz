@@ -476,3 +476,6 @@ app.whenReady().then(() => registerBusIpc())
 import { registerCatalogIpc } from './services/catalog'
 
 registerCatalogIpc()
+// w4/config
+import { registerConfigWriterIpc } from './services/config-writer'
+app.whenReady().then(() => registerConfigWriterIpc(ipcMain))

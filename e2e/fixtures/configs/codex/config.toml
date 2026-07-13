@@ -1,0 +1,12 @@
+# smol-toml does not retain comments when stringifying; non-comment data must survive.
+model = "fixture-model"
+
+[features]
+fixture_feature = true
+
+[mcp_servers.existing]
+command = "existing-command"
+args = ["--existing"]
+
+[mcp_servers.existing.env]
+EXISTING_TOKEN = "fixture-only"
