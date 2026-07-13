@@ -147,3 +147,41 @@ export interface MorzApi {
   }
   editor: { detect(): Promise<('vscode' | 'cursor')[]>; openExternal(editor: string, path: string, line?: number, col?: number): void }
 }
+
+// w4/config
+export type ConfigWriterTarget = 'claude' | 'codex' | 'opencode'
+export interface ConfigWriterInstallSpec {
+  name: string
+  command: string
+  args: string[]
+  env: Record<string, string>
+}
+export interface ConfigWriterDetectedConfig {
+  target: ConfigWriterTarget
+  path: string
+}
+export interface ConfigWriterProposal {
+  proposalId: string
+  hash: string
+  target: ConfigWriterTarget
+  path: string
+  unifiedDiff: string
+}
+export interface ConfigWriterApplyResult {
+  target: ConfigWriterTarget
+  path: string
+  backupPath: string
+}
+export const ConfigWriterApi = {
+  detect: 'config-writer:detect',
+  propose: 'config-writer:propose',
+  apply: 'config-writer:apply'
+} as const
+export interface ConfigWriterApiShape {
+  detect(): Promise<ConfigWriterDetectedConfig[]>
+  propose(spec: ConfigWriterInstallSpec, targets: ConfigWriterTarget[]): Promise<ConfigWriterProposal[]>
+  apply(proposalId: string): Promise<ConfigWriterApplyResult>
+}
+export interface MorzApi {
+  configWriter?: ConfigWriterApiShape
+}
