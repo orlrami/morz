@@ -41,6 +41,9 @@ import { registerFsIpc } from './services/fs-service'
 import { registerGitIpc } from './services/git-service'
 import { registerEditorIpc } from './services/editor-detect'
 import { registerClaudeIpc } from './adapters/claude'
+// w4/mcp — bus pipe server + tool handlers
+import { startPipeServer, type BusPipeServer } from './bus/pipe-server'
+import { BUS_OPEN_FILE_CHANNEL, createToolHandlers, InMemoryBoard } from './bus/tool-handlers'
 
 /* ── PTY-host supervisor ─────────────────────────────────────── */
 
@@ -393,10 +396,38 @@ function runSmoke(): void {
     .catch((e) => finish(false, e.message))
 }
 
+/* ── bus pipe server (w4/mcp) ────────────────────────────────── */
+
+/* Nonce+token minted per run; children reach the bus via env — buildChildEnv
+ * copies process.env into every PTY child and utilityProcess.fork inherits it,
+ * so setting process.env BEFORE startPtyHost() covers all spawn paths. */
+let busServer: BusPipeServer | null = null
+
+function startBus(): void {
+  try {
+    busServer = startPipeServer({
+      handlers: createToolHandlers({
+        board: new InMemoryBoard(), // TEMPORARY — integration swaps in the SQLite board
+        openFile: (evt) => {
+          for (const win of BrowserWindow.getAllWindows()) {
+            if (!win.isDestroyed()) win.webContents.send(BUS_OPEN_FILE_CHANNEL, evt)
+          }
+        }
+      })
+    })
+    process.env.MORZ_BUS_PIPE = busServer.pipePath
+    process.env.MORZ_BUS_TOKEN = busServer.token
+    busServer.ready.catch((e) => console.error('[morz] bus pipe failed to listen:', e))
+  } catch (e) {
+    console.error('[morz] bus pipe server failed to start:', e)
+  }
+}
+
 /* ── app lifecycle ───────────────────────────────────────────── */
 
 app.whenReady().then(() => {
   sweepOrphans()
+  startBus()
   registerPtyIpc()
   registerSessionIpc()
   registerFileIpc(ipcMain)
