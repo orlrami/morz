@@ -8,7 +8,7 @@
  * lifetime (tray-resident survival is Slice 2).
  *
  * Hot data flows over ONE MessagePort (PTY_PORT_CHANNEL) shared by all panes:
- * host→renderer {paneId,data}|{paneId,exitCode}, renderer→host {paneId,data}.
+ * host→renderer data/exit/TUI messages, renderer→host pane-scoped control.
  */
 import { useEffect, useRef, type RefObject } from 'react'
 import { Terminal } from '@xterm/xterm'
@@ -31,6 +31,8 @@ interface Session {
   exited: boolean
   /** Alt-screen buffer active — a full-screen TUI (vim/less/htop) owns the grid. */
   tui: boolean
+  processTui: boolean
+  altScreenTui: boolean
 }
 
 const sessions = new Map<string, Session>()
@@ -105,8 +107,16 @@ function ptyApi(): MorzApi['pty'] | null {
   return m?.pty && typeof m.pty.spawn === 'function' ? (m.pty as MorzApi['pty']) : null
 }
 
-/* ── PTY output relay (main → renderer via window.morz.pty.onData) ── */
+/* ── PTY data/exit/TUI relay (main → renderer via window.morz.pty.onData) ── */
 let dataSubscribed = false
+
+function publishTui(paneId: string, session: Session): void {
+  const tui = session.processTui || session.altScreenTui
+  if (tui === session.tui) return
+  session.tui = tui
+  if (session.term.element) session.term.element.dataset.morzTui = String(tui)
+  for (const cb of tuiListeners.get(paneId) ?? []) cb(tui)
+}
 
 function ensurePort(): void {
   const pty = ptyApi()
@@ -115,13 +125,24 @@ function ensurePort(): void {
   pty.onData((msg) => {
     const s = sessions.get(msg.paneId)
     if (!s) return
-    if ('exitCode' in msg) {
-      s.exited = true
-      s.term.write(`\r\n\x1b[2m— process exited (${msg.exitCode}) —\x1b[0m\r\n`)
-    } else {
-      s.term.write(msg.data)
-      // flow-control ack so the host resumes past its high watermark
-      pty.ack(msg.paneId, msg.data.length)
+    switch (msg.type) {
+      case 'exit':
+        s.exited = true
+        s.processTui = false
+        s.altScreenTui = false
+        if (s.term.element) s.term.element.dataset.morzAltScreen = 'false'
+        publishTui(msg.paneId, s)
+        s.term.write(`\r\n\x1b[2m— process exited (${msg.exitCode}) —\x1b[0m\r\n`)
+        break
+      case 'tui':
+        s.processTui = msg.tui
+        publishTui(msg.paneId, s)
+        break
+      case 'data':
+        s.term.write(msg.data)
+        // flow-control ack so the host resumes past its high watermark
+        pty.ack(msg.paneId, msg.data.length)
+        break
     }
   })
 }
@@ -163,14 +184,17 @@ function createSession(paneId: string): Session {
     nonce,
     spawned: false,
     exited: false,
-    tui: false
+    tui: false,
+    processTui: false,
+    altScreenTui: false
   }
 
   term.buffer.onBufferChange((buf) => {
-    const tui = buf.type === 'alternate'
-    if (tui === session.tui) return
-    session.tui = tui
-    for (const cb of tuiListeners.get(paneId) ?? []) cb(tui)
+    session.altScreenTui = buf.type === 'alternate'
+    if (session.term.element) {
+      session.term.element.dataset.morzAltScreen = String(session.altScreenTui)
+    }
+    publishTui(paneId, session)
   })
 
   // copy-on-select (setting-less default for 0.0.1)
@@ -277,6 +301,10 @@ export function useTerminal(
       }
     }
     term.options.theme = activeXtermTheme()
+    if (term.element) {
+      term.element.dataset.morzTui = String(session.tui)
+      term.element.dataset.morzAltScreen = String(session.altScreenTui)
+    }
     el.style.background = colors.page
 
     fit.fit()

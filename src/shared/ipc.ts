@@ -19,6 +19,11 @@ export interface TerminalSpawnOpts {
 }
 export interface PtyDataMsg { paneId: string; data: string }
 export interface PtyExitMsg { paneId: string; exitCode: number; signal?: number }
+export interface PtyTuiMsg { paneId: string; tui: boolean }
+export type PtyRendererMsg =
+  | ({ type: 'data' } & PtyDataMsg)
+  | ({ type: 'exit' } & PtyExitMsg)
+  | ({ type: 'tui' } & PtyTuiMsg)
 /**
  * Every message that travels over the PTY MessagePort (renderer↔PTY-host).
  * Flow control: host pauses a PTY when unacked bytes to the renderer exceed a
@@ -28,8 +33,7 @@ export type PtyPortMsg =
   | ({ type: 'write' } & PtyDataMsg) // renderer→host: keystrokes
   | { type: 'ack'; paneId: string; bytes: number } // renderer→host: flow-control ack
   | { type: 'attach'; paneId: string } // renderer→host: replay scrollback after window reopen
-  | ({ type: 'data' } & PtyDataMsg) // host→renderer: PTY output
-  | ({ type: 'exit' } & PtyExitMsg) // host→renderer: PTY exited
+  | PtyRendererMsg
 /** (legacy) MessagePort channel — kept for compatibility; PTY data now relays through main. */
 export const PTY_PORT_CHANNEL = 'morz:pty-port'
 export const PtyApi = {
@@ -40,7 +44,7 @@ export const PtyApi = {
   resize: 'pty:resize', // ({paneId, cols, rows})
   kill: 'pty:kill', // ({paneId})
   list: 'pty:list', // () => Promise<string[]> live paneIds (for reattach)
-  data: 'pty:data' // push main→renderer: PtyDataMsg | PtyExitMsg (tagged)
+  data: 'pty:data' // push main→renderer: data | exit | TUI state (tagged)
 } as const
 
 /* ── Session (Slice 2) ───────────────────────────────────────── */
@@ -124,8 +128,8 @@ export interface MorzApi {
     resize(paneId: string, cols: number, rows: number): void
     kill(paneId: string): void
     list(): Promise<string[]>
-    /** PTY output/exit pushed from main. Returns an unsubscribe fn. */
-    onData(cb: (msg: PtyDataMsg | PtyExitMsg) => void): () => void
+    /** PTY output/exit/TUI state pushed from main. Returns an unsubscribe fn. */
+    onData(cb: (msg: PtyRendererMsg) => void): () => void
   }
   session: { save(s: SessionSnapshot): void; load(): Promise<SessionSnapshot | null> }
   file: {

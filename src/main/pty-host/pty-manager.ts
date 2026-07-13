@@ -5,12 +5,14 @@ import type { TerminalSpawnOpts } from '../../shared/ipc'
 import { FlowController } from './flow-control'
 import { buildChildEnv } from './path-env'
 import { buildShellHook } from './shell-integration'
+import { isKnownTuiProcess } from './tui-registry' // w4/finish
 
 /* One GUID tags every child this host spawns (MORZ_SESSION) so a startup sweep
  * after a crash can identify and reap our orphans. */
 export const SESSION_GUID = randomUUID()
 
 const SCROLLBACK_MAX_CHARS = 200_000
+const INPUT_COMMAND_MAX_CHARS = 512 // w4/finish
 
 /* ── ANSI stripper (stateful — escape sequences split across chunks) ── */
 // CSI, OSC (BEL or ST terminated), DCS/SOS/PM/APC, single-char escapes.
@@ -84,6 +86,10 @@ interface Pane {
   shell: string
   cwd: string
   pid: number
+  tui: boolean // w4/finish
+  inputLine: string // w4/finish
+  blockNonce?: string // w4/finish
+  oscCarry: string // w4/finish
 }
 
 export interface PaneSpawnedInfo {
@@ -101,13 +107,18 @@ export class PtyManager {
     private readonly realPath: string,
     private readonly hooks: {
       onData(paneId: string, data: string): void
+      onTui(paneId: string, tui: boolean): void // w4/finish
       onExit(paneId: string, exitCode: number, signal?: number): void
       onSpawned(info: PaneSpawnedInfo): void
     }
   ) {}
 
   spawn(opts: TerminalSpawnOpts): { ok: boolean; error?: string } {
-    if (this.panes.has(opts.paneId)) return { ok: true } // idempotent — reattach path
+    const existing = this.panes.get(opts.paneId)
+    if (existing) {
+      this.hooks.onTui(opts.paneId, existing.tui) // w4/finish: rehydrate renderer state
+      return { ok: true } // idempotent — reattach path
+    }
     const file = resolveShell(opts.shell, this.realPath)
     const cwd = opts.cwd ?? process.env.USERPROFILE ?? 'C:\\'
     const env = buildChildEnv(this.realPath, SESSION_GUID, opts.env)
@@ -145,9 +156,15 @@ export class PtyManager {
       scrollbackChars: 0,
       shell: file,
       cwd,
-      pid: pty.pid
+      pid: pty.pid,
+      // w4/finish: direct TUI spawns are known before node-pty reports a title.
+      tui: isKnownTuiProcess([file, ...args].join(' ')),
+      inputLine: '',
+      blockNonce: env.MORZ_BLOCK_NONCE,
+      oscCarry: ''
     }
     pty.onData((data) => {
+      this.refreshTui(pane, data) // w4/finish
       const clean = pane.strip(data)
       if (clean) {
         pane.scrollback.push(clean)
@@ -161,6 +178,7 @@ export class PtyManager {
     })
     pty.onExit(({ exitCode, signal }) => {
       this.panes.delete(opts.paneId)
+      if (pane.tui) this.hooks.onTui(opts.paneId, false) // w4/finish
       this.hooks.onExit(opts.paneId, exitCode, signal)
     })
     this.panes.set(opts.paneId, pane)
@@ -171,11 +189,57 @@ export class PtyManager {
       cwd,
       sessionGuid: SESSION_GUID
     })
+    this.hooks.onTui(opts.paneId, pane.tui) // w4/finish
     return { ok: true }
   }
 
+  // w4/finish: transition-only sampling; no process tree or polling loop.
+  private setTui(pane: Pane, tui: boolean): void {
+    if (tui === pane.tui) return
+    pane.tui = tui
+    this.hooks.onTui(pane.paneId, tui)
+  }
+
+  // w4/finish: node-pty reports active process titles on supported backends.
+  // The Windows backend reports only its configured terminal name, so a
+  // bounded input-line match sets TUI on launch and the signed prompt clears it.
+  private refreshTui(pane: Pane, data: string): void {
+    const signedPrompt = pane.blockNonce
+      ? `\x1b]133;A;nonce=${pane.blockNonce}\x07`
+      : ''
+    const promptInput = pane.oscCarry + data
+    const promptReturned = signedPrompt !== '' && promptInput.includes(signedPrompt)
+    pane.oscCarry = signedPrompt ? promptInput.slice(-(signedPrompt.length - 1)) : ''
+
+    let activeProcessTui = false
+    try {
+      activeProcessTui = isKnownTuiProcess(pane.pty.process)
+    } catch {
+      // A dying PTY can reject title access; fail closed to normal terminal mode.
+    }
+    if (promptReturned) this.setTui(pane, false)
+    else if (activeProcessTui) this.setTui(pane, true)
+  }
+
+  // w4/finish: tiny spawned-command fallback, not process-tree tracking.
+  private trackInput(pane: Pane, data: string): void {
+    for (const ch of data) {
+      if (ch === '\r' || ch === '\n') {
+        if (isKnownTuiProcess(pane.inputLine)) this.setTui(pane, true)
+        pane.inputLine = ''
+      } else if (ch === '\b' || ch === '\x7f') {
+        pane.inputLine = pane.inputLine.slice(0, -1)
+      } else if (ch >= ' ' && pane.inputLine.length < INPUT_COMMAND_MAX_CHARS) {
+        pane.inputLine += ch
+      }
+    }
+  }
+
   write(paneId: string, data: string): void {
-    this.panes.get(paneId)?.pty.write(data)
+    const pane = this.panes.get(paneId)
+    if (!pane) return
+    this.trackInput(pane, data) // w4/finish
+    pane.pty.write(data)
   }
 
   ack(paneId: string, bytes: number): void {
@@ -197,6 +261,11 @@ export class PtyManager {
     return this.panes.get(paneId)?.scrollback.join('') ?? ''
   }
 
+  /** Current known-process TUI state for renderer reattachment. */
+  tuiState(paneId: string): boolean | undefined {
+    return this.panes.get(paneId)?.tui
+  }
+
   list(): string[] {
     return [...this.panes.keys()]
   }
@@ -210,6 +279,7 @@ export class PtyManager {
     const pane = this.panes.get(paneId)
     if (!pane) return
     this.panes.delete(paneId)
+    if (pane.tui) this.hooks.onTui(paneId, false) // w4/finish
     killTree(pane.pid)
     try {
       pane.pty.kill()

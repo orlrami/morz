@@ -39,6 +39,7 @@ const init = (async () => {
   const realPath = await resolveRealPath()
   manager = new PtyManager(realPath, {
     onData: (paneId, data) => toRenderer({ type: 'data', paneId, data }),
+    onTui: (paneId, tui) => toRenderer({ type: 'tui', paneId, tui }),
     onExit: (paneId, exitCode, signal) => {
       toRenderer({ type: 'exit', paneId, exitCode, signal })
       parentPort.postMessage({ type: 'exit', paneId, exitCode, signal })
@@ -70,6 +71,8 @@ function adoptRendererPort(port: MessagePortMain): void {
         // replay ANSI-stripped scrollback so a reopened window shows history
         const scrollback = manager.scrollback(msg.paneId)
         if (scrollback) toRenderer({ type: 'data', paneId: msg.paneId, data: scrollback })
+        const tui = manager.tuiState(msg.paneId)
+        if (tui !== undefined) toRenderer({ type: 'tui', paneId: msg.paneId, tui })
         break
       }
     }
@@ -88,6 +91,8 @@ function adoptRendererPort(port: MessagePortMain): void {
     for (const paneId of manager.list()) {
       const scrollback = manager.scrollback(paneId)
       if (scrollback) toRenderer({ type: 'data', paneId, data: scrollback })
+      const tui = manager.tuiState(paneId)
+      if (tui !== undefined) toRenderer({ type: 'tui', paneId, tui })
     }
   }
 }
@@ -142,6 +147,8 @@ parentPort.on('message', (e) => {
       if (msg.paneId != null) {
         const sb = manager?.scrollback(msg.paneId)
         if (sb) toRenderer({ type: 'data', paneId: msg.paneId, data: sb })
+        const tui = manager?.tuiState(msg.paneId)
+        if (tui !== undefined) toRenderer({ type: 'tui', paneId: msg.paneId, tui })
       }
       break
     case 'req':
