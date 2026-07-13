@@ -54,7 +54,10 @@ export async function launchMorz(opts?: { appDataDir?: string }): Promise<MorzAp
   const env: Record<string, string> = {}
   for (const [k, v] of Object.entries(process.env)) if (v !== undefined) env[k] = v
   delete env['ELECTRON_RENDERER_URL'] // force the packaged renderer, never a dev server
+  // APPDATA env alone does NOT redirect Electron's appData (Windows shell API
+  // resolves it) — MORZ_USER_DATA is the main-process isolation hook.
   env['APPDATA'] = appDataDir
+  env['MORZ_USER_DATA'] = appDataDir
 
   const app = await _electron.launch({
     executablePath: ELECTRON_EXE,

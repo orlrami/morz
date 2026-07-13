@@ -19,6 +19,17 @@ import {
 import { join, basename } from 'path'
 import { spawnSync } from 'child_process'
 import { PtyApi, type TerminalSpawnOpts } from '../shared/ipc'
+
+/*
+ * Test isolation hook: Electron resolves appData via the Windows shell API, so
+ * setting the APPDATA env var does NOT redirect it. E2E launches set
+ * MORZ_USER_DATA to keep localStorage + morz.db out of the user's real
+ * %APPDATA%\Morz / Roaming\morz. Must run before any getPath consumer.
+ */
+if (process.env.MORZ_USER_DATA) {
+  app.setPath('appData', process.env.MORZ_USER_DATA)
+  app.setPath('userData', join(process.env.MORZ_USER_DATA, 'morz'))
+}
 import {
   journalAppend,
   journalDelete,
