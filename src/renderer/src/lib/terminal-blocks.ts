@@ -118,7 +118,8 @@ export function attachCommandBlocks(
         break
       }
       case 'D': {
-        const exit = parts[1] !== undefined && /^\d+$/.test(parts[1]) ? Number(parts[1]) : undefined
+        // negative codes happen on Windows (NTSTATUS crashes, e.g. -1073741510)
+        const exit = parts[1] !== undefined && /^-?\d+$/.test(parts[1]) ? Number(parts[1]) : undefined
         closeCurrent(exit)
         break
       }
