@@ -12,6 +12,9 @@ export type MorzMode = 'manual' | 'assisted' | 'orchestrated'
 
 export const ORCHESTRATED_AVAILABLE = false // ships in 0.0.3
 
+/** Single gate for every Claude affordance (lane mount, start button, palette entry). */
+export const claudeAllowed = (mode: MorzMode): boolean => mode === 'assisted'
+
 interface ModeState {
   mode: MorzMode
   setMode(mode: MorzMode): void
