@@ -88,3 +88,26 @@ const api: MorzApi = {
 }
 
 contextBridge.exposeInMainWorld('morz', api)
+
+// w4/obsidian
+import {
+  ObsidianApi as ObsidianChannels,
+  type ObsidianBridge,
+  type ObsidianMadrBody,
+  type ObsidianSearchResult,
+  type ObsidianStatus
+} from '../shared/ipc'
+
+const obsidianApi: ObsidianBridge = {
+  status: (): Promise<ObsidianStatus> => ipcRenderer.invoke(ObsidianChannels.status),
+  connect: (baseUrl, apiKey): Promise<ObsidianStatus> =>
+    ipcRenderer.invoke(ObsidianChannels.connect, baseUrl, apiKey),
+  readNote: (path): Promise<string> => ipcRenderer.invoke(ObsidianChannels.readNote, path),
+  searchNotes: (query): Promise<ObsidianSearchResult[]> =>
+    ipcRenderer.invoke(ObsidianChannels.searchNotes, query),
+  prepareAdr: (folder, title, body: ObsidianMadrBody): Promise<{ preview: string; draftId: string }> =>
+    ipcRenderer.invoke(ObsidianChannels.prepareAdr, folder, title, body),
+  writeAdr: (draftId): Promise<{ path: string }> => ipcRenderer.invoke(ObsidianChannels.writeAdr, draftId)
+}
+
+contextBridge.exposeInMainWorld('morzObsidian', obsidianApi)

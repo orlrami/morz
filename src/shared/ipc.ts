@@ -147,3 +147,38 @@ export interface MorzApi {
   }
   editor: { detect(): Promise<('vscode' | 'cursor')[]>; openExternal(editor: string, path: string, line?: number, col?: number): void }
 }
+
+// w4/obsidian
+export const ObsidianApi = {
+  status: 'obsidian:status',
+  connect: 'obsidian:connect',
+  readNote: 'obsidian:read-note',
+  searchNotes: 'obsidian:search-notes',
+  prepareAdr: 'obsidian:prepare-adr',
+  writeAdr: 'obsidian:write-adr'
+} as const
+
+export type ObsidianConnectionState = 'not-connected' | 'connected' | 'offline'
+export interface ObsidianStatus {
+  state: ObsidianConnectionState
+  baseUrl?: string
+  error?: string
+}
+export interface ObsidianMadrBody {
+  status: string
+  context: string
+  decision: string
+  consequences: string
+}
+export interface ObsidianSearchResult {
+  filename: string
+  [key: string]: unknown
+}
+export interface ObsidianBridge {
+  status(): Promise<ObsidianStatus>
+  connect(baseUrl: string, apiKey: string): Promise<ObsidianStatus>
+  readNote(path: string): Promise<string>
+  searchNotes(query: string): Promise<ObsidianSearchResult[]>
+  prepareAdr(folder: string, title: string, body: ObsidianMadrBody): Promise<{ preview: string; draftId: string }>
+  writeAdr(draftId: string): Promise<{ path: string }>
+}
