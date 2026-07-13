@@ -1,0 +1,53 @@
+appId: com.morz.app
+productName: Morz
+
+directories:
+  buildResources: resources
+  output: release
+
+files:
+  - out/**
+  - resources/**
+  - '!src/**'
+  - '!docs/**'
+  - '!db/**'
+  - '!electron.vite.config.{js,ts,mjs,cjs}'
+  - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
+  - '!{components.json,README.md}'
+  - '!{.env,.env.*,.npmrc}'
+
+# node-pty (@lydell prebuilt N-API) + better-sqlite3 ship prebuilt binaries —
+# they must load from disk, not from inside the asar archive.
+asarUnpack:
+  - '**/node_modules/@lydell/**'
+  - '**/node_modules/node-pty/**'
+  - '**/node_modules/better-sqlite3/**'
+
+# Native modules are prebuilt N-API — never rebuild against Electron headers.
+npmRebuild: false
+nodeGypRebuild: false
+buildDependenciesFromSource: false
+
+win:
+  executableName: Morz
+  icon: resources/icon.ico
+  target:
+    - target: nsis
+      arch:
+        - x64
+
+nsis:
+  oneClick: true
+  perMachine: false
+  allowToChangeInstallationDirectory: false
+  artifactName: ${name}-${version}-setup.${ext}
+  shortcutName: ${productName}
+  uninstallDisplayName: ${productName}
+  deleteAppDataOnUninstall: false
+
+# electron-updater feed config. Publishing stays manual/off for now
+# (builds run with --publish never); flip when signing is set up.
+publish:
+  provider: github
+  owner: orlrami
+  repo: morz
