@@ -11,6 +11,8 @@
  * scroll+cursor when not dirty, banner when dirty · Open in VS Code / Cursor.
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
+import { motion } from 'framer-motion'
+import { springs } from '@/lib/springs'
 import { EditorView } from '@codemirror/view'
 import { EditorState, EditorSelection, Prec } from '@codemirror/state'
 import { keymap } from '@codemirror/view'
@@ -285,10 +287,11 @@ export function IdePane(): React.JSX.Element | null {
   }
 
   /*
-   * The pane stays mounted and is hidden via display — the editor host div
-   * must exist BEFORE loadFile's mountDoc runs (setOpen(true) has not
-   * committed yet on the first open, so a conditional render would leave
-   * hostRef null and silently drop the editor).
+   * The pane stays MOUNTED always (never AnimatePresence-unmounted): the
+   * editor host div must exist BEFORE loadFile's mountDoc runs (setOpen(true)
+   * has not committed yet on the first open — a conditional render would leave
+   * hostRef null and silently drop the editor). Hidden = slid off-screen right
+   * with the same spring the file explorer uses.
    */
   const btn =
     'px-2 py-1 rounded-[var(--radius-data)] border border-line-strong text-[11px] font-body transition-colors'
@@ -296,15 +299,21 @@ export function IdePane(): React.JSX.Element | null {
   const btnDead = `${btn} text-quartz-faint cursor-not-allowed`
 
   return (
-    <div
-      className="fixed right-0 flex-col bg-panel border-l border-line-strong shadow-2xl"
+    <motion.div
+      className="fixed right-0 flex flex-col bg-panel border-l border-line-strong shadow-2xl"
+      initial={false}
+      animate={
+        open
+          ? { x: 0, opacity: 1, transition: springs.panel }
+          : { x: '105%', opacity: 0, transition: { duration: 0.16 } }
+      }
       style={{
         top: 38,
         bottom: 0,
         width: 'min(48vw, 760px)',
         minWidth: 420,
         zIndex: 60,
-        display: open ? 'flex' : 'none'
+        pointerEvents: open ? 'auto' : 'none'
       }}
     >
       {/* header */}
@@ -447,7 +456,7 @@ export function IdePane(): React.JSX.Element | null {
       ) : (
         <div ref={hostRef} className="flex-1 min-h-0 overflow-hidden" />
       )}
-    </div>
+    </motion.div>
   )
 }
 
