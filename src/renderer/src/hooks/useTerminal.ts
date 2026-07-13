@@ -29,9 +29,31 @@ interface Session {
   nonce: string
   spawned: boolean
   exited: boolean
+  /** Alt-screen buffer active — a full-screen TUI (vim/less/htop) owns the grid. */
+  tui: boolean
 }
 
 const sessions = new Map<string, Session>()
+
+/* ── framed-TUI: alt-screen buffer state, exposed for a pane chip ── */
+const tuiListeners = new Map<string, Set<(tui: boolean) => void>>()
+
+export function isTerminalTui(paneId: string): boolean {
+  return sessions.get(paneId)?.tui ?? false
+}
+
+/** Fires when the pane enters/leaves the alt-screen buffer. Returns unsubscribe. */
+export function subscribeTerminalTui(paneId: string, cb: (tui: boolean) => void): () => void {
+  let set = tuiListeners.get(paneId)
+  if (!set) {
+    set = new Set()
+    tuiListeners.set(paneId, set)
+  }
+  set.add(cb)
+  return () => {
+    set.delete(cb)
+  }
+}
 
 /* ── micro-UX: font zoom + clipboard actions (shared by keys, wheel, menu) ── */
 const FONT_MIN = 8
@@ -134,7 +156,22 @@ function createSession(paneId: string): Session {
   attachCommandBlocks(term, nonce)
   registerTerminalLinks(term)
 
-  const session: Session = { term, fit, serialize, nonce, spawned: false, exited: false }
+  const session: Session = {
+    term,
+    fit,
+    serialize,
+    nonce,
+    spawned: false,
+    exited: false,
+    tui: false
+  }
+
+  term.buffer.onBufferChange((buf) => {
+    const tui = buf.type === 'alternate'
+    if (tui === session.tui) return
+    session.tui = tui
+    for (const cb of tuiListeners.get(paneId) ?? []) cb(tui)
+  })
 
   // copy-on-select (setting-less default for 0.0.1)
   term.onSelectionChange(() => {

@@ -4,6 +4,7 @@ import { randomUUID } from 'crypto'
 import type { TerminalSpawnOpts } from '../../shared/ipc'
 import { FlowController } from './flow-control'
 import { buildChildEnv } from './path-env'
+import { buildShellHook } from './shell-integration'
 
 /* One GUID tags every child this host spawns (MORZ_SESSION) so a startup sweep
  * after a crash can identify and reap our orphans. */
@@ -110,6 +111,12 @@ export class PtyManager {
     const file = resolveShell(opts.shell, this.realPath)
     const cwd = opts.cwd ?? process.env.USERPROFILE ?? 'C:\\'
     const env = buildChildEnv(this.realPath, SESSION_GUID, opts.env)
+    // OSC-133 block-mark hook (default ON, env kill-switch)
+    const hookOff =
+      process.env.MORZ_NO_SHELL_HOOK === '1' || opts.env?.MORZ_NO_SHELL_HOOK === '1'
+    const hook = hookOff ? null : buildShellHook(file, env)
+    if (hook?.env) Object.assign(env, hook.env)
+    const args = hook?.args ?? []
     const base = {
       name: 'xterm-256color',
       cols: opts.cols,
@@ -121,10 +128,10 @@ export class PtyManager {
     let pty: IPty
     try {
       // prefer the bundled conpty.dll (modern ConPTY regardless of Windows build)
-      pty = ptySpawn(file, [], { ...base, useConptyDll: true })
+      pty = ptySpawn(file, args, { ...base, useConptyDll: true })
     } catch {
       try {
-        pty = ptySpawn(file, [], base)
+        pty = ptySpawn(file, args, base)
       } catch (e) {
         return { ok: false, error: `spawn failed for ${file}: ${(e as Error).message}` }
       }
