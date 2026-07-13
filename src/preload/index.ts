@@ -28,6 +28,13 @@ import {
   type SessionSnapshot,
   type TerminalSpawnOpts
 } from '../shared/ipc'
+// w4/handoff — bus bridge (blackboard + assisted handoff)
+import {
+  BusApi as BusUiApi,
+  type BusApprovalResp,
+  type BusHandoffInput,
+  type BusSnapshot
+} from '../shared/bus-ipc'
 
 const api: MorzApi = {
   pty: {
@@ -87,7 +94,8 @@ const api: MorzApi = {
   }
 }
 
-/* ── w4/bus: bus namespace — must attach BEFORE exposeInMainWorld
+/* ── w4/bus + w4/handoff: ONE window.morz.bus — the board API (w4/bus) plus
+ * the blackboard/chip UI API (w4/handoff). Attached BEFORE exposeInMainWorld
  * (contextBridge snapshots the object at expose time). ── */
 import { BusApi } from '../shared/ipc'
 import type { Task } from '../shared/bus'
@@ -110,6 +118,13 @@ api.bus = {
     const h = (_e: unknown, tasks: Task[]): void => cb(tasks)
     ipcRenderer.on(BusApi.tasksChanged, h)
     return () => ipcRenderer.off(BusApi.tasksChanged, h)
+  },
+  // blackboard/chip UI surface (typed in shared/bus-ipc.ts)
+  snapshot: () => ipcRenderer.invoke(BusUiApi.snapshot),
+  post: (input: BusHandoffInput) => ipcRenderer.invoke(BusUiApi.post, input),
+  respondApproval: (resp: BusApprovalResp) => ipcRenderer.send(BusUiApi.approvalRespond, resp),
+  onChanged: (cb) => {
+    ipcRenderer.on(BusUiApi.changed, (_e, s: BusSnapshot) => cb(s))
   }
 }
 

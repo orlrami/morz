@@ -1,146 +1,239 @@
-import { motion } from 'framer-motion'
-import { IconArrowUp } from '@tabler/icons-react'
-import { spawnPlan, busEvents, cliTint } from '@/lib/mock'
+import { useEffect } from 'react'
+import { AnimatePresence, motion } from 'framer-motion'
+import { IconClipboardList, IconFlask, IconHandStop } from '@tabler/icons-react'
+import type { Message, Part, Task, TaskState } from '@shared/bus'
 import { colors } from '@/lib/tokens'
-import { staggerContainer, staggerItem, springs } from '@/lib/springs'
-
-const TAG_STYLE: Record<string, { bg: string; fg: string }> = {
-  HANDOFF: { bg: 'rgba(203,162,90,0.16)', fg: '#E4BC77' },
-  DONE: { bg: 'rgba(34,197,94,0.16)', fg: '#22C55E' },
-  BLOCKED: { bg: 'rgba(245,158,11,0.16)', fg: '#F59E0B' }
-}
+import { staggerContainer, staggerItem } from '@/lib/springs'
+import { useModeStore } from '@/store/modeStore'
+import { useBusStore, getBus } from '@/store/busStore'
+import { useLaneStore } from '@/store/laneStore'
+import { ApprovalChip } from './ApprovalChip'
 
 /*
- * Orchestrator side panel = the live blackboard.
- * You talk to it; it proposes a plan; nothing spawns until you approve.
+ * Orchestrator side panel = the live blackboard (0.0.2, w4/handoff).
+ * Tasks by state, messages per task, artifacts — fed by bus:changed pushes.
+ * Assisted: every dispatch surfaces an ApprovalChip first. Manual: inert —
+ * nothing below the gate mounts, so no bus IPC ever fires (like ClaudeLane).
  */
+
+/** TaskState → status color (design tokens); unknown future states dim out. */
+const stateColor: Record<TaskState, string> = {
+  proposed: colors.quartzDim,
+  accepted: colors.bronze,
+  working: colors.working,
+  blocked: colors.blocked,
+  done: colors.done
+}
+
+const STATE_ORDER: TaskState[] = ['working', 'blocked', 'accepted', 'proposed', 'done']
+
 export function OrchestratorPanel(): JSX.Element {
+  const mode = useModeStore((s) => s.mode)
   return (
     <aside
       className="flex w-[330px] shrink-0 flex-col overflow-hidden border-l"
       style={{ background: colors.panel, borderColor: 'var(--color-line)' }}
       aria-label="Orchestrator"
     >
-      {/* header */}
-      <div className="flex items-center gap-2 border-b px-3.5 py-2.5" style={{ borderColor: 'var(--color-line)' }}>
-        <span
-          className="size-4 rounded-[5px]"
-          style={{ background: `linear-gradient(135deg, ${colors.bronzeHot}, #9a7226)` }}
-          aria-hidden
-        />
-        <span className="text-[13px] font-bold" style={{ fontFamily: 'var(--font-display)' }}>
-          Orchestrator
-        </span>
-        <span className="ml-auto text-[10px]" style={{ color: colors.quartzDim }}>
-          5 agents · 1 blocked
-        </span>
-      </div>
+      {mode === 'manual' ? <ManualNotice /> : <LiveBlackboard />}
+    </aside>
+  )
+}
 
-      {/* conversation */}
+function ManualNotice(): JSX.Element {
+  return (
+    <>
+      <Header subtitle="off" />
+      <div className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center">
+        <IconHandStop size={22} stroke={1.5} style={{ color: colors.quartzDim }} />
+        <p className="text-xs font-semibold" style={{ color: colors.quartz, fontFamily: 'var(--font-display)' }}>
+          Manual mode — blackboard off
+        </p>
+        <p className="max-w-[240px] text-[11px]" style={{ color: colors.quartzDim }}>
+          No handoff machinery runs. Switch the dial to Assisted; every dispatch will ask you
+          first.
+        </p>
+      </div>
+    </>
+  )
+}
+
+function Header({ subtitle }: { subtitle: string }): JSX.Element {
+  return (
+    <div className="flex items-center gap-2 border-b px-3.5 py-2.5" style={{ borderColor: 'var(--color-line)' }}>
+      <span
+        className="size-4 rounded-[5px]"
+        style={{ background: `linear-gradient(135deg, ${colors.bronzeHot}, #9a7226)` }}
+        aria-hidden
+      />
+      <span className="text-[13px] font-bold" style={{ fontFamily: 'var(--font-display)' }}>
+        Orchestrator
+      </span>
+      <span className="ml-auto text-[10px]" style={{ color: colors.quartzDim }}>
+        {subtitle}
+      </span>
+    </div>
+  )
+}
+
+/* All bus access lives below this line, unmounted in Manual. */
+function LiveBlackboard(): JSX.Element {
+  const { tasks, messages, approvals, live, start, respondApproval, simulateHandoff } =
+    useBusStore()
+  const lanes = useLaneStore((s) => s.lanes)
+
+  useEffect(() => {
+    start()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const working = tasks.filter((t) => t.state === 'working').length
+  const blocked = tasks.filter((t) => t.state === 'blocked').length
+  const subtitle = live
+    ? `${tasks.length} task${tasks.length === 1 ? '' : 's'} · ${working} working · ${blocked} blocked`
+    : getBus()
+      ? 'connecting…'
+      : 'bus offline'
+
+  const sorted = [...tasks].sort((a, b) => {
+    const so = STATE_ORDER.indexOf(a.state) - STATE_ORDER.indexOf(b.state)
+    return so !== 0 ? so : b.updatedAt.localeCompare(a.updatedAt)
+  })
+
+  return (
+    <>
+      <Header subtitle={subtitle} />
+
+      {/* pending approvals — the Assisted propose-then-approve gate */}
+      <AnimatePresence>
+        {approvals.length > 0 && (
+          <motion.div
+            layout
+            className="space-y-2 border-b p-3"
+            style={{ borderColor: 'var(--color-line)' }}
+          >
+            <AnimatePresence>
+              {approvals.map((a) => (
+                <ApprovalChip key={a.requestId} approval={a} onRespond={respondApproval} />
+              ))}
+            </AnimatePresence>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* task board */}
       <motion.div
         variants={staggerContainer}
         initial="hidden"
         animate="show"
-        className="flex flex-1 flex-col gap-2.5 overflow-y-auto p-3"
+        className="flex flex-1 flex-col gap-2 overflow-y-auto p-3"
       >
-        <motion.div
-          variants={staggerItem}
-          className="max-w-[92%] self-end rounded-2xl rounded-br-[4px] border px-3 py-2 text-xs leading-relaxed"
-          style={{ background: 'rgba(203,162,90,0.14)', borderColor: 'rgba(203,162,90,0.3)' }}
-        >
-          Run an 8-agent team to finish phase 5. Route the math to Gemini.
-        </motion.div>
-
-        <motion.div
-          variants={staggerItem}
-          className="max-w-[96%] self-start rounded-2xl rounded-bl-[4px] border px-3 py-2.5 text-xs leading-relaxed"
-          style={{ background: colors.card + '99', borderColor: 'var(--color-line)', color: colors.quartzDim }}
-        >
-          <p>
-            <strong style={{ color: colors.quartz }}>Plan — 5 agents, 2 waves.</strong> Routing math →{' '}
-            <strong style={{ color: colors.quartz }}>agy / Gemini</strong> per your rules. Nothing launches until you
-            approve.
-          </p>
-
-          <ul className="mt-2 overflow-hidden rounded-[10px] border" style={{ borderColor: 'var(--color-line-strong)' }}>
-            {spawnPlan.map((row, i) => (
-              <li
-                key={row.id}
-                className="flex items-center gap-2 px-2.5 py-1.5 text-[11px]"
-                style={{ borderTop: i === 0 ? 'none' : '1px solid var(--color-line)' }}
-              >
-                <span className="size-1.5 rounded-full" style={{ background: cliTint[row.cli] }} />
-                <span className="font-semibold" style={{ color: colors.quartz, fontFamily: 'var(--font-display)' }}>
-                  {row.role}
-                </span>
-                <span className="truncate">{row.task}</span>
-                <span className="ml-auto text-[9.5px]" style={{ color: colors.quartzDim }}>
-                  {row.cli === 'agy' ? 'agy' : row.cli === 'claude' ? 'Claude' : 'Codex'}
-                </span>
-              </li>
-            ))}
-          </ul>
-
-          <div className="mt-2.5 flex gap-2">
-            <motion.button
-              whileHover={{ scale: 1.02 }}
-              transition={springs.snappy}
-              className="cursor-pointer rounded-[10px] px-3.5 py-1.5 text-xs font-semibold"
-              style={{
-                background: `linear-gradient(180deg, ${colors.bronzeHot}, ${colors.bronze})`,
-                color: '#241c0a',
-                boxShadow: '0 4px 16px rgba(203,162,90,0.25)',
-                fontFamily: 'var(--font-display)'
-              }}
-            >
-              Approve &amp; launch
-            </motion.button>
-            <button
-              className="cursor-pointer rounded-[10px] border px-3.5 py-1.5 text-xs font-medium"
-              style={{ borderColor: 'var(--color-line-strong)', color: colors.quartzDim, fontFamily: 'var(--font-display)' }}
-            >
-              Edit plan
-            </button>
+        {sorted.length === 0 && (
+          <div className="flex flex-1 flex-col items-center justify-center gap-2 text-center">
+            <IconClipboardList size={20} stroke={1.5} style={{ color: colors.quartzDim }} />
+            <p className="max-w-[220px] text-[11px]" style={{ color: colors.quartzDim }}>
+              Blackboard empty — when a lane hands work off, the task and its approval chip land
+              here.
+            </p>
           </div>
-        </motion.div>
+        )}
+        {sorted.map((task) => (
+          <TaskCard key={task.id} task={task} messages={messages} />
+        ))}
       </motion.div>
 
-      {/* message bus */}
-      <div className="border-t px-3.5 py-2.5" style={{ borderColor: 'var(--color-line)' }}>
-        <p className="mb-1.5 text-[9.5px] uppercase tracking-wider" style={{ color: colors.quartzDim }}>
-          ◇ Message bus
-        </p>
-        <ul className="space-y-1">
-          {busEvents.map((event) => (
-            <li key={event.id} className="flex items-center gap-2 text-[11px]" style={{ color: colors.quartzDim }}>
-              <span
-                className="rounded px-1.5 py-px text-[8.5px] font-extrabold"
-                style={{ background: TAG_STYLE[event.tag].bg, color: TAG_STYLE[event.tag].fg }}
-              >
-                {event.tag}
+      {/* dev command: simulate lane A posting a handoff (stub bus) */}
+      {import.meta.env.DEV && (
+        <div className="border-t p-2.5" style={{ borderColor: 'var(--color-line)' }}>
+          <button
+            onClick={() => simulateHandoff(lanes[0]?.agentId ?? 'claude-lane-b')}
+            className="flex w-full cursor-pointer items-center justify-center gap-1.5 rounded-md border px-2.5 py-1.5 text-[11px]"
+            style={{ borderColor: 'var(--color-line-strong)', color: colors.quartzDim }}
+            data-testid="dev-simulate-handoff"
+          >
+            <IconFlask size={12} stroke={1.75} />
+            dev: simulate handoff{lanes[0] ? ` → ${lanes[0].agentId}` : ''}
+          </button>
+        </div>
+      )}
+    </>
+  )
+}
+
+/* ── task card: state pill + messages + artifacts ────────────── */
+
+function TaskCard({ task, messages }: { task: Task; messages: Message[] }): JSX.Element {
+  const tint = stateColor[task.state] ?? colors.quartzDim
+  const taskMessages = messages.filter((m) => m.taskId === task.id)
+  return (
+    <motion.div
+      variants={staggerItem}
+      layout
+      className="rounded-xl border p-2.5"
+      style={{ background: colors.card + '99', borderColor: 'var(--color-line)' }}
+      data-testid="bus-task"
+      data-state={task.state}
+    >
+      <div className="flex items-center gap-1.5">
+        <span className="size-2 shrink-0 rounded-full" style={{ background: tint }} />
+        <span
+          className="truncate text-xs font-semibold"
+          style={{ color: colors.quartz, fontFamily: 'var(--font-display)' }}
+        >
+          {task.title}
+        </span>
+        <span
+          className="ml-auto shrink-0 rounded px-1.5 py-px text-[8.5px] font-extrabold uppercase"
+          style={{ background: `${tint}29`, color: tint }}
+        >
+          {task.state}
+        </span>
+      </div>
+      <div className="mt-1 flex items-center gap-2 text-[10px]" style={{ color: colors.quartzDim }}>
+        <span>{task.createdBy}</span>
+        {task.assignee && <span>→ {task.assignee}</span>}
+        {task.blockedReason && <span style={{ color: colors.blocked }}>{task.blockedReason}</span>}
+      </div>
+      {taskMessages.length > 0 && (
+        <ul className="mt-1.5 space-y-1 border-t pt-1.5" style={{ borderColor: 'var(--color-line)' }}>
+          {taskMessages.slice(-3).map((m) => (
+            <li key={m.id} className="flex items-baseline gap-1.5 text-[10.5px]">
+              <span className="shrink-0 font-semibold" style={{ color: colors.quartz }}>
+                {m.from}
               </span>
-              <span className="truncate">{event.text}</span>
+              <span className="truncate" style={{ color: colors.quartzDim }}>
+                {partSummary(m.parts)}
+              </span>
             </li>
           ))}
         </ul>
-      </div>
-
-      {/* steer input */}
-      <div className="flex items-center gap-2 border-t p-3" style={{ borderColor: 'var(--color-line)' }}>
-        <div
-          className="flex-1 rounded-full border px-3.5 py-2 text-xs"
-          style={{ background: colors.page, borderColor: 'var(--color-line-strong)', color: colors.quartzDim }}
-        >
-          Steer the team…
+      )}
+      {task.artifacts.length > 0 && (
+        <div className="mt-1.5 flex flex-wrap gap-1">
+          {task.artifacts.map((a) => (
+            <span
+              key={a.id}
+              className="rounded px-1.5 py-px text-[9px]"
+              style={{ background: 'rgba(34,197,94,0.14)', color: colors.done }}
+              title={a.files.map((f) => f.path).join('\n')}
+            >
+              {a.label}
+            </span>
+          ))}
         </div>
-        <button
-          className="flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-full"
-          style={{ background: `linear-gradient(135deg, ${colors.bronzeHot}, ${colors.bronze})`, color: '#241c0a' }}
-          aria-label="Send"
-        >
-          <IconArrowUp size={15} stroke={2.5} />
-        </button>
-      </div>
-    </aside>
+      )}
+    </motion.div>
   )
+}
+
+/** One-line summary of a message's parts; unknown kinds are skipped (protocol §4). */
+function partSummary(parts: Part[]): string {
+  for (const p of parts) {
+    if (p.kind === 'text') return p.text
+    if (p.kind === 'approval-request') return `⏸ ${p.summary}`
+    if (p.kind === 'file') return p.path
+    if (p.kind === 'command') return p.argv.join(' ')
+    if (p.kind === 'diff') return 'diff'
+  }
+  return `${parts.length} part${parts.length === 1 ? '' : 's'}`
 }

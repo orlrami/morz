@@ -223,6 +223,22 @@ function send(agentId: string, text: string): void {
   })
 }
 
+/*
+ * w4/handoff — pointer-prompt entry point. The handoff flow (bus/handoff.ts)
+ * wakes a lane with a SHORT pointer; the payload stays in the mailbox (trust
+ * rule, protocol.md §3). Returns false when the lane has no live process —
+ * the mailbox then retains the message for redelivery.
+ */
+export function injectPointerPrompt(agentId: string, text: string): boolean {
+  const proc = procs.get(agentId)
+  if (!proc || proc.child.killed) return false
+  writeLine(proc, {
+    type: 'user',
+    message: { role: 'user', content: [{ type: 'text', text }] }
+  })
+  return true
+}
+
 function interrupt(agentId: string): void {
   const proc = procs.get(agentId)
   if (!proc) return

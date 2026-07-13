@@ -41,9 +41,11 @@ import { registerFsIpc } from './services/fs-service'
 import { registerGitIpc } from './services/git-service'
 import { registerEditorIpc } from './services/editor-detect'
 import { registerClaudeIpc } from './adapters/claude'
-// w4/mcp — bus pipe server + tool handlers
+// w4/mcp — bus pipe server + tool handlers (SqliteBoardPort = the real board)
 import { startPipeServer, type BusPipeServer } from './bus/pipe-server'
-import { BUS_OPEN_FILE_CHANNEL, createToolHandlers, InMemoryBoard } from './bus/tool-handlers'
+import { BUS_OPEN_FILE_CHANNEL, createToolHandlers } from './bus/tool-handlers'
+import { SqliteBoardPort } from './bus/board-port'
+import { registerHandoffIpc } from './bus/handoff' // w4/handoff
 
 /* ── PTY-host supervisor ─────────────────────────────────────── */
 
@@ -407,7 +409,7 @@ function startBus(): void {
   try {
     busServer = startPipeServer({
       handlers: createToolHandlers({
-        board: new InMemoryBoard(), // TEMPORARY — integration swaps in the SQLite board
+        board: new SqliteBoardPort(), // real board: SQLite task board + Maildir mailbox
         openFile: (evt) => {
           for (const win of BrowserWindow.getAllWindows()) {
             if (!win.isDestroyed()) win.webContents.send(BUS_OPEN_FILE_CHANNEL, evt)
@@ -435,6 +437,7 @@ app.whenReady().then(() => {
   registerGitIpc()
   registerEditorIpc(ipcMain)
   registerClaudeIpc()
+  registerHandoffIpc() // w4/handoff — handlers only; nothing runs until Assisted UI calls
   startPtyHost()
 
   if (process.env['MORZ_SMOKE']) {

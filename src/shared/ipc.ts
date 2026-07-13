@@ -201,7 +201,9 @@ export interface MorzBusApi {
   onTasksChanged(cb: (tasks: Task[]) => void): () => void
 }
 // declaration-merged into MorzApi above; optional because the preload attaches
-// it in its own w4/bus block after the base api literal is built
+// it in its own w4/bus block after the base api literal is built. ONE
+// window.morz.bus = the board API (here) + the blackboard/chip UI API
+// (shared/bus-ipc.ts) — integration unified them.
 export interface MorzApi {
-  bus?: MorzBusApi
+  bus?: MorzBusApi & import('./bus-ipc').MorzBusApi
 }
