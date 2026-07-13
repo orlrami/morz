@@ -128,4 +128,21 @@ api.bus = {
   }
 }
 
+// w4/workshop
+import { CatalogApi, type CatalogQuery, type CatalogSnapshot } from '../shared/ipc'
+
+Object.assign(api, {
+  catalog: {
+    query: (query?: CatalogQuery): Promise<CatalogSnapshot> =>
+      ipcRenderer.invoke(CatalogApi.query, query),
+    refresh: (query?: CatalogQuery): Promise<CatalogSnapshot> =>
+      ipcRenderer.invoke(CatalogApi.refresh, query),
+    onUpdated: (callback: () => void): (() => void) => {
+      const listener = (): void => callback()
+      ipcRenderer.on(CatalogApi.updated, listener)
+      return () => ipcRenderer.removeListener(CatalogApi.updated, listener)
+    }
+  }
+})
+
 contextBridge.exposeInMainWorld('morz', api)

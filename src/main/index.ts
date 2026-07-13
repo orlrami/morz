@@ -471,3 +471,8 @@ app.on('before-quit', (e) => {
 // import hoists; registration chains onto whenReady after the block above
 import { registerBusIpc } from './bus'
 app.whenReady().then(() => registerBusIpc())
+
+// w4/workshop
+import { registerCatalogIpc } from './services/catalog'
+
+registerCatalogIpc()

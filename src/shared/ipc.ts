@@ -207,3 +207,64 @@ export interface MorzBusApi {
 export interface MorzApi {
   bus?: MorzBusApi & import('./bus-ipc').MorzBusApi
 }
+
+// w4/workshop
+export type CatalogKind = 'skill' | 'mcp' | 'plugin' | 'model'
+export type CatalogCategory = 'recommended' | 'skills' | 'mcp' | 'plugins' | 'models'
+export type CatalogTargetCli = 'claude' | 'codex' | 'agy' | 'opencode'
+
+export interface CatalogInstallSpec {
+  name: string
+  command?: string
+  args: string[]
+  env: Record<string, string>
+  url?: string
+  transport?: 'stdio' | 'sse' | 'streamable-http'
+  headers?: Record<string, string>
+}
+
+export interface CatalogItem {
+  id: string
+  kind: CatalogKind
+  name: string
+  description: string
+  source: string
+  sourceUrl: string | null
+  stars: number | null
+  official: boolean
+  recommended: boolean
+  installSpec: CatalogInstallSpec | null
+  benchmarkScore?: number | null
+  benchmarkLabel?: string | null
+  contextLength?: number | null
+  updatedAt: string
+}
+
+export interface CatalogQuery {
+  category?: CatalogCategory
+  search?: string
+  limit?: number
+}
+
+export interface CatalogSnapshot {
+  items: CatalogItem[]
+  lastSyncAt: number | null
+  offline: boolean
+  syncing: boolean
+  error: string | null
+}
+
+export const CatalogApi = {
+  query: 'catalog:query',
+  refresh: 'catalog:refresh',
+  updated: 'catalog:updated'
+} as const
+
+export interface MorzApi {
+  /** Optional for mixed-wave builds; the production preload always publishes it. */
+  catalog?: {
+    query(query?: CatalogQuery): Promise<CatalogSnapshot>
+    refresh(query?: CatalogQuery): Promise<CatalogSnapshot>
+    onUpdated?(callback: () => void): () => void
+  }
+}
