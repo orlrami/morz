@@ -3,14 +3,14 @@
  * Manual is the default and provably inert: components must gate EVERY
  * window.morz.claude access on mode !== 'manual' so the adapter is never
  * instantiated or called (zero LLM calls — CI network-trace asserts this).
- * Orchestrated is a visible but disabled dial position until 0.0.3.
+ * Orchestrated is available in 0.0.3, but every team remains hash-approval gated.
  */
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 
 export type MorzMode = 'manual' | 'assisted' | 'orchestrated'
 
-export const ORCHESTRATED_AVAILABLE = false // ships in 0.0.3
+export const ORCHESTRATED_AVAILABLE = true
 
 /** Single gate for every Claude affordance (lane mount, start button, palette entry). */
 export const claudeAllowed = (mode: MorzMode): boolean => mode === 'assisted'

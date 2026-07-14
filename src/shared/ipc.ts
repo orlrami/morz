@@ -404,3 +404,54 @@ export type AdapterEvent =
   | { type: 'result'; inputTokens?: number; outputTokens?: number; costUsd?: number } // turn done
   | { type: 'error'; message: string }
   | { type: 'exit'; code: number | null }
+// w5/planner
+import type { PlannedAgent, SpawnPlan } from './spawn-plan'
+
+export type PlanApprovalState = 'DRAFT' | 'PROPOSED' | 'APPROVED'
+
+export interface StoredSpawnPlan {
+  plan: SpawnPlan
+  state: PlanApprovalState
+}
+
+export type PlanAmendmentAction =
+  | { kind: 'add'; agent: PlannedAgent }
+  | { kind: 'replace'; replaceAgentId: string; agent: PlannedAgent }
+
+export interface PlanAmendment {
+  version: '1.0'
+  id: string
+  planId: string
+  action: PlanAmendmentAction
+  createdAt: string
+  amendmentHash: string
+}
+
+export interface StoredPlanAmendment {
+  amendment: PlanAmendment
+  state: 'PROPOSED' | 'APPROVED'
+}
+
+export const PlannerApi = {
+  plan: 'planner:plan',
+  update: 'planner:update',
+  approveAndRun: 'planner:approve-and-run',
+  discard: 'planner:discard',
+  listOpen: 'planner:list-open',
+  requestAmendment: 'planner:request-amendment',
+  approveAmendment: 'planner:approve-amendment',
+  discardAmendment: 'planner:discard-amendment'
+} as const
+
+export interface PlannerBridge {
+  plan(goal: string, spaceRoot: string): Promise<StoredSpawnPlan>
+  update(plan: SpawnPlan, expectedHash: string): Promise<StoredSpawnPlan>
+  approveAndRun(
+    planHash: string
+  ): Promise<{ record: StoredSpawnPlan; runId: string }>
+  discard(planHash: string): Promise<void>
+  listOpen(): Promise<{ plans: StoredSpawnPlan[]; amendments: StoredPlanAmendment[] }>
+  requestAmendment(planId: string, request: string): Promise<StoredPlanAmendment>
+  approveAmendment(amendmentHash: string): Promise<StoredPlanAmendment>
+  discardAmendment(amendmentHash: string): Promise<void>
+}

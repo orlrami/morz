@@ -485,3 +485,7 @@ app.whenReady().then(() => registerObsidianIpc(ipcMain))
 // w4/organizer
 import { registerOrganizerIpc } from './organizer'
 registerOrganizerIpc(ipcMain)
+
+// w5/planner
+import { registerPlannerIpc } from './orchestrator/planner'
+app.whenReady().then(() => registerPlannerIpc())
