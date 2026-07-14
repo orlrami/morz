@@ -352,3 +352,46 @@ ipcRenderer.on(ClaudeApi.event, (_event, message: { agentId: string; event: Clau
   }
   if (message.event.type === 'process_exit') claudeSessionSources.delete(message.agentId)
 })
+
+// w6/pulse — append-only Daily Pulse bridge; separate because window.morz was snapshotted above.
+import {
+  PulseApi as PulseChannels,
+  type PulseBridge,
+  type PulseBrief,
+  type PulseConfigureInput,
+  type PulseReadyEvent,
+  type PulseRunInput,
+  type PulseSnapshot
+} from '../shared/ipc'
+import type { NotifyItem } from '../shared/notify'
+
+const pulseBridge: PulseBridge = {
+  snapshot: (): Promise<PulseSnapshot> => ipcRenderer.invoke(PulseChannels.snapshot),
+  configure: (input: PulseConfigureInput): Promise<PulseSnapshot> =>
+    ipcRenderer.invoke(PulseChannels.configure, input),
+  runNow: (input: PulseRunInput): Promise<PulseBrief> =>
+    ipcRenderer.invoke(PulseChannels.runNow, input),
+  onReady: (callback) => {
+    const listener = (_event: unknown, ready: PulseReadyEvent): void => callback(ready)
+    ipcRenderer.on(PulseChannels.ready, listener)
+    return () => ipcRenderer.off(PulseChannels.ready, listener)
+  },
+  onNotice: (callback) => {
+    const listener = (_event: unknown, notice: NotifyItem): void => callback(notice)
+    ipcRenderer.on(PulseChannels.notice, listener)
+    return () => ipcRenderer.off(PulseChannels.notice, listener)
+  },
+  ackNotice: (id: string): Promise<void> => ipcRenderer.invoke(PulseChannels.ackNotice, id),
+  onOpen: (callback) => {
+    const listener = (_event: unknown, brief: PulseBrief): void => callback(brief)
+    ipcRenderer.on(PulseChannels.open, listener)
+    return () => ipcRenderer.off(PulseChannels.open, listener)
+  }
+}
+
+if (process.env.MORZ_E2E === '1') {
+  pulseBridge.testNextFire = (time: string, now: number): Promise<number> =>
+    ipcRenderer.invoke(PulseChannels.testNextFire, time, now)
+}
+
+contextBridge.exposeInMainWorld('morzPulse', pulseBridge)

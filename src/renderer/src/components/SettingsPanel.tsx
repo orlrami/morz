@@ -6,6 +6,7 @@ import { colors } from '@/lib/tokens'
 import { springs } from '@/lib/springs'
 import { themes, useThemeStore } from '@/lib/themes'
 import { ObsidianSettings } from './ObsidianSettings'
+import { PulseSettings } from './PulseSettings'
 
 type Tab = 'limits' | 'appearance' | 'control'
 
@@ -182,6 +183,7 @@ export function SettingsPanel(): JSX.Element {
               ))}
             </div>
             {/* // w4/obsidian */}<ObsidianSettings />
+            {/* // w6/pulse */}<PulseSettings />
           </div>
         )}
       </div>

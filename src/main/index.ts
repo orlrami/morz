@@ -532,3 +532,21 @@ app.whenReady().then(() => registerCommitIpc(ipcMain))
 // w5/cost
 import { registerCostMeterIpc } from './orchestrator/cost-meter'
 app.whenReady().then(() => registerCostMeterIpc())
+
+// w6/pulse — append-only Daily Pulse registration and native-notification open path.
+import { registerPulseIpc } from './services/pulse'
+import { PulseApi as PulseChannels, type PulseBrief } from '../shared/ipc'
+app.whenReady().then(() =>
+  registerPulseIpc({
+    openBrief: (brief: PulseBrief) => {
+      let win = BrowserWindow.getAllWindows()[0]
+      if (!win) win = createWindow()
+      if (win.isMinimized()) win.restore()
+      win.show()
+      win.focus()
+      const push = (): void => win.webContents.send(PulseChannels.open, brief)
+      if (win.webContents.isLoading()) win.webContents.once('did-finish-load', push)
+      else push()
+    }
+  })
+)
