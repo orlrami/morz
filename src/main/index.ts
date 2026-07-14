@@ -523,3 +523,6 @@ app.whenReady().then(() =>
 // w5/reviewer
 import { registerReviewerIpc } from './reviewer/reviewer'
 app.whenReady().then(() => registerReviewerIpc())
+// w5/dag
+import { registerDodIpc } from './orchestrator/dod'
+app.whenReady().then(() => registerDodIpc())

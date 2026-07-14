@@ -486,6 +486,7 @@ export interface MorzRunApi {
 }
 export interface MorzApi {
   run?: MorzRunApi
+}
 // w5/reviewer
 export type ReviewAuthor = 'claude' | 'codex'
 export type ReviewSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info'
@@ -522,4 +523,19 @@ export const ReviewApi = {
 export interface ReviewerBridge {
   run(input: ReviewRunInput): Promise<ReviewRunResult>
   onChanged(callback: (result: ReviewRunResult) => void): () => void
+}
+// w5/dag
+export interface DodCheck {
+  /** argv form: executable first, followed by arguments; never a shell string. */
+  command: string[]
+  cwd: string
+}
+export interface BusCreateTaskInput {
+  dod?: DodCheck[]
+}
+export const DodApi = {
+  completeVerified: 'bus:complete-verified'
+} as const
+export interface MorzBusApi {
+  completeVerified?(taskId: TaskId, agentId: AgentId, artifact: BusArtifactInput): Promise<Task>
 }

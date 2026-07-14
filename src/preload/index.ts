@@ -243,3 +243,12 @@ const reviewerBridge: ReviewerBridge = {
 }
 
 contextBridge.exposeInMainWorld('morzReviewer', reviewerBridge)
+// w5/dag
+// Keep this bridge assembly at EOF so completeVerified is present when
+// contextBridge snapshots and freezes the public API.
+import { DodApi } from '../shared/ipc'
+Object.assign(api.bus!, {
+  completeVerified: (taskId: string, agentId: string, artifact: unknown) =>
+    ipcRenderer.invoke(DodApi.completeVerified, { taskId, agentId, artifact })
+})
+contextBridge.exposeInMainWorld('morz', api)
