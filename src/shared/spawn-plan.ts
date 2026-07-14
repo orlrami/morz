@@ -85,3 +85,47 @@ export interface RunStatus {
   startedAt: string | null
   endedAt: string | null
 }
+
+/* ── w5/dispatch (ADDITIVE) ──────────────────────────────────────
+ * Dispatcher extensions: the ONE canonical-JSON definition every plan hash
+ * uses (planner hashes it, approval stores it, dispatch re-hashes it), plus
+ * optional per-agent dispatch detail merged onto RunStatus. */
+
+/** Recursively key-sorted JSON so hashing is insensitive to key order. */
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value)
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`
+  const keys = Object.keys(value as Record<string, unknown>).sort()
+  const body = keys
+    .map((k) => `${JSON.stringify(k)}:${stableStringify((value as Record<string, unknown>)[k])}`)
+    .join(',')
+  return `{${body}}`
+}
+
+/**
+ * The canonical plan JSON that planHash covers: the whole plan with the
+ * planHash field itself excluded (it cannot cover its own value). SHA-256 of
+ * this string IS the planHash — see hashPlan() in main/orchestrator.
+ */
+export function canonicalPlanJson(plan: SpawnPlan): string {
+  const { planHash: _planHash, ...rest } = plan
+  return stableStringify(rest)
+}
+
+/** What the dispatcher knows about one launched agent (pane, pid, port, worktree). */
+export interface AgentRunDetail {
+  paneId: string
+  pid: number | null
+  port: number | null
+  worktree: string | null
+  branch: string
+  cli: PlannedCli
+  /** Kickoff bus task gating this agent's DAG position (null until created). */
+  kickoffTaskId: string | null
+}
+
+// declaration-merged onto RunStatus above (additive, optional)
+export interface RunStatus {
+  runTag?: string
+  agentsDetail?: Record<AgentId, AgentRunDetail>
+}
