@@ -526,3 +526,6 @@ app.whenReady().then(() => registerReviewerIpc())
 // w5/dag
 import { registerDodIpc } from './orchestrator/dod'
 app.whenReady().then(() => registerDodIpc())
+// w5/commit
+import { registerCommitIpc } from './services/commit-service'
+app.whenReady().then(() => registerCommitIpc(ipcMain))

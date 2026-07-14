@@ -252,3 +252,18 @@ Object.assign(api.bus!, {
     ipcRenderer.invoke(DodApi.completeVerified, { taskId, agentId, artifact })
 })
 contextBridge.exposeInMainWorld('morz', api)
+// w5/commit
+import { CommitApi, type CommitBridge } from '../shared/ipc'
+const commitApi: CommitBridge = {
+  fileDiff: (root, path) => ipcRenderer.invoke(CommitApi.fileDiff, root, path),
+  stageFile: (root, path) => ipcRenderer.invoke(CommitApi.stageFile, root, path),
+  unstageFile: (root, path) => ipcRenderer.invoke(CommitApi.unstageFile, root, path),
+  stageHunk: (root, patch) => ipcRenderer.invoke(CommitApi.stageHunk, root, patch),
+  discardFile: (root, path, confirmed) =>
+    ipcRenderer.invoke(CommitApi.discardFile, root, path, confirmed),
+  stagedDiff: (root) => ipcRenderer.invoke(CommitApi.stagedDiff, root),
+  commit: (root, message) => ipcRenderer.invoke(CommitApi.commit, root, message),
+  log: (root) => ipcRenderer.invoke(CommitApi.log, root),
+  suggestMessage: (root) => ipcRenderer.invoke(CommitApi.suggestMessage, root)
+}
+contextBridge.exposeInMainWorld('morzCommit', commitApi)

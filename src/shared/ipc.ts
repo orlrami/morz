@@ -539,3 +539,38 @@ export const DodApi = {
 export interface MorzBusApi {
   completeVerified?(taskId: TaskId, agentId: AgentId, artifact: BusArtifactInput): Promise<Task>
 }
+// w5/commit
+export interface CommitLogEntry {
+  sha: string
+  shortSha: string
+  author: string
+  date: string
+  subject: string
+}
+export interface CommitFileDiff {
+  path: string
+  staged: string
+  unstaged: string
+}
+export const CommitApi = {
+  fileDiff: 'commit:file-diff',
+  stageFile: 'commit:stage-file',
+  unstageFile: 'commit:unstage-file',
+  stageHunk: 'commit:stage-hunk',
+  discardFile: 'commit:discard-file',
+  stagedDiff: 'commit:staged-diff',
+  commit: 'commit:create',
+  log: 'commit:log',
+  suggestMessage: 'commit:suggest-message'
+} as const
+export interface CommitBridge {
+  fileDiff(root: string, path: string): Promise<CommitFileDiff>
+  stageFile(root: string, path: string): Promise<void>
+  unstageFile(root: string, path: string): Promise<void>
+  stageHunk(root: string, patch: string): Promise<void>
+  discardFile(root: string, path: string, confirmed: boolean): Promise<void>
+  stagedDiff(root: string): Promise<string>
+  commit(root: string, message: string): Promise<{ sha: string }>
+  log(root: string): Promise<CommitLogEntry[]>
+  suggestMessage(root: string): Promise<string>
+}
