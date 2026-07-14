@@ -389,3 +389,19 @@ export interface OrganizerApi {
   apply(root: string, planHash: string): Promise<OrganizerApplyResult>
 }
 export interface MorzApi { organizer: OrganizerApi }
+
+// w5/dag
+export interface DodCheck {
+  /** argv form: executable first, followed by arguments; never a shell string. */
+  command: string[]
+  cwd: string
+}
+export interface BusCreateTaskInput {
+  dod?: DodCheck[]
+}
+export const DodApi = {
+  completeVerified: 'bus:complete-verified'
+} as const
+export interface MorzBusApi {
+  completeVerified?(taskId: TaskId, agentId: AgentId, artifact: BusArtifactInput): Promise<Task>
+}
