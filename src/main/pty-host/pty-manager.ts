@@ -64,6 +64,10 @@ export function resolveShell(shell: string | undefined, realPath: string): strin
   switch (shell.toLowerCase()) {
     case 'pwsh':
       return whereFirst('pwsh.exe', realPath) ?? 'powershell.exe'
+    // w5/bugfix: interactive Claude pane runs the real CLI as the pane process
+    // (framed TUI). PATH-resolve so ConPTY gets a concrete executable.
+    case 'claude':
+      return whereFirst('claude', realPath) ?? 'claude'
     case 'powershell':
       return 'powershell.exe'
     case 'cmd':
