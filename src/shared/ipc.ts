@@ -389,3 +389,18 @@ export interface OrganizerApi {
   apply(root: string, planHash: string): Promise<OrganizerApplyResult>
 }
 export interface MorzApi { organizer: OrganizerApi }
+
+// w5/adapters — APPEND-ONLY block, owner: Agent 4 (wave 5).
+// Normalized cross-CLI agent event stream. Every AgentAdapter (claude/codex/agy,
+// src/main/adapters/) maps its native output onto this union; the dispatcher
+// and future lane UIs consume ONLY these shapes. Raw CLI events keep flowing on
+// the existing ClaudeApi.event channel — this union is additive, not a rename.
+export type AdapterCli = 'claude' | 'codex' | 'agy'
+export type AdapterEvent =
+  | { type: 'init'; cli: AdapterCli; sessionId: string | null; model: string | null }
+  | { type: 'delta'; text: string } // streamed output chunk (raw PTY text for agy)
+  | { type: 'message'; role: 'assistant' | 'system'; text: string } // complete message
+  | { type: 'tool'; name: string; detail?: unknown }
+  | { type: 'result'; inputTokens?: number; outputTokens?: number; costUsd?: number } // turn done
+  | { type: 'error'; message: string }
+  | { type: 'exit'; code: number | null }

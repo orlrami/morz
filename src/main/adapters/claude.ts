@@ -16,11 +16,18 @@ import { join } from 'path'
 import { app, ipcMain, webContents } from 'electron'
 import {
   ClaudeApi,
+  type AdapterEvent,
   type ClaudeEvent,
   type ClaudePermissionReq,
   type ClaudePermissionResp,
   type ClaudeStartOpts
 } from '../../shared/ipc'
+import type {
+  AdapterEventListener,
+  AdapterPermissionListener,
+  AdapterStartOpts,
+  AgentAdapter
+} from './types'
 
 interface ClaudeProc {
   agentId: string
@@ -96,8 +103,73 @@ function broadcast(channel: string, payload: unknown): void {
   for (const wc of webContents.getAllWebContents()) wc.send(channel, payload)
 }
 
+/* w5/adapters — AgentAdapter listener fan-out. Purely additive: the renderer
+ * broadcast below is byte-identical to pre-wave-5 behavior; listeners get a
+ * normalized AdapterEvent view of the same stream. */
+const eventListeners = new Set<AdapterEventListener>()
+const permissionListeners = new Set<AdapterPermissionListener>()
+
+/** Map a raw stream-json event onto the normalized union (null = no mapping). */
+function normalizeClaudeEvent(event: ClaudeEvent): AdapterEvent | null {
+  const e = event as Record<string, unknown>
+  switch (event.type) {
+    case 'system': {
+      if (e.subtype !== 'init') return null
+      return {
+        type: 'init',
+        cli: 'claude',
+        sessionId: typeof e.session_id === 'string' ? e.session_id : null,
+        model: typeof e.model === 'string' ? e.model : null
+      }
+    }
+    case 'stream_event': {
+      const inner = e.event as { type?: string; delta?: { type?: string; text?: string } } | undefined
+      if (inner?.type === 'content_block_delta' && typeof inner.delta?.text === 'string') {
+        return { type: 'delta', text: inner.delta.text }
+      }
+      return null
+    }
+    case 'assistant': {
+      const msg = e.message as { content?: { type?: string; text?: string }[] } | undefined
+      const text = (msg?.content ?? [])
+        .filter((b) => b.type === 'text' && typeof b.text === 'string')
+        .map((b) => b.text)
+        .join('')
+      return text ? { type: 'message', role: 'assistant', text } : null
+    }
+    case 'result': {
+      const usage = e.usage as { input_tokens?: number; output_tokens?: number } | undefined
+      return {
+        type: 'result',
+        inputTokens: usage?.input_tokens,
+        outputTokens: usage?.output_tokens,
+        costUsd: typeof e.total_cost_usd === 'number' ? e.total_cost_usd : undefined
+      }
+    }
+    case 'meter':
+      // Synthetic JSONL fallback — only fires when result carried no usage.
+      return {
+        type: 'result',
+        inputTokens: typeof e.inputTokens === 'number' ? e.inputTokens : undefined,
+        outputTokens: typeof e.outputTokens === 'number' ? e.outputTokens : undefined
+      }
+    case 'stderr':
+      return null // diagnostics, not an error signal (CLIs chatter on stderr)
+    case 'parse_error':
+      return { type: 'error', message: `unparseable stream line: ${String(e.line ?? '')}` }
+    case 'process_error':
+      return { type: 'error', message: String(e.message ?? 'process error') }
+    case 'process_exit':
+      return { type: 'exit', code: typeof e.code === 'number' ? e.code : null }
+    default:
+      return null
+  }
+}
+
 function emit(agentId: string, event: ClaudeEvent): void {
   broadcast(ClaudeApi.event, { agentId, event })
+  const normalized = normalizeClaudeEvent(event)
+  if (normalized) for (const l of eventListeners) l(agentId, normalized)
 }
 
 function writeLine(proc: ClaudeProc, msg: unknown): void {
@@ -163,6 +235,7 @@ function handleControlRequest(proc: ClaudeProc, event: ClaudeEvent): void {
       input: request.input
     }
     broadcast(ClaudeApi.permission, req)
+    for (const l of permissionListeners) l(req) // w5/adapters — same shape, same reply path
   } else {
     // Unknown control subtype: answer with an error so the CLI never hangs on us.
     writeLine(proc, {
@@ -275,6 +348,29 @@ function stop(agentId: string): void {
     spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true })
   } else {
     proc.child.kill()
+  }
+}
+
+/*
+ * w5/adapters — the Claude lane behind the common interface. Extraction only:
+ * these are the SAME functions the IPC handlers below call; renderer contract
+ * (ClaudeApi channels, event shapes, permission flow) is untouched. The
+ * permission REPLY still travels claude:permission-respond — respondPermission
+ * stays the single writer of control_response.
+ */
+export const claudeAdapter: AgentAdapter = {
+  cli: 'claude',
+  start: (opts: AdapterStartOpts) => start(opts),
+  send,
+  interrupt,
+  stop,
+  onEvent(listener) {
+    eventListeners.add(listener)
+    return () => eventListeners.delete(listener)
+  },
+  onPermission(listener) {
+    permissionListeners.add(listener)
+    return () => permissionListeners.delete(listener)
   }
 }
 
