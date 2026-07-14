@@ -5,6 +5,7 @@ import {
   IconCheck,
   IconCoin,
   IconHandStop,
+  IconPlayerPlay,
   IconPlayerStop,
   IconRefresh,
   IconSend,
@@ -15,24 +16,168 @@ import {
 } from '@tabler/icons-react'
 import type { ClaudePermissionReq } from '@shared/ipc'
 import { reduceEvent, userBlock, type LaneBlock } from '@/lib/claude-events'
+import { on, off } from '@/lib/app-events'
 import { colors } from '@/lib/tokens'
 import { springs } from '@/lib/springs'
+import { useTerminal } from '@/hooks/useTerminal'
 import { useLaneStore, type LaneMeter } from '@/store/laneStore'
 import { useModeStore } from '@/store/modeStore'
 import { getMorz } from '@/store/spaceStore'
 
 /*
- * Claude lane (Slice 5+6): a native React agent-block renderer for the
- * stream-json adapter — no terminal emulation.
+ * Claude lane (Slice 5+6, w5/bugfix): two ways to run Claude in a lane.
+ *
+ * Interactive (default): the REAL `claude` CLI in a PTY, rendered as a framed
+ * TUI — its text and every slash command (/config, /model, /mcp) work exactly
+ * like the real terminal. Headless print mode cannot do this: verified live,
+ * `-p --input-format stream-json` answers "/model isn't available in this
+ * environment." and /config with a usage error — the TUI is the only place
+ * interactive commands exist.
+ *
+ * Structured: the stream-json adapter with native block rendering, meters and
+ * Morz permission dialogs (Slices 5+6) — the machine-readable lane handoffs
+ * and orchestration target.
  *
  * Mode gating is structural: in Manual this component renders an inert notice
  * and mounts NOTHING that touches window.morz.claude — the adapter is never
- * called, so Manual provably makes zero LLM calls (Slice 6).
+ * called, so Manual provably makes zero LLM calls (Slice 6). The interactive
+ * PTY likewise never spawns until the user explicitly launches it, so merely
+ * creating a lane still runs no claude process (manual-gate invariant).
  */
 export function ClaudeLane({ agentId, cwd }: { agentId: string; cwd: string }): JSX.Element {
   const mode = useModeStore((s) => s.mode)
+  const [laneMode, setLaneMode] = useState<'interactive' | 'structured'>('interactive')
   if (mode === 'manual') return <ManualNotice />
-  return <ActiveLane agentId={agentId} cwd={cwd} />
+  // Both variants stay mounted (hidden via CSS) so toggling never loses the
+  // TUI session or the structured transcript.
+  return (
+    <div className="flex h-full min-h-0 flex-col gap-1.5">
+      <div className="flex shrink-0 items-center gap-1" role="tablist" aria-label="Lane mode">
+        <LaneModeButton
+          label="Interactive"
+          active={laneMode === 'interactive'}
+          onClick={() => setLaneMode('interactive')}
+        />
+        <LaneModeButton
+          label="Structured"
+          active={laneMode === 'structured'}
+          onClick={() => setLaneMode('structured')}
+        />
+      </div>
+      <div className={laneMode === 'interactive' ? 'min-h-0 flex-1' : 'hidden'}>
+        <InteractiveLane agentId={agentId} cwd={cwd} />
+      </div>
+      <div className={laneMode === 'structured' ? 'min-h-0 flex-1' : 'hidden'}>
+        <ActiveLane agentId={agentId} cwd={cwd} />
+      </div>
+    </div>
+  )
+}
+
+function LaneModeButton({
+  label,
+  active,
+  onClick
+}: {
+  label: string
+  active: boolean
+  onClick(): void
+}): JSX.Element {
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={active}
+      onClick={onClick}
+      className="cursor-pointer rounded-md border px-2 py-0.5 text-[10px] font-semibold transition-colors"
+      style={{
+        borderColor: active ? 'rgba(203,162,90,0.5)' : 'var(--color-line)',
+        color: active ? colors.bronzeHot : colors.quartzDim,
+        background: active ? 'rgba(203,162,90,0.08)' : 'transparent'
+      }}
+    >
+      {label}
+    </button>
+  )
+}
+
+/* ── interactive lane (w5/bugfix): real `claude` in a PTY, framed TUI ── */
+
+function InteractiveLane({ agentId, cwd }: { agentId: string; cwd: string }): JSX.Element {
+  const [launched, setLaunched] = useState(false)
+  return (
+    <div
+      className="relative flex h-full flex-col overflow-hidden rounded-xl border"
+      style={{ background: colors.panel, borderColor: 'var(--color-line)' }}
+    >
+      <div
+        className="flex shrink-0 items-center gap-2 border-b px-3 py-2"
+        style={{ borderColor: 'var(--color-line)' }}
+      >
+        <IconSparkles size={13} stroke={1.5} style={{ color: colors.agentClaude }} />
+        <span className="text-[11px] font-semibold" style={{ fontFamily: 'var(--font-display)' }}>
+          {agentId}
+        </span>
+        <span className="truncate text-[10px]" style={{ color: colors.quartzDim }}>
+          {cwd}
+        </span>
+      </div>
+      {launched ? (
+        <InteractiveTerminal agentId={agentId} cwd={cwd} />
+      ) : (
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
+          <IconTerminal2 size={22} stroke={1.5} style={{ color: colors.quartzDim }} />
+          <p className="max-w-[300px] text-[11px]" style={{ color: colors.quartzDim }}>
+            Runs the real <code>claude</code> CLI in this pane — its full UI and every slash
+            command (<code>/config</code>, <code>/model</code>, <code>/mcp</code>) work here.
+          </p>
+          <button
+            onClick={() => setLaunched(true)}
+            aria-label="Launch interactive claude"
+            className="flex cursor-pointer items-center gap-1.5 rounded-md px-3 py-1.5 text-[11px] font-semibold"
+            style={{
+              background: `linear-gradient(180deg, ${colors.bronzeHot}, ${colors.bronze})`,
+              color: '#241c0a'
+            }}
+          >
+            <IconPlayerPlay size={12} stroke={2} />
+            Launch claude
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * Mounted only after the explicit launch click — useTerminal spawns on mount.
+ * The PTY pane is lane-scoped (`tty-<agentId>`): it survives Shell remounts
+ * like any terminal, and dies with the lane (close-pane) or the Manual dial
+ * (zero-LLM guarantee — a live TUI must not outlive the lane that owns it).
+ */
+function InteractiveTerminal({ agentId, cwd }: { agentId: string; cwd: string }): JSX.Element {
+  const paneId = `tty-${agentId}`
+  const { containerRef } = useTerminal(paneId, { shell: 'claude', cwd })
+
+  useEffect(() => {
+    const kill = (): void => getMorz()?.pty.kill(paneId)
+    const onClosePane = ({ paneId: closing }: { paneId: string }): void => {
+      const lane = useLaneStore.getState().lanes.find((l) => l.agentId === agentId)
+      if (lane?.paneId === closing) kill()
+    }
+    on('close-pane', onClosePane)
+    // zustand notifies synchronously on set() — this runs before the Manual
+    // re-render unmounts us, so the kill always lands.
+    const unsub = useModeStore.subscribe((s) => {
+      if (s.mode === 'manual') kill()
+    })
+    return () => {
+      off('close-pane', onClosePane)
+      unsub()
+    }
+  }, [agentId, paneId])
+
+  return <div ref={containerRef} className="min-h-0 flex-1 py-1 pl-2 pr-1" />
 }
 
 function ManualNotice(): JSX.Element {

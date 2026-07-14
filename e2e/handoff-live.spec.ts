@@ -73,6 +73,9 @@ test.describe.serial('Assisted handoff — live (w4/handoff)', () => {
     )
     await page.locator(START_LANE).first().dispatchEvent('click')
     await expect(page.locator(LANE_PANE)).toHaveCount(1)
+    // w5/bugfix: lanes default to the interactive TUI — this spec drives the
+    // structured (stream-json) variant.
+    await page.locator(LANE_PANE).getByRole('tab', { name: 'Structured' }).dispatchEvent('click')
 
     // agentId from the pane's aria-label ("Claude lane — claude-lane-…")
     const label = await page.locator(LANE_PANE).getAttribute('aria-label')
