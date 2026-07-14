@@ -89,13 +89,15 @@ test('Organizer audits, proposes, explains, and applies only in a sandbox worktr
     expect(explanation.cite).toContain('adr.github.io/madr')
 
     const importerPath = join(fixtureRoot, 'src', 'uses-imported.ts')
-    const importerContent = readFileSync(importerPath, 'utf8')
     writeFileSync(importerPath, "export const usedValue = 'temporarily dirty'\n", 'utf8')
     const plan = await page.evaluate((root) => {
       const morz = (window as unknown as { morz: { organizer: { propose(root: string): Promise<OrganizerPlan> } } }).morz
       return morz.organizer.propose(root)
     }, fixtureRoot)
-    writeFileSync(importerPath, importerContent, 'utf8')
+    // restore via git so the worktree byte-matches the index EXACTLY — a
+    // writeFileSync round-trip can differ in EOL from what the index holds
+    // (checkout normalization) and busts git's stat cache into reporting M.
+    git(fixtureRoot, 'checkout', '--', 'src/uses-imported.ts')
     expect(plan.planHash).toMatch(/^[a-f0-9]{64}$/)
     expect(plan.operations.length).toBeGreaterThan(0)
     expect(plan.operations.every((operation) => operation.inverse)).toBe(true)

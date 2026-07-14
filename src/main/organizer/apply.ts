@@ -44,6 +44,39 @@ interface GitIndexEntry {
   hash: string
 }
 
+/*
+ * The hardened env below neutralizes the user's global/system git config
+ * (hook, filter, and fsmonitor attack surface) — but that also drops
+ * core.autocrlf/core.eol, silently changing EOL semantics: on a Windows
+ * autocrlf=true repo every CRLF-checked-out file reads as "modified" once its
+ * stat cache is cold, and the clean-worktree gate refuses to apply. Capture
+ * the user's EFFECTIVE eol settings once and re-inject them explicitly.
+ * (`git config --get` never runs filters/hooks — safe to call unhardened.)
+ */
+let eolConfigArgs: string[] | null = null
+async function effectiveEolConfig(cwd: string): Promise<string[]> {
+  if (eolConfigArgs) return eolConfigArgs
+  const read = async (key: string): Promise<string | null> => {
+    try {
+      const { stdout } = await execFileAsync('git', ['config', '--get', key], {
+        cwd,
+        windowsHide: true,
+        encoding: 'utf8'
+      })
+      return stdout.trim() || null
+    } catch {
+      return null // unset
+    }
+  }
+  const args: string[] = []
+  const autocrlf = await read('core.autocrlf')
+  if (autocrlf) args.push('-c', `core.autocrlf=${autocrlf}`)
+  const eol = await read('core.eol')
+  if (eol) args.push('-c', `core.eol=${eol}`)
+  eolConfigArgs = args
+  return args
+}
+
 async function git(cwd: string, args: string[], hooksPath: string): Promise<string> {
   try {
     const safeArgs = [
@@ -51,6 +84,7 @@ async function git(cwd: string, args: string[], hooksPath: string): Promise<stri
       '-c', 'core.fsmonitor=false',
       '-c', `core.attributesFile=${nullDevice}`,
       '-c', 'commit.gpgSign=false',
+      ...(await effectiveEolConfig(cwd)),
       ...args
     ]
     const { stdout } = await execFileAsync('git', safeArgs, {
@@ -314,7 +348,10 @@ async function applyApprovedProposal(
     await assertNoGitFilters(root, [...filterPaths], hooksPath)
 
     const status = await git(root, ['status', '--porcelain', '--untracked-files=all'], hooksPath)
-    if (status !== '') throw new Error('Organizer apply requires a clean live worktree; no files were changed.')
+    if (status !== '')
+      throw new Error(
+        `Organizer apply requires a clean live worktree; no files were changed. Dirty: ${status.slice(0, 200)}`
+      )
 
     await git(root, ['worktree', 'add', '-b', branch, worktreePath, baseCommit], hooksPath)
     createdWorktree = true
