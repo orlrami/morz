@@ -183,3 +183,23 @@ const obsidianApi: ObsidianBridge = {
 }
 
 contextBridge.exposeInMainWorld('morzObsidian', obsidianApi)
+
+// w5/reviewer
+import {
+  ReviewApi,
+  type ReviewerBridge,
+  type ReviewRunInput,
+  type ReviewRunResult
+} from '../shared/ipc'
+
+const reviewerBridge: ReviewerBridge = {
+  run: (input: ReviewRunInput): Promise<ReviewRunResult> =>
+    ipcRenderer.invoke(ReviewApi.run, input),
+  onChanged: (callback) => {
+    const listener = (_event: unknown, result: ReviewRunResult): void => callback(result)
+    ipcRenderer.on(ReviewApi.changed, listener)
+    return () => ipcRenderer.off(ReviewApi.changed, listener)
+  }
+}
+
+contextBridge.exposeInMainWorld('morzReviewer', reviewerBridge)
