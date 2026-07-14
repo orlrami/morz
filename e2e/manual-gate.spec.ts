@@ -87,11 +87,12 @@ test.describe.serial('Manual-inert gate (Slice 6)', () => {
     if (morz) await closeMorz(morz.app)
   })
 
-  test('boots in Manual: dial checked, Orchestrated disabled', async () => {
+  test('boots in Manual: dial checked, Orchestrated selectable but approval-gated', async () => {
     const { page } = morz
     await expect(page.getByRole('radio', { name: 'Manual' })).toHaveAttribute('aria-checked', 'true')
     await expect(page.getByRole('radio', { name: 'Assisted' })).toHaveAttribute('aria-checked', 'false')
-    await expect(page.getByRole('radio', { name: 'Orchestrated' })).toHaveAttribute('aria-disabled', 'true')
+    await expect(page.getByRole('radio', { name: 'Orchestrated' })).toHaveAttribute('aria-disabled', 'false')
+    await expect(page.getByRole('button', { name: 'Approve & Run' })).toHaveCount(0)
 
     // Store truth behind the dial: mode is 'manual' (persisted key may not
     // exist yet on a fresh profile — that also means the default, 'manual').

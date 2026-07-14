@@ -1,13 +1,16 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { IconClipboardList, IconFlask, IconHandStop } from '@tabler/icons-react'
+import { IconClipboardList, IconFlask, IconHandStop, IconSparkles } from '@tabler/icons-react'
 import type { Message, Part, Task, TaskState } from '@shared/bus'
+import type { PlannerBridge, StoredPlanAmendment, StoredSpawnPlan } from '@shared/ipc'
 import { colors } from '@/lib/tokens'
 import { staggerContainer, staggerItem } from '@/lib/springs'
 import { useModeStore } from '@/store/modeStore'
 import { useBusStore, getBus } from '@/store/busStore'
 import { useLaneStore } from '@/store/laneStore'
+import { useSpaceStore } from '@/store/spaceStore'
 import { ApprovalChip } from './ApprovalChip'
+import { AmendmentCard, PlanCard } from './PlanCard'
 
 /*
  * Orchestrator side panel = the live blackboard (0.0.2, w4/handoff).
@@ -35,7 +38,7 @@ export function OrchestratorPanel(): JSX.Element {
       style={{ background: colors.panel, borderColor: 'var(--color-line)' }}
       aria-label="Orchestrator"
     >
-      {mode === 'manual' ? <ManualNotice /> : <LiveBlackboard />}
+      {mode === 'manual' ? <ManualNotice /> : <LiveBlackboard showPlanner={mode === 'orchestrated'} />}
     </aside>
   )
 }
@@ -77,7 +80,7 @@ function Header({ subtitle }: { subtitle: string }): JSX.Element {
 }
 
 /* All bus access lives below this line, unmounted in Manual. */
-function LiveBlackboard(): JSX.Element {
+function LiveBlackboard({ showPlanner }: { showPlanner: boolean }): JSX.Element {
   const { tasks, messages, approvals, live, start, respondApproval, simulateHandoff } =
     useBusStore()
   const lanes = useLaneStore((s) => s.lanes)
@@ -103,6 +106,8 @@ function LiveBlackboard(): JSX.Element {
   return (
     <>
       <Header subtitle={subtitle} />
+
+      {showPlanner && <PlannerFlow />}
 
       {/* pending approvals — the Assisted propose-then-approve gate */}
       <AnimatePresence>
@@ -157,6 +162,188 @@ function LiveBlackboard(): JSX.Element {
         </div>
       )}
     </>
+  )
+}
+
+function getPlanner(): PlannerBridge | undefined {
+  return (window as unknown as { morzPlanner?: PlannerBridge }).morzPlanner
+}
+
+function PlannerFlow(): JSX.Element {
+  const spaceRoot = useSpaceStore((state) => state.spaces[0]?.root ?? '')
+  const [goal, setGoal] = useState('')
+  const [record, setRecord] = useState<StoredSpawnPlan | null>(null)
+  const [amendments, setAmendments] = useState<StoredPlanAmendment[]>([])
+  const [amendmentRequest, setAmendmentRequest] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [status, setStatus] = useState('')
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    const planner = getPlanner()
+    if (!planner) return
+    void planner
+      .listOpen()
+      .then((open) => {
+        setRecord(open.plans[0] ?? null)
+        setAmendments(open.amendments)
+      })
+      .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : String(reason)))
+  }, [])
+
+  const run = async (work: () => Promise<void>): Promise<void> => {
+    setBusy(true)
+    setError('')
+    try {
+      await work()
+    } catch (reason) {
+      setStatus('')
+      setError(reason instanceof Error ? reason.message : String(reason))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const createPlan = (): void => {
+    const planner = getPlanner()
+    if (!planner || !goal.trim() || !spaceRoot) return
+    setStatus('Planning')
+    void run(async () => {
+      const next = await planner.plan(goal.trim(), spaceRoot)
+      setRecord(next)
+      setStatus('')
+    })
+  }
+
+  const updatePlan = (plan: StoredSpawnPlan['plan'], expectedHash: string): Promise<void> =>
+    run(async () => {
+      const next = await getPlanner()!.update(plan, expectedHash)
+      setRecord(next)
+    })
+
+  const approvePlan = (planHash: string): Promise<void> =>
+    run(async () => {
+      const approved = await getPlanner()!.approveAndRun(planHash)
+      setRecord(approved.record)
+      setStatus(`Run ${approved.runId}`)
+    })
+
+  const discardPlan = (planHash: string): Promise<void> =>
+    run(async () => {
+      await getPlanner()!.discard(planHash)
+      setRecord(null)
+      setStatus('')
+    })
+
+  const requestAmendment = (): void => {
+    if (!record || record.state !== 'APPROVED' || !amendmentRequest.trim()) return
+    setStatus('Planning amendment')
+    void run(async () => {
+      const amendment = await getPlanner()!.requestAmendment(record.plan.id, amendmentRequest.trim())
+      setAmendments((current) => [amendment, ...current])
+      setAmendmentRequest('')
+      setStatus('')
+    })
+  }
+
+  const approveAmendment = (hash: string): Promise<void> =>
+    run(async () => {
+      await getPlanner()!.approveAmendment(hash)
+      setAmendments((current) => current.filter((item) => item.amendment.amendmentHash !== hash))
+      setStatus('Amendment approved')
+    })
+
+  const discardAmendment = (hash: string): Promise<void> =>
+    run(async () => {
+      await getPlanner()!.discardAmendment(hash)
+      setAmendments((current) => current.filter((item) => item.amendment.amendmentHash !== hash))
+    })
+
+  return (
+    <div className="space-y-2 border-b p-3" style={{ borderColor: 'var(--color-line)' }}>
+      <form
+        onSubmit={(event) => {
+          event.preventDefault()
+          createPlan()
+        }}
+        className="flex gap-1.5"
+      >
+        <input
+          aria-label="Goal"
+          value={goal}
+          onChange={(event) => setGoal(event.target.value)}
+          maxLength={4_000}
+          placeholder="What should the team finish?"
+          className="min-w-0 flex-1 rounded-md border bg-black/10 px-2 py-1.5 text-[10.5px] outline-none focus:ring-1"
+          style={{
+            borderColor: 'var(--color-line-strong)',
+            color: colors.quartz,
+            '--tw-ring-color': colors.bronze
+          } as React.CSSProperties}
+        />
+        <button
+          type="submit"
+          disabled={busy || !goal.trim() || !getPlanner()}
+          className="flex items-center gap-1 rounded-md px-2 py-1.5 text-[10px] font-bold disabled:cursor-not-allowed disabled:opacity-40"
+          style={{ background: colors.bronze, color: colors.page }}
+          aria-label="Plan team"
+        >
+          <IconSparkles size={11} stroke={2} />
+          Plan
+        </button>
+      </form>
+
+      {status && <p className="text-[9.5px]" style={{ color: colors.bronzeHot }}>{status}</p>}
+      {error && <p role="alert" className="text-[9.5px] leading-snug" style={{ color: colors.error }}>{error}</p>}
+
+      {record && (
+        <PlanCard
+          record={record}
+          busy={busy}
+          onUpdate={updatePlan}
+          onApprove={approvePlan}
+          onDiscard={discardPlan}
+        />
+      )}
+
+      {record?.state === 'APPROVED' && (
+        <form
+          onSubmit={(event) => {
+            event.preventDefault()
+            requestAmendment()
+          }}
+          className="flex gap-1.5"
+        >
+          <input
+            aria-label="Amendment request"
+            value={amendmentRequest}
+            onChange={(event) => setAmendmentRequest(event.target.value)}
+            maxLength={2_000}
+            placeholder="Add or replace one agent"
+            className="min-w-0 flex-1 rounded-md border bg-black/10 px-2 py-1 text-[9.5px] outline-none"
+            style={{ borderColor: 'var(--color-line-strong)', color: colors.quartz }}
+          />
+          <button
+            type="submit"
+            disabled={busy || !amendmentRequest.trim()}
+            className="rounded-md border px-2 py-1 text-[9px] disabled:opacity-40"
+            style={{ borderColor: 'var(--color-line-strong)', color: colors.quartz }}
+          >
+            Request
+          </button>
+        </form>
+      )}
+
+      {amendments.map((amendment) => (
+        <AmendmentCard
+          key={amendment.amendment.id}
+          record={amendment}
+          busy={busy}
+          onApprove={approveAmendment}
+          onDiscard={discardAmendment}
+        />
+      ))}
+    </div>
   )
 }
 

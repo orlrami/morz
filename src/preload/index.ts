@@ -183,3 +183,22 @@ const obsidianApi: ObsidianBridge = {
 }
 
 contextBridge.exposeInMainWorld('morzObsidian', obsidianApi)
+
+// w5/planner
+import { PlannerApi, type PlannerBridge } from '../shared/ipc'
+
+const plannerApi: PlannerBridge = {
+  plan: (goal, spaceRoot) => ipcRenderer.invoke(PlannerApi.plan, { goal, spaceRoot }),
+  update: (plan, expectedHash) => ipcRenderer.invoke(PlannerApi.update, { plan, expectedHash }),
+  approveAndRun: (planHash) => ipcRenderer.invoke(PlannerApi.approveAndRun, planHash),
+  discard: (planHash) => ipcRenderer.invoke(PlannerApi.discard, planHash),
+  listOpen: () => ipcRenderer.invoke(PlannerApi.listOpen),
+  requestAmendment: (planId, request) =>
+    ipcRenderer.invoke(PlannerApi.requestAmendment, { planId, request }),
+  approveAmendment: (amendmentHash) =>
+    ipcRenderer.invoke(PlannerApi.approveAmendment, amendmentHash),
+  discardAmendment: (amendmentHash) =>
+    ipcRenderer.invoke(PlannerApi.discardAmendment, amendmentHash)
+}
+
+contextBridge.exposeInMainWorld('morzPlanner', plannerApi)
