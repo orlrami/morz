@@ -181,7 +181,10 @@ const runApi: MorzRunApi = {
 api.run = runApi
 // end w5/dispatch
 
-contextBridge.exposeInMainWorld('morz', api)
+// NOTE: the single window.morz expose lives at the END of this file (after the
+// w5/dag completeVerified attach) — contextBridge snapshots the object at
+// expose time and ignores a second expose of the same key, so `api` must be
+// fully assembled before the one exposeInMainWorld('morz', api) call.
 
 // w4/obsidian
 import {
