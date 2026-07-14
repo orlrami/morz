@@ -389,3 +389,35 @@ export interface OrganizerApi {
   apply(root: string, planHash: string): Promise<OrganizerApplyResult>
 }
 export interface MorzApi { organizer: OrganizerApi }
+
+// w5/dispatch — approved SpawnPlan → real running team (visible panes)
+import type { RunState, RunStatus, SpawnPlan } from './spawn-plan'
+export interface RunSummary {
+  runId: string
+  runTag: string
+  goal: string
+  state: RunState
+  createdAt: string
+}
+export const RunApi = {
+  approvePlan: 'run:approve-plan', // (SpawnPlan) => Promise<{planHash}>  Main stamps + stores the hash
+  dispatch: 'run:dispatch', // (SpawnPlan) => Promise<{runId}>  re-hash + verify vs stored approved plan
+  list: 'run:list', // () => Promise<RunSummary[]>
+  status: 'run:status', // (runId) => Promise<RunStatus | null>
+  stop: 'run:stop', // (runId) => Promise<RunStatus>  global Stop — kills every agent's process tree
+  cleanup: 'run:cleanup', // (runId) => Promise<RunStatus>  removes run-tagged worktrees + branches
+  changed: 'run:changed' // push → RunStatus on every run/agent state change
+} as const
+export interface MorzRunApi {
+  approvePlan(plan: SpawnPlan): Promise<{ planHash: string }>
+  dispatch(plan: SpawnPlan): Promise<{ runId: string }>
+  listRuns(): Promise<RunSummary[]>
+  runStatus(runId: string): Promise<RunStatus | null>
+  stopRun(runId: string): Promise<RunStatus>
+  cleanup(runId: string): Promise<RunStatus>
+  /** Run/agent state pushes. Returns an unsubscribe fn. */
+  onRunChanged(cb: (status: RunStatus) => void): () => void
+}
+export interface MorzApi {
+  run?: MorzRunApi
+}

@@ -159,6 +159,28 @@ api.configWriter = {
   apply: (proposalId) => ipcRenderer.invoke(ConfigWriterApi.apply, proposalId)
 }
 
+/* ── w5/dispatch: window.morz.run — approved SpawnPlan → running team.
+ * Attached BEFORE exposeInMainWorld (contextBridge snapshots the object at
+ * expose time, same constraint the w4/bus block documents). ── */
+import { RunApi, type MorzRunApi } from '../shared/ipc'
+import type { RunStatus, SpawnPlan } from '../shared/spawn-plan'
+
+const runApi: MorzRunApi = {
+  approvePlan: (plan: SpawnPlan) => ipcRenderer.invoke(RunApi.approvePlan, plan),
+  dispatch: (plan: SpawnPlan) => ipcRenderer.invoke(RunApi.dispatch, plan),
+  listRuns: () => ipcRenderer.invoke(RunApi.list),
+  runStatus: (runId) => ipcRenderer.invoke(RunApi.status, runId),
+  stopRun: (runId) => ipcRenderer.invoke(RunApi.stop, runId),
+  cleanup: (runId) => ipcRenderer.invoke(RunApi.cleanup, runId),
+  onRunChanged: (cb) => {
+    const h = (_e: unknown, status: RunStatus): void => cb(status)
+    ipcRenderer.on(RunApi.changed, h)
+    return () => ipcRenderer.off(RunApi.changed, h)
+  }
+}
+api.run = runApi
+// end w5/dispatch
+
 contextBridge.exposeInMainWorld('morz', api)
 
 // w4/obsidian

@@ -189,6 +189,21 @@ export class PtyManager {
       cwd,
       sessionGuid: SESSION_GUID
     })
+    // w5/dispatch: ConPTY reports pid 0 until its datapipe connects (node-pty
+    // updates the getter on 'ready_datapipe') — re-sample so the journal,
+    // killTree and the dispatcher's taskkill fallback get the real pid.
+    if (pane.pid <= 0) {
+      const resample = setInterval(() => {
+        if (!this.panes.has(opts.paneId)) return clearInterval(resample)
+        const pid = pane.pty.pid
+        if (pid > 0) {
+          clearInterval(resample)
+          pane.pid = pid
+          this.hooks.onSpawned({ paneId: opts.paneId, pid, shell: file, cwd, sessionGuid: SESSION_GUID })
+        }
+      }, 50)
+      setTimeout(() => clearInterval(resample), 10_000)
+    }
     this.hooks.onTui(opts.paneId, pane.tui) // w4/finish
     return { ok: true }
   }

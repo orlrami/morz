@@ -485,3 +485,24 @@ app.whenReady().then(() => registerObsidianIpc(ipcMain))
 // w4/organizer
 import { registerOrganizerIpc } from './organizer'
 registerOrganizerIpc(ipcMain)
+
+/* ── w5/dispatch: dispatcher — approved SpawnPlan → worktrees + $PORT +
+ * visible PTY panes, with global Stop + cleanup. The PTY bridge is injected
+ * because hostRequest/ptyHost live in this module. ── */
+import { registerDispatchIpc } from './orchestrator/dispatcher'
+import { RunApi } from '../shared/ipc'
+import type { RunStatus } from '../shared/spawn-plan'
+app.whenReady().then(() =>
+  registerDispatchIpc(ipcMain, {
+    spawnPane: (opts) => hostRequest<{ ok: boolean; error?: string }>('spawn', opts),
+    writePane: (paneId, data) => ptyHost?.postMessage({ type: 'write', paneId, data }),
+    killPane: (paneId) => hostRequest('kill', { paneId }).catch(() => undefined),
+    listPanes: () => hostRequest<string[]>('list'),
+    push: (status: RunStatus) => {
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (!win.isDestroyed()) win.webContents.send(RunApi.changed, status)
+      }
+    }
+  })
+)
+// end w5/dispatch
