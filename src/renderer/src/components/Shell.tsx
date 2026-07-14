@@ -28,6 +28,8 @@ import { BrowserPanel } from './BrowserPanel'
 import { RemotePanel } from './RemotePanel'
 import { SettingsPanel } from './SettingsPanel'
 import { WorkshopPanel } from './WorkshopPanel'
+// w6/organizer-ui
+import { OrganizerPanel } from './OrganizerPanel'
 import { ToastHost } from './Toast'
 import { IdePane } from './IdePane'
 import { ClaudeLane } from './ClaudeLane'
@@ -52,7 +54,7 @@ import {
 import { getMorz, useSpaceStore } from '@/store/spaceStore'
 import type { SessionSnapshot } from '@shared/ipc'
 
-type CenterView = 'terminals' | 'commit' | 'review' | 'dag' | 'browser' | 'remote' | 'settings' | 'workshop'
+type CenterView = 'terminals' | 'commit' | 'review' | 'dag' | 'browser' | 'remote' | 'organizer' | 'settings' | 'workshop'
 
 const VIEWS: { id: CenterView; label: string; icon: typeof IconTerminal2 }[] = [
   { id: 'terminals', label: 'Terminals', icon: IconTerminal2 },
@@ -60,7 +62,8 @@ const VIEWS: { id: CenterView; label: string; icon: typeof IconTerminal2 }[] = [
   { id: 'review', label: 'Review', icon: IconShieldCheck },
   { id: 'dag', label: 'Waves', icon: IconTopologyStar3 },
   { id: 'browser', label: 'Browser', icon: IconWorld },
-  { id: 'remote', label: 'Remote', icon: IconDeviceMobile }
+  { id: 'remote', label: 'Remote', icon: IconDeviceMobile },
+  { id: 'organizer', label: 'Organizer', icon: IconFolders }
 ]
 
 /* Dev-only: allow ?view=commit&explorer=1 so surfaces can be screenshot-verified. */
@@ -401,6 +404,7 @@ export function Shell(): JSX.Element {
           {view === 'dag' && <DagView />}
           {view === 'browser' && <BrowserPanel />}
           {view === 'remote' && <RemotePanel />}
+          {view === 'organizer' && <OrganizerPanel />}
           {view === 'settings' && <SettingsPanel />}
           {view === 'workshop' && <WorkshopPanel />}
         </main>
