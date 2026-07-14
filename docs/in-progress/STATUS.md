@@ -2,7 +2,26 @@
 
 *Live status of what's being built. Update as slices land. Roadmap: [`../roadmap/`](../roadmap/).*
 
-## Current target: **0.0.2 — "The Bus + Additions"** ([spec](../roadmap/0.0.2.md))
+## Current target: **0.0.3 — "Orchestrated"** ([spec](../roadmap/0.0.3.md))
+
+Wave 5 (8 agents: 3 Fable + 5 GPT-5.6 Sol) merged. **E2E: 40 passed + 6 live-gated (verified per-branch); planner→dispatch proven live end-to-end.**
+
+| 0.0.3 deliverable | Status | Notes |
+|---|---|---|
+| Interactive Claude (bugfix) | ✅ live-verified | real `claude` TUI in a lane (Interactive/Structured toggle) — text + all slash commands (/config,/model,/mcp) work; headless stream-json can't run them (root-caused). Fixes both user-reported bugs. |
+| Planner (NL→SpawnPlan) | ✅ | live claude → schema-validated plan card → per-plan hash approval → edits re-hash; amendment flow. Orchestrated dial ENABLED (still approval-gated). |
+| Dispatcher | ✅ verified | approved plan → worktree+$PORT+visible pane per agent; SQLite run-state machine; global Stop kills the tree (no zombies); cleanup removes run worktrees. MORZ_SPACE routes bus mailbox to the space root. |
+| Adapters (claude/codex/agy) | ✅ live-verified | one AgentAdapter interface; codex `exec --json` (stdin-ignored); agy PTY bracketed-paste; Claude refactored, zero regressions. Smoke: codex+agy ADAPTER_OK live. |
+| Cross-model reviewer | ✅ live-verified | non-author brain refutes each diff; finding cards (apply-fix → IDE, send-to-agent → bus handoff). Planted-bug found live. |
+| DAG waves + DoD | ✅ | machine-verified completion gate (completeVerified runs dod commands; self-report never completes); DagView renders live wave/state graph. |
+| Commit UX | ✅ | real git staging (file+hunk), discard-confirm, commit w/ hooks, AI message from staged diff (Assisted+). |
+| Cost/token kill-switch | ✅ | per-run+per-lane meters in StatusBar; caps → pause-on-breach banner (Resume+25% / Stop); "no data" first-class. |
+
+**Integration wiring of note:** planner's LoggingDispatchStub → REAL dispatcher (approve registers in the dispatcher store AND dispatches — the two approval stores can't drift); single `window.morz` expose (a duplicate expose was aborting the rest of preload → dropped morzCommit/morzCost + dag.completeVerified); planner/dispatch hash canonicalizers confirmed identical.
+
+**0.0.3 remaining:** bring-your-own-assistant (Hermes/OpenClaw/Comet) + Daily Pulse (deferred from wave 5) → wave 6.
+
+## Previous target: **0.0.2 — "The Bus + Additions"** ([spec](../roadmap/0.0.2.md)) — COMPLETE
 
 Wave 4 (8 agents: 4 Fable-5 + 4 GPT-5.6 Sol) merged. **E2E: 29 passed + 3 live handoff tests passed (real claude). Full suite green.**
 
