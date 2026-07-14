@@ -4,6 +4,7 @@ import type {
   CatalogItem,
   CatalogQuery,
   CatalogSnapshot,
+  CatalogSourceStatus,
   MorzApi
 } from '@shared/ipc'
 
@@ -16,6 +17,7 @@ interface CatalogState {
   syncing: boolean
   loading: boolean
   error: string | null
+  sources: CatalogSourceStatus[]
   setCategory(category: CatalogCategory): void
   setSearch(search: string): void
   query(): Promise<void>
@@ -33,14 +35,15 @@ function catalogApi(): NonNullable<MorzApi['catalog']> | null {
 
 function snapshotState(snapshot: CatalogSnapshot): Pick<
   CatalogState,
-  'items' | 'lastSyncAt' | 'offline' | 'syncing' | 'error'
+  'items' | 'lastSyncAt' | 'offline' | 'syncing' | 'error' | 'sources'
 > {
   return {
     items: snapshot.items,
     lastSyncAt: snapshot.lastSyncAt,
     offline: snapshot.offline,
     syncing: snapshot.syncing,
-    error: snapshot.error
+    error: snapshot.error,
+    sources: Array.isArray(snapshot.sources) ? snapshot.sources : []
   }
 }
 
@@ -53,6 +56,7 @@ export const useCatalogStore = create<CatalogState>((set, get) => ({
   syncing: false,
   loading: false,
   error: null,
+  sources: [],
   setCategory: (category) => set({ category }),
   setSearch: (search) => set({ search }),
   query: async () => {
@@ -100,7 +104,8 @@ export const useCatalogStore = create<CatalogState>((set, get) => ({
         offline: snapshot.offline,
         syncing: snapshot.syncing,
         loading: false,
-        error: snapshot.error
+        error: snapshot.error,
+        sources: Array.isArray(snapshot.sources) ? snapshot.sources : []
       })
       await get().query()
     } catch (error) {

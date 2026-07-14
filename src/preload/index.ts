@@ -254,7 +254,7 @@ Object.assign(api.bus!, {
   completeVerified: (taskId: string, agentId: string, artifact: unknown) =>
     ipcRenderer.invoke(DodApi.completeVerified, { taskId, agentId, artifact })
 })
-contextBridge.exposeInMainWorld('morz', api)
+// The single window.morz exposure is deferred to the w6/errors EOF block.
 // w5/commit
 import { CommitApi, type CommitBridge } from '../shared/ipc'
 const commitApi: CommitBridge = {
@@ -352,3 +352,28 @@ ipcRenderer.on(ClaudeApi.event, (_event, message: { agentId: string; event: Clau
   }
   if (message.event.type === 'process_exit') claudeSessionSources.delete(message.agentId)
 })
+
+// w6/errors
+import { NotifyApi, type MorzNotifyApi, type NotifyItem } from '../shared/notify'
+
+const notifyApi: MorzNotifyApi = {
+  emit: (item: NotifyItem) => ipcRenderer.send(NotifyApi.emit, item),
+  list: (): Promise<NotifyItem[]> => ipcRenderer.invoke(NotifyApi.list),
+  markRead: (id) => ipcRenderer.send(NotifyApi.markRead, id),
+  dismiss: (id) => ipcRenderer.send(NotifyApi.dismiss, id),
+  action: (id, actionId) => ipcRenderer.send(NotifyApi.action, { id, actionId }),
+  onPushed: (callback) => {
+    const listener = (_event: unknown, item: NotifyItem): void => callback(item)
+    ipcRenderer.on(NotifyApi.pushed, listener)
+    return () => ipcRenderer.off(NotifyApi.pushed, listener)
+  },
+  onAction: (callback) => {
+    const listener = (_event: unknown, payload: { id: string; actionId: string }): void => callback(payload)
+    ipcRenderer.on(NotifyApi.action, listener)
+    return () => ipcRenderer.off(NotifyApi.action, listener)
+  }
+}
+
+api.notify = notifyApi
+contextBridge.exposeInMainWorld('morz', api)
+// end w6/errors

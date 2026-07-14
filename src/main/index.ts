@@ -532,3 +532,8 @@ app.whenReady().then(() => registerCommitIpc(ipcMain))
 // w5/cost
 import { registerCostMeterIpc } from './orchestrator/cost-meter'
 app.whenReady().then(() => registerCostMeterIpc())
+
+// w6/errors
+import { registerNotifyCenter } from './services/notify-center'
+registerNotifyCenter()
+// end w6/errors

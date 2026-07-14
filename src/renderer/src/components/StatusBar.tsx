@@ -5,6 +5,7 @@ import { colors, statusColor } from '@/lib/tokens'
 import { useCostStore } from '@/store/costStore'
 import type { CostRunMeter, CostUsageTotals } from '@shared/ipc'
 import { ModeDialCompact } from './ModeDialCompact'
+import { NotificationCenter } from './NotificationCenter'
 
 interface StatusBarProps {
   onOpenCommit?: () => void
@@ -74,6 +75,9 @@ export function StatusBar({ onOpenCommit }: StatusBarProps): JSX.Element {
         <Count color={statusColor.done} label="1 done" />
 
         <div className="ml-auto flex min-w-0 items-center gap-3">
+          {/* w6/errors: persistent background notices */}
+          <NotificationCenter />
+          {/* end w6/errors */}
           <SessionMeter usage={snapshot?.session ?? null} />
           <RunMeter run={snapshot?.activeRun ?? null} />
           <span className="h-3 w-px" style={{ background: 'var(--color-line)' }} />
