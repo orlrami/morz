@@ -529,3 +529,6 @@ app.whenReady().then(() => registerDodIpc())
 // w5/commit
 import { registerCommitIpc } from './services/commit-service'
 app.whenReady().then(() => registerCommitIpc(ipcMain))
+// w5/cost
+import { registerCostMeterIpc } from './orchestrator/cost-meter'
+app.whenReady().then(() => registerCostMeterIpc())

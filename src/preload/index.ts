@@ -267,3 +267,85 @@ const commitApi: CommitBridge = {
   suggestMessage: (root) => ipcRenderer.invoke(CommitApi.suggestMessage, root)
 }
 contextBridge.exposeInMainWorld('morzCommit', commitApi)
+// w5/cost
+import {
+  CostApi as CostChannels,
+  type CostBreach,
+  type CostBridge,
+  type CostSnapshot,
+  type CostTestTrackInput,
+  type CostUsageSample
+} from '../shared/ipc'
+
+const costApi: CostBridge = {
+  snapshot: (): Promise<CostSnapshot> => ipcRenderer.invoke(CostChannels.snapshot),
+  resume: (runId): Promise<CostSnapshot> => ipcRenderer.invoke(CostChannels.resume, runId),
+  stop: (runId): Promise<CostSnapshot> => ipcRenderer.invoke(CostChannels.stop, runId),
+  onUpdated: (callback) => {
+    const listener = (_event: unknown, snapshot: CostSnapshot): void => callback(snapshot)
+    ipcRenderer.on(CostChannels.updated, listener)
+    return () => ipcRenderer.off(CostChannels.updated, listener)
+  },
+  onBreach: (callback) => {
+    const listener = (_event: unknown, breach: CostBreach): void => callback(breach)
+    ipcRenderer.on(CostChannels.breach, listener)
+    return () => ipcRenderer.off(CostChannels.breach, listener)
+  }
+}
+
+if (process.env.MORZ_E2E === '1') {
+  costApi.testTrack = (input: CostTestTrackInput): Promise<void> =>
+    ipcRenderer.invoke(CostChannels.testTrack, input)
+}
+
+contextBridge.exposeInMainWorld('morzCost', costApi)
+
+function claudeUsage(event: ClaudeEvent): CostUsageSample | null {
+  if (event.type === 'meter') {
+    const input = typeof event.inputTokens === 'number' ? event.inputTokens : 0
+    const output = typeof event.outputTokens === 'number' ? event.outputTokens : 0
+    if (input === 0 && output === 0) return null
+    return { tokens: input + output, mode: 'total' }
+  }
+  if (event.type !== 'result') return null
+  const sample: CostUsageSample = { mode: 'total' }
+  if (typeof event.total_cost_usd === 'number') sample.usd = event.total_cost_usd
+  if (event.usage && typeof event.usage === 'object') {
+    const usage = event.usage as Record<string, unknown>
+    const keys = [
+      'input_tokens',
+      'output_tokens',
+      'cache_creation_input_tokens',
+      'cache_read_input_tokens'
+    ]
+    let total = 0
+    let seen = false
+    for (const key of keys) {
+      if (typeof usage[key] === 'number') {
+        total += usage[key]
+        seen = true
+      }
+    }
+    if (seen) sample.tokens = total
+  }
+  return sample.usd == null && sample.tokens == null ? null : sample
+}
+
+// Ordinary, non-dispatch lanes have no runId. The dispatcher calls
+// costMeter.track(runId, agentId, usage) directly for run-owned lanes.
+const claudeSessionSources = new Map<string, string>()
+ipcRenderer.on(ClaudeApi.event, (_event, message: { agentId: string; event: ClaudeEvent }) => {
+  if (message.event.type === 'system' && message.event.subtype === 'init') {
+    const sessionId = message.event.session_id
+    if (typeof sessionId === 'string' && sessionId) {
+      claudeSessionSources.set(message.agentId, `claude:${sessionId}`)
+    }
+    return
+  }
+  const usage = claudeUsage(message.event)
+  if (usage) {
+    usage.source = claudeSessionSources.get(message.agentId) ?? 'claude'
+    ipcRenderer.send(CostChannels.trackAdapter, { agentId: message.agentId, usage })
+  }
+  if (message.event.type === 'process_exit') claudeSessionSources.delete(message.agentId)
+})
