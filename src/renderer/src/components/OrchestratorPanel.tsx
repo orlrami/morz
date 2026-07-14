@@ -11,6 +11,7 @@ import { useLaneStore } from '@/store/laneStore'
 import { useSpaceStore } from '@/store/spaceStore'
 import { ApprovalChip } from './ApprovalChip'
 import { AmendmentCard, PlanCard } from './PlanCard'
+import { RunsPanel } from './RunsPanel'
 
 /*
  * Orchestrator side panel = the live blackboard (0.0.2, w4/handoff).
@@ -81,6 +82,7 @@ function Header({ subtitle }: { subtitle: string }): JSX.Element {
 
 /* All bus access lives below this line, unmounted in Manual. */
 function LiveBlackboard({ showPlanner }: { showPlanner: boolean }): JSX.Element {
+  const [section, setSection] = useState<'blackboard' | 'runs'>('blackboard')
   const { tasks, messages, approvals, live, start, respondApproval, simulateHandoff } =
     useBusStore()
   const lanes = useLaneStore((s) => s.lanes)
@@ -105,8 +107,45 @@ function LiveBlackboard({ showPlanner }: { showPlanner: boolean }): JSX.Element 
 
   return (
     <>
-      <Header subtitle={subtitle} />
+      <Header subtitle={section === 'runs' ? 'live runs' : subtitle} />
 
+      <div
+        className="grid grid-cols-2 border-b p-1"
+        style={{ borderColor: 'var(--color-line)' }}
+        role="tablist"
+        aria-label="Orchestrator views"
+      >
+        {(['blackboard', 'runs'] as const).map((item) => {
+          const active = section === item
+          const label = item === 'blackboard' ? 'Blackboard' : 'Runs'
+          return (
+            <button
+              key={item}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              aria-controls={`orchestrator-${item}`}
+              onClick={() => setSection(item)}
+              className="rounded-md px-2 py-1 text-[10px] font-semibold"
+              style={{
+                background: active ? colors.card : 'transparent',
+                color: active ? colors.quartz : colors.quartzDim
+              }}
+            >
+              {label}
+            </button>
+          )
+        })}
+      </div>
+
+      {section === 'runs' && (
+        <div id="orchestrator-runs" role="tabpanel" className="flex min-h-0 flex-1">
+          <RunsPanel />
+        </div>
+      )}
+
+      {section === 'blackboard' && (
+        <div id="orchestrator-blackboard" role="tabpanel" className="flex min-h-0 flex-1 flex-col">
       {showPlanner && <PlannerFlow />}
 
       {/* pending approvals — the Assisted propose-then-approve gate */}
@@ -159,6 +198,8 @@ function LiveBlackboard({ showPlanner }: { showPlanner: boolean }): JSX.Element 
             <IconFlask size={12} stroke={1.75} />
             dev: simulate handoff{lanes[0] ? ` → ${lanes[0].agentId}` : ''}
           </button>
+        </div>
+      )}
         </div>
       )}
     </>
