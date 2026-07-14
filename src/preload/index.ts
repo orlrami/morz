@@ -352,3 +352,28 @@ ipcRenderer.on(ClaudeApi.event, (_event, message: { agentId: string; event: Clau
   }
   if (message.event.type === 'process_exit') claudeSessionSources.delete(message.agentId)
 })
+
+// w6/assistant — APPEND-ONLY: optional assistant proposal bridge
+import {
+  AssistantApi as AssistantChannels,
+  type AssistantBridge,
+  type AssistantConnectionStatus,
+  type AssistantProvider,
+  type StoredSpawnPlan
+} from '../shared/ipc'
+
+const assistantApi: AssistantBridge = {
+  listProviders: (): Promise<AssistantProvider[]> =>
+    ipcRenderer.invoke(AssistantChannels.listProviders),
+  status: (): Promise<AssistantConnectionStatus> => ipcRenderer.invoke(AssistantChannels.status),
+  setEnabled: (enabled): Promise<AssistantConnectionStatus> =>
+    ipcRenderer.invoke(AssistantChannels.setEnabled, enabled),
+  connect: (providerId): Promise<AssistantConnectionStatus> =>
+    ipcRenderer.invoke(AssistantChannels.connect, providerId),
+  disconnect: (): Promise<AssistantConnectionStatus> =>
+    ipcRenderer.invoke(AssistantChannels.disconnect),
+  propose: (goal, spaceRoot): Promise<StoredSpawnPlan> =>
+    ipcRenderer.invoke(AssistantChannels.propose, { goal, spaceRoot })
+}
+
+contextBridge.exposeInMainWorld('morzAssistant', assistantApi)
