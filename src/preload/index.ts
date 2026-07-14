@@ -90,6 +90,13 @@ const api: MorzApi = {
     detect: () => ipcRenderer.invoke(EditorApi.detectEditors),
     openExternal: (editor, path, line, col) =>
       ipcRenderer.send(EditorApi.openExternal, { editor, path, line, col })
+  },
+  // w4/organizer
+  organizer: {
+    audit: (root) => ipcRenderer.invoke('organizer:audit', root),
+    propose: (root) => ipcRenderer.invoke('organizer:propose', root),
+    explain: (ruleId) => ipcRenderer.invoke('organizer:explain', ruleId),
+    apply: (root, planHash) => ipcRenderer.invoke('organizer:apply', { root, planHash })
   }
 }
 
