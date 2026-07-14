@@ -28,7 +28,10 @@ test('live Claude planner produces, re-hashes, approves, and dispatches a SpawnP
 
     await card.getByRole('button', { name: 'Approve & Run' }).click()
     await expect(card.getByText('APPROVED', { exact: true })).toBeVisible()
-    await expect(page.getByText(/^Run stub-/)).toBeVisible()
+    // Integration wired the REAL dispatcher (was a LoggingDispatchStub): approve
+    // now registers the plan in the dispatcher store and spawns a real run, so
+    // the run id is a UUID, not the old `stub-` prefix.
+    await expect(page.getByText(/^Run [0-9a-f-]{8}/i)).toBeVisible()
   } finally {
     await closeMorz(morz.app)
   }
