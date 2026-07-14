@@ -486,4 +486,40 @@ export interface MorzRunApi {
 }
 export interface MorzApi {
   run?: MorzRunApi
+// w5/reviewer
+export type ReviewAuthor = 'claude' | 'codex'
+export type ReviewSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info'
+
+export interface ReviewFinding {
+  severity: ReviewSeverity
+  file: string
+  line: number
+  title: string
+  evidence: string
+  suggestedFix?: string
+}
+
+export interface ReviewRunInput {
+  cwd: string
+  baseRef: string
+  headRef: string
+  author: ReviewAuthor
+}
+
+export interface ReviewRunResult extends ReviewRunInput {
+  id: string
+  reviewer: ReviewAuthor
+  sameModelReview: boolean
+  findings: ReviewFinding[]
+  createdAt: string
+}
+
+export const ReviewApi = {
+  run: 'review:run',
+  changed: 'review:changed'
+} as const
+
+export interface ReviewerBridge {
+  run(input: ReviewRunInput): Promise<ReviewRunResult>
+  onChanged(callback: (result: ReviewRunResult) => void): () => void
 }
