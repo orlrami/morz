@@ -389,3 +389,63 @@ export interface OrganizerApi {
   apply(root: string, planHash: string): Promise<OrganizerApplyResult>
 }
 export interface MorzApi { organizer: OrganizerApi }
+
+// w5/cost
+export type CostCapKind = 'usd' | 'tokens'
+export interface CostCaps {
+  maxUsd: number | null
+  maxTokens: number | null
+}
+export interface CostUsageSample {
+  usd?: number | null
+  tokens?: number | null
+  /** Dispatcher samples are deltas; adapter samples report running totals. */
+  mode?: 'delta' | 'total'
+  source?: string
+  /** Optional replay key; duplicate samples with the same key are ignored. */
+  sampleId?: string
+}
+export interface CostUsageTotals {
+  usd: number | null
+  tokens: number | null
+}
+export interface CostBreach {
+  runId: string
+  kind: CostCapKind
+  value: number
+  cap: number
+}
+export interface CostRunMeter {
+  runId: string
+  usage: CostUsageTotals
+  caps: CostCaps
+  breach: CostBreach | null
+}
+export interface CostSnapshot {
+  session: CostUsageTotals
+  activeRun: CostRunMeter | null
+}
+export interface CostTestTrackInput {
+  runId: string
+  agentId: string
+  usage: CostUsageSample
+  caps?: CostCaps
+}
+export const CostApi = {
+  snapshot: 'cost:snapshot',
+  updated: 'cost:updated',
+  breach: 'cost-breach',
+  resume: 'cost:resume',
+  stop: 'cost:stop',
+  trackAdapter: 'cost:track-adapter',
+  testTrack: 'cost:test-track'
+} as const
+export interface CostBridge {
+  snapshot(): Promise<CostSnapshot>
+  resume(runId: string): Promise<CostSnapshot>
+  stop(runId: string): Promise<CostSnapshot>
+  onUpdated(callback: (snapshot: CostSnapshot) => void): () => void
+  onBreach(callback: (breach: CostBreach) => void): () => void
+  /** Dev-only; absent unless MORZ_E2E=1 in both preload and Main. */
+  testTrack?(input: CostTestTrackInput): Promise<void>
+}
