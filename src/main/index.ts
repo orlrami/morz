@@ -485,3 +485,7 @@ app.whenReady().then(() => registerObsidianIpc(ipcMain))
 // w4/organizer
 import { registerOrganizerIpc } from './organizer'
 registerOrganizerIpc(ipcMain)
+
+// w5/commit
+import { registerCommitIpc } from './services/commit-service'
+app.whenReady().then(() => registerCommitIpc(ipcMain))

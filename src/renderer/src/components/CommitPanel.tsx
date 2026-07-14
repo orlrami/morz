@@ -1,184 +1,450 @@
-import { useState } from 'react'
-import { motion } from 'framer-motion'
-import { IconSparkles, IconGitCommit, IconPlus, IconMinus } from '@tabler/icons-react'
-import { changedFiles, limiterDiff, cliTint } from '@/lib/mock'
+import { useEffect, useMemo } from 'react'
+import {
+  IconAlertCircle,
+  IconFileDiff,
+  IconGitCommit,
+  IconLoader2,
+  IconMinus,
+  IconPlus,
+  IconRefresh,
+  IconSparkles,
+  IconTrash
+} from '@tabler/icons-react'
+import type { GitFile } from '@shared/ipc'
 import { colors } from '@/lib/tokens'
-import { staggerContainer, staggerItem, springs } from '@/lib/springs'
+import { useCommitStore } from '@/store/commitStore'
+import { useModeStore } from '@/store/modeStore'
+import { useSpaceStore } from '@/store/spaceStore'
 
-const CHANGE_COLOR: Record<string, string> = {
-  M: colors.warning,
-  A: colors.done,
-  D: colors.error
+interface DiffHunk {
+  heading: string
+  lines: string[]
+  patch: string
 }
 
-/*
- * LazyGit-style commit surface, desktop-native:
- * unstaged above / staged below (the whole "is this ready?" answer),
- * click-to-stage hunks in the diff, AI message on the staged diff only.
- */
+interface ParsedDiff {
+  header: string[]
+  hunks: DiffHunk[]
+}
+
+function parseDiff(diff: string): ParsedDiff {
+  if (!diff) return { header: [], hunks: [] }
+  const lines = diff.replace(/\r\n/g, '\n').split('\n')
+  const firstHunk = lines.findIndex((line) => line.startsWith('@@'))
+  if (firstHunk < 0) return { header: lines.filter(Boolean), hunks: [] }
+  const header = lines.slice(0, firstHunk)
+  const hunks: DiffHunk[] = []
+  let cursor = firstHunk
+  while (cursor < lines.length) {
+    const next = lines.findIndex((line, index) => index > cursor && line.startsWith('@@'))
+    const end = next < 0 ? lines.length : next
+    const hunkLines = lines.slice(cursor, end)
+    hunks.push({
+      heading: hunkLines[0],
+      lines: hunkLines.slice(1),
+      patch: `${[...header, ...hunkLines].join('\n')}\n`
+    })
+    if (next < 0) break
+    cursor = next
+  }
+  return { header, hunks }
+}
+
+function isStaged(file: GitFile): boolean {
+  return file.index !== '.' && file.index !== '?'
+}
+
+function isUnstaged(file: GitFile): boolean {
+  return file.worktree !== '.' || file.index === '?'
+}
+
+function statusCode(file: GitFile, staged: boolean): string {
+  const code = staged ? file.index : file.worktree
+  return code === '?' ? 'U' : code
+}
+
+function statusColor(code: string): string {
+  if (code === 'A' || code === 'U') return colors.done
+  if (code === 'D') return colors.error
+  return colors.warning
+}
+
 export function CommitPanel(): JSX.Element {
-  const [message, setMessage] = useState('')
-  const unstaged = changedFiles.filter((f) => !f.staged)
-  const staged = changedFiles.filter((f) => f.staged)
+  const root = useSpaceStore((state) => state.spaces[0]?.root ?? '')
+  const mode = useModeStore((state) => state.mode)
+  const {
+    files,
+    selectedPath,
+    diff,
+    log,
+    message,
+    loading,
+    busy,
+    error,
+    setMessage,
+    refresh,
+    selectFile,
+    stageFile,
+    unstageFile,
+    stageHunk,
+    discardFile,
+    createCommit,
+    suggestMessage
+  } = useCommitStore()
+
+  useEffect(() => {
+    void refresh(root)
+  }, [refresh, root])
+
+  const unstaged = useMemo(() => files.filter(isUnstaged), [files])
+  const staged = useMemo(() => files.filter(isStaged), [files])
+  const aiAllowed = mode !== 'manual'
+  const working = busy !== null
+
+  const confirmDiscard = (path: string): void => {
+    if (!window.confirm(`Discard all unstaged changes in ${path}? This cannot be undone.`)) return
+    void discardFile(root, path, true)
+  }
 
   return (
-    <section className="flex min-w-0 flex-1" style={{ background: colors.page }} aria-label="Commit">
-      {/* file lists */}
-      <div className="flex w-[280px] shrink-0 flex-col border-r" style={{ borderColor: 'var(--color-line)' }}>
-        <FileGroup title={`Unstaged — ${unstaged.length}`} files={unstaged} dim />
-        <div className="border-t" style={{ borderColor: 'var(--color-line-strong)' }} />
-        <FileGroup title={`Staged — ${staged.length} · ready to commit`} files={staged} />
+    <section
+      className="grid min-h-0 min-w-0 flex-1 grid-cols-[minmax(180px,0.85fr)_minmax(230px,1fr)_minmax(0,2fr)]"
+      style={{ background: colors.page }}
+      aria-label="Commit"
+    >
+      <FileColumn
+        title="Unstaged"
+        files={unstaged}
+        staged={false}
+        selectedPath={selectedPath}
+        busy={busy}
+        onSelect={(path) => void selectFile(root, path)}
+        onPrimary={(path) => void stageFile(root, path)}
+        onDiscard={confirmDiscard}
+      />
 
-        {/* message + actions */}
-        <div className="mt-auto border-t p-3" style={{ borderColor: 'var(--color-line)' }}>
-          <div className="relative">
-            <textarea
-              value={message}
-              onChange={(e) => setMessage(e.target.value)}
-              placeholder="Commit message…"
-              rows={3}
-              className="w-full resize-none rounded-[10px] border bg-transparent p-2.5 pr-9 text-xs outline-none placeholder:text-[rgba(238,230,217,0.35)]"
-              style={{ borderColor: 'var(--color-line-strong)', color: colors.quartz }}
-            />
+      <div className="flex min-h-0 flex-col border-r" style={{ borderColor: 'var(--color-line)' }}>
+        <FileColumnContent
+          title="Staged"
+          files={staged}
+          staged
+          selectedPath={selectedPath}
+          busy={busy}
+          onSelect={(path) => void selectFile(root, path)}
+          onPrimary={(path) => void unstageFile(root, path)}
+        />
+
+        <div className="border-t p-3" style={{ borderColor: 'var(--color-line)' }}>
+          <label
+            htmlFor="commit-message"
+            className="mb-1.5 block text-[9.5px] font-semibold uppercase tracking-[0.12em]"
+            style={{ color: colors.quartzDim }}
+          >
+            Commit message
+          </label>
+          <textarea
+            id="commit-message"
+            value={message}
+            onChange={(event) => setMessage(event.target.value)}
+            placeholder="type(scope): summary"
+            rows={3}
+            className="w-full resize-none rounded-[10px] border bg-transparent p-2.5 text-xs outline-none transition-shadow focus:ring-2"
+            style={{
+              borderColor: 'var(--color-line-strong)',
+              color: colors.quartz,
+              background: colors.panel,
+              ['--tw-ring-color' as string]: 'rgba(203,162,90,0.35)'
+            }}
+          />
+          <div className="mt-2 flex gap-2">
+            {aiAllowed && (
+              <button
+                type="button"
+                onClick={() => void suggestMessage(root)}
+                disabled={working || staged.length === 0}
+                className="flex cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[10.5px] disabled:cursor-not-allowed disabled:opacity-40"
+                style={{ borderColor: 'var(--color-line-strong)', color: colors.bronzeHot }}
+                title="Suggest from the staged diff; you can edit it before committing"
+              >
+                {busy === 'suggest' ? (
+                  <IconLoader2 className="animate-spin" size={13} />
+                ) : (
+                  <IconSparkles size={13} stroke={1.6} />
+                )}
+                Suggest message
+              </button>
+            )}
             <button
-              className="absolute right-2 top-2 cursor-pointer rounded-md p-1 hover:bg-[#37332B]"
-              title="Generate message from the staged diff"
-              aria-label="Generate commit message"
-              style={{ color: colors.bronzeHot }}
-              onClick={() => setMessage('feat(api): add per-minute rate limiter with burst tests')}
+              type="button"
+              onClick={() => void createCommit(root)}
+              disabled={working || staged.length === 0 || !message.trim()}
+              className="ml-auto flex cursor-pointer items-center gap-1.5 rounded-lg px-3 py-1.5 text-[10.5px] font-semibold disabled:cursor-not-allowed disabled:opacity-40"
+              style={{ background: colors.bronze, color: colors.page }}
             >
-              <IconSparkles size={14} stroke={1.5} />
-            </button>
-          </div>
-          <div className="mt-2 flex gap-1.5">
-            <motion.button
-              whileHover={{ scale: 1.02 }}
-              transition={springs.snappy}
-              className="flex flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-[10px] px-3 py-1.5 text-xs font-semibold"
-              style={{
-                background: `linear-gradient(180deg, ${colors.bronzeHot}, ${colors.bronze})`,
-                color: '#241c0a',
-                fontFamily: 'var(--font-display)'
-              }}
-            >
-              <IconGitCommit size={13} stroke={2} />
+              {busy === 'commit' ? (
+                <IconLoader2 className="animate-spin" size={13} />
+              ) : (
+                <IconGitCommit size={13} stroke={2} />
+              )}
               Commit
-            </motion.button>
-            <button
-              className="cursor-pointer rounded-[10px] border px-2.5 py-1.5 text-[11px]"
-              style={{ borderColor: 'var(--color-line-strong)', color: colors.quartzDim }}
-              title="Amend the previous commit"
-            >
-              Amend
-            </button>
-            <button
-              className="cursor-pointer rounded-[10px] border px-2.5 py-1.5 text-[11px]"
-              style={{ borderColor: 'var(--color-line-strong)', color: colors.quartzDim }}
-              title="Commit without running hooks"
-            >
-              --no-verify
             </button>
           </div>
+        </div>
+
+        <div className="min-h-0 flex-1 border-t" style={{ borderColor: 'var(--color-line)' }}>
+          <div className="px-3 pb-1 pt-2 text-[9.5px] font-semibold uppercase tracking-[0.12em]" style={{ color: colors.quartzDim }}>
+            Recent commits
+          </div>
+          <ol className="max-h-full overflow-y-auto px-2 pb-2">
+            {log.map((entry) => (
+              <li key={entry.sha} className="flex gap-2 rounded-md px-1.5 py-1 text-[10px]">
+                <span className="shrink-0 font-mono" style={{ color: colors.bronzeHot }}>
+                  {entry.shortSha}
+                </span>
+                <span className="truncate" style={{ color: colors.quartzDim }} title={entry.subject}>
+                  {entry.subject}
+                </span>
+              </li>
+            ))}
+          </ol>
         </div>
       </div>
 
-      {/* diff with hunk staging */}
-      <div className="flex min-w-0 flex-1 flex-col">
-        <div
-          className="flex items-center gap-2 border-b px-3 py-2 font-mono text-[11px]"
+      <div className="flex min-h-0 min-w-0 flex-col">
+        <header
+          className="flex h-9 shrink-0 items-center gap-2 border-b px-3"
           style={{ borderColor: 'var(--color-line)', color: colors.quartzDim }}
         >
-          src/api/limiter.ts
-          <span className="rounded px-1 text-[9px] font-bold" style={{ color: CHANGE_COLOR.M }}>
-            M
+          <IconFileDiff size={14} stroke={1.5} style={{ color: colors.bronzeHot }} />
+          <span className="min-w-0 truncate font-mono text-[10.5px]">
+            {selectedPath ?? 'Select a changed file'}
           </span>
-          <span className="ml-auto text-[10px]">click a hunk header to stage / unstage it</span>
-        </div>
-        <motion.div
-          variants={staggerContainer}
-          initial="hidden"
-          animate="show"
-          className="flex-1 overflow-y-auto p-3 font-mono text-[11.5px] leading-relaxed"
-        >
-          {limiterDiff.map((line, i) =>
-            line.kind === 'hunk' ? (
-              <motion.button
-                key={i}
-                variants={staggerItem}
-                className="mb-1 mt-2 flex w-full cursor-pointer items-center gap-2 rounded-md border px-2 py-1 text-left text-[10.5px] transition-colors hover:border-[rgba(203,162,90,0.5)]"
-                style={{ borderColor: 'var(--color-line-strong)', color: colors.bronzeHot, background: colors.panel }}
-              >
-                <IconPlus size={11} stroke={2} />
-                {line.text}
-                <span className="ml-auto text-[9.5px]" style={{ color: colors.quartzDim }}>
-                  stage hunk
-                </span>
-              </motion.button>
-            ) : (
-              <motion.p
-                key={i}
-                variants={staggerItem}
-                className="whitespace-pre px-2"
-                style={{
-                  color:
-                    line.kind === 'add' ? colors.done : line.kind === 'del' ? colors.error : colors.quartzDim,
-                  background:
-                    line.kind === 'add'
-                      ? 'rgba(34,197,94,0.07)'
-                      : line.kind === 'del'
-                        ? 'rgba(239,68,68,0.07)'
-                        : 'transparent'
-                }}
-              >
-                {line.kind === 'add' ? '+ ' : line.kind === 'del' ? '- ' : '  '}
-                {line.text}
-              </motion.p>
-            )
+          <button
+            type="button"
+            onClick={() => void refresh(root)}
+            disabled={loading || working}
+            className="ml-auto cursor-pointer rounded-md p-1 disabled:opacity-40"
+            aria-label="Refresh commit status"
+            title="Refresh"
+          >
+            <IconRefresh className={loading ? 'animate-spin' : ''} size={13} />
+          </button>
+        </header>
+
+        {error && (
+          <div
+            role="alert"
+            className="m-3 flex items-start gap-2 rounded-lg border px-3 py-2 text-[10.5px]"
+            style={{ borderColor: `${colors.error}66`, background: `${colors.error}12`, color: colors.error }}
+          >
+            <IconAlertCircle className="mt-px shrink-0" size={13} />
+            <span>{error}</span>
+          </div>
+        )}
+
+        <div className="min-h-0 flex-1 overflow-auto p-3 font-mono text-[11px] leading-[1.55]">
+          {!diff && !loading && (
+            <div className="flex h-full items-center justify-center text-xs" style={{ color: colors.quartzDim }}>
+              No changed file selected
+            </div>
           )}
-        </motion.div>
+          {diff && (
+            <>
+              <DiffSection title="Staged" diff={diff.staged} />
+              <DiffSection
+                title="Unstaged"
+                diff={diff.unstaged}
+                onStageHunk={(patch) => void stageHunk(root, patch)}
+                disabled={working}
+              />
+              {!diff.staged && !diff.unstaged && (
+                <div className="flex h-full items-center justify-center text-xs" style={{ color: colors.quartzDim }}>
+                  No diff for this file
+                </div>
+              )}
+            </>
+          )}
+        </div>
       </div>
     </section>
   )
 }
 
-function FileGroup({
+function FileColumn(props: Parameters<typeof FileColumnContent>[0]): JSX.Element {
+  return (
+    <div className="flex min-h-0 flex-col border-r" style={{ borderColor: 'var(--color-line)' }}>
+      <FileColumnContent {...props} />
+    </div>
+  )
+}
+
+function FileColumnContent({
   title,
   files,
-  dim
+  staged,
+  selectedPath,
+  busy,
+  onSelect,
+  onPrimary,
+  onDiscard
 }: {
   title: string
-  files: typeof changedFiles
-  dim?: boolean
+  files: GitFile[]
+  staged: boolean
+  selectedPath: string | null
+  busy: string | null
+  onSelect(path: string): void
+  onPrimary(path: string): void
+  onDiscard?(path: string): void
 }): JSX.Element {
   return (
-    <div className="p-2">
-      <p className="px-1.5 pb-1 text-[9.5px] uppercase tracking-wider" style={{ color: colors.quartzDim }}>
+    <div className="flex min-h-0 flex-col">
+      <header
+        className="flex h-9 shrink-0 items-center border-b px-3 text-[9.5px] font-semibold uppercase tracking-[0.12em]"
+        style={{ borderColor: 'var(--color-line)', color: colors.quartzDim }}
+      >
         {title}
-      </p>
-      <ul className="space-y-px">
-        {files.map((f) => (
-          <li key={f.path}>
-            <button
-              className="flex w-full cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-left font-mono text-[11px] transition-colors hover:bg-[#37332B]"
-              style={{ color: dim ? colors.quartzDim : colors.quartz }}
-              title={`${f.staged ? 'Unstage' : 'Stage'} ${f.path} · changed by ${f.agent}`}
-            >
-              {f.staged ? (
-                <IconMinus size={10} stroke={2} style={{ color: colors.quartzDim }} />
-              ) : (
-                <IconPlus size={10} stroke={2} style={{ color: colors.done }} />
-              )}
-              <span className="truncate">{f.path}</span>
-              <span className="ml-auto flex items-center gap-1.5">
-                <span className="size-1.5 rounded-full" style={{ background: cliTint.codex }} title={f.agent} />
-                <span className="font-bold" style={{ color: CHANGE_COLOR[f.change], fontSize: 9 }}>
-                  {f.change}
-                </span>
-              </span>
-            </button>
+        <span className="ml-auto rounded-full px-1.5 py-px text-[9px]" style={{ background: colors.card, color: colors.quartz }}>
+          {files.length}
+        </span>
+      </header>
+      <ul className="min-h-0 overflow-y-auto p-2">
+        {files.map((file) => {
+          const selected = selectedPath === file.path
+          const code = statusCode(file, staged)
+          const actionBusy = busy?.endsWith(`:${file.path}`) ?? false
+          return (
+            <li key={file.path}>
+              <div
+                className="mb-0.5 flex w-full items-center gap-1 rounded-lg border px-1 py-0.5"
+                style={{
+                  borderColor: selected ? 'rgba(203,162,90,0.42)' : 'transparent',
+                  background: selected ? colors.card : 'transparent',
+                  color: selected ? colors.quartz : colors.quartzDim
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => onSelect(file.path)}
+                  className="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 px-1 py-1 text-left"
+                  title={file.path}
+                >
+                  <span className="w-3 shrink-0 text-center font-mono text-[9px] font-bold" style={{ color: statusColor(code) }}>
+                    {code}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate font-mono text-[10.5px]">{file.path}</span>
+                </button>
+                {onDiscard && (
+                  <button
+                    type="button"
+                    disabled={busy !== null}
+                    aria-label={`Discard ${file.path}`}
+                    title={`Discard unstaged changes in ${file.path}`}
+                    onClick={() => onDiscard(file.path)}
+                    className="cursor-pointer rounded p-1 opacity-60 hover:opacity-100 focus:opacity-100 disabled:cursor-not-allowed disabled:opacity-30"
+                    style={{ color: colors.error }}
+                  >
+                    <IconTrash size={11} stroke={1.7} />
+                  </button>
+                )}
+                <button
+                  type="button"
+                  disabled={busy !== null}
+                  aria-label={`${staged ? 'Unstage' : 'Stage'} ${file.path}`}
+                  title={`${staged ? 'Unstage' : 'Stage'} ${file.path}`}
+                  onClick={() => onPrimary(file.path)}
+                  className="cursor-pointer rounded p-1 opacity-70 hover:opacity-100 focus:opacity-100 disabled:cursor-not-allowed disabled:opacity-30"
+                  style={{ color: staged ? colors.quartzDim : colors.done }}
+                >
+                  {actionBusy ? (
+                    <IconLoader2 className="animate-spin" size={11} />
+                  ) : staged ? (
+                    <IconMinus size={11} stroke={2} />
+                  ) : (
+                    <IconPlus size={11} stroke={2} />
+                  )}
+                </button>
+              </div>
+            </li>
+          )
+        })}
+        {files.length === 0 && (
+          <li className="px-2 py-5 text-center text-[10px]" style={{ color: colors.quartzDim }}>
+            Nothing {staged ? 'staged' : 'unstaged'}
           </li>
-        ))}
+        )}
       </ul>
+    </div>
+  )
+}
+
+function DiffSection({
+  title,
+  diff,
+  onStageHunk,
+  disabled = false
+}: {
+  title: string
+  diff: string
+  onStageHunk?(patch: string): void
+  disabled?: boolean
+}): JSX.Element | null {
+  const parsed = useMemo(() => parseDiff(diff), [diff])
+  if (!diff) return null
+  return (
+    <section className="mb-5" aria-label={`${title} diff`}>
+      <div className="sticky top-0 z-10 mb-1 flex items-center gap-2 py-1" style={{ background: colors.page }}>
+        <span className="text-[9.5px] font-semibold uppercase tracking-[0.12em]" style={{ color: colors.quartzDim }}>
+          {title}
+        </span>
+        <span className="h-px flex-1" style={{ background: 'var(--color-line)' }} />
+      </div>
+      {parsed.header.map((line, index) => (
+        <DiffLine key={`header-${index}`} line={line} />
+      ))}
+      {parsed.hunks.map((hunk, index) => (
+        <div key={`${hunk.heading}-${index}`} className="mt-2">
+          <div
+            className="flex items-center rounded-md border px-2 py-1"
+            style={{ borderColor: 'var(--color-line-strong)', background: colors.panel, color: colors.bronzeHot }}
+          >
+            <span className="truncate">{hunk.heading}</span>
+            {onStageHunk && (
+              <button
+                type="button"
+                disabled={disabled}
+                onClick={() => onStageHunk(hunk.patch)}
+                className="ml-auto flex cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 text-[9px] disabled:cursor-not-allowed disabled:opacity-40"
+                style={{ background: colors.card, color: colors.done }}
+              >
+                <IconPlus size={10} stroke={2} />
+                Stage hunk
+              </button>
+            )}
+          </div>
+          <div className="mt-1 overflow-x-auto">
+            {hunk.lines.map((line, lineIndex) => (
+              <DiffLine key={lineIndex} line={line} />
+            ))}
+          </div>
+        </div>
+      ))}
+    </section>
+  )
+}
+
+function DiffLine({ line }: { line: string }): JSX.Element {
+  const added = line.startsWith('+') && !line.startsWith('+++')
+  const removed = line.startsWith('-') && !line.startsWith('---')
+  return (
+    <div
+      className="min-w-max whitespace-pre px-2"
+      style={{
+        color: added ? colors.done : removed ? colors.error : colors.quartzDim,
+        background: added ? 'rgba(34,197,94,0.07)' : removed ? 'rgba(239,68,68,0.07)' : 'transparent'
+      }}
+    >
+      {line || ' '}
     </div>
   )
 }
