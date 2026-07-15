@@ -41,11 +41,69 @@ import { registerFsIpc } from './services/fs-service'
 import { registerGitIpc } from './services/git-service'
 import { registerEditorIpc } from './services/editor-detect'
 import { registerClaudeIpc } from './adapters/claude'
+import { notify, registerNotifyCenter } from './services/notify-center'
 // w4/mcp — bus pipe server + tool handlers (SqliteBoardPort = the real board)
 import { startPipeServer, type BusPipeServer } from './bus/pipe-server'
 import { BUS_OPEN_FILE_CHANNEL, createToolHandlers } from './bus/tool-handlers'
 import { SqliteBoardPort } from './bus/board-port'
 import { registerHandoffIpc } from './bus/handoff' // w4/handoff
+
+// w7/errors-research — last-resort main-process error surface. Producer-level
+// handlers should still classify expected failures before they reach this path.
+let reportingMainFailure = false
+
+function mainFailureDetail(value: unknown): string {
+  const raw = value instanceof Error
+    ? value.message
+    : typeof value === 'string'
+      ? value
+      : 'An unknown main-process failure occurred.'
+  const clean = raw
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '')
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, 'Bearer [redacted]')
+    .replace(/\b(api[_-]?key|token|password|secret|authorization)\s*[:=]\s*(["'])[^"'\r\n]*\2/gi, '$1=[redacted]')
+    .replace(/\b(authorization)\s*[:=]\s*(?:Basic|Bearer|Digest|Negotiate|ApiKey)\s+[^\s,;]+/gi, '$1=[redacted]')
+    .replace(/\b(api[_-]?key|token|password|secret|authorization)\s*[:=]\s*[^\s,;]+/gi, '$1=[redacted]')
+    .replace(/\bhttps?:\/\/[^\s]+/gi, (candidate) => {
+      try {
+        const url = new URL(candidate)
+        return `${url.origin}${url.pathname}`
+      } catch {
+        return '[url]'
+      }
+    })
+    .replace(/\b[A-Za-z]:\\[^\r\n]*/g, '[path]')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return clean.slice(0, 300) || 'An unknown main-process failure occurred.'
+}
+
+function reportMainFailure(id: string, title: string, value: unknown): void {
+  if (reportingMainFailure) return
+  reportingMainFailure = true
+  try {
+    notify({
+      id,
+      level: 'error',
+      source: 'app',
+      title,
+      detail: mainFailureDetail(value)
+    })
+  } catch {
+    // Avoid recursively throwing from the last-resort failure path.
+  } finally {
+    reportingMainFailure = false
+  }
+}
+
+process.on('unhandledRejection', (reason) => {
+  reportMainFailure('app:unhandled-rejection', 'Background task failed', reason)
+})
+
+process.on('uncaughtException', (error) => {
+  reportMainFailure('app:uncaught-exception', 'Morz encountered an unexpected error', error)
+  app.exit(1)
+})
 
 /* ── PTY-host supervisor ─────────────────────────────────────── */
 
@@ -534,7 +592,6 @@ import { registerCostMeterIpc } from './orchestrator/cost-meter'
 app.whenReady().then(() => registerCostMeterIpc())
 
 // w6/errors
-import { registerNotifyCenter } from './services/notify-center'
 registerNotifyCenter()
 // end w6/errors
 // w6/assistant — APPEND-ONLY: optional assistant proposal source
