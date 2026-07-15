@@ -46,7 +46,17 @@ Brand tokens/fonts (Hanken Grotesk + Quicksand)/Signal logo/real icons adopted; 
 | Voice | ✅ | optional push-to-talk via user's local whisper exe; hidden when unconfigured |
 | **Browser + element-pick** | ❌ NOT DELIVERED | agent produced zero commits (2nd no-show, same as w4 organizer) — re-run in wave 9 |
 
-**NEXT — wave 9 (final before daily-drive):** browser+element-pick re-run; installer produce+install with brand icons; auto-update enable; dogfood pass.
+### Wave 9 (4 Sol agents) — merged. **E2E 92 passed + 6 live-gated. 0.0.4 COMPLETE.**
+| Deliverable | Status | Notes |
+|---|---|---|
+| Browser + element-pick | ✅ | WebContentsView + CDP pick → full ElementContext (selector/a11y/styles/screenshot/sourceLoc); send to critique/builder; view never bleeds over other panels |
+| Real spaces | ✅ | open ANY folder as a space (native picker); active root wired through terminals/explorer/git/commit/organizer; stale Phase-0 seed gone; missing roots marked unavailable |
+| Installer + updater | ✅ | branded 0.0.4 NSIS installer PROVEN installed+launched+uninstalled; electron-updater silent-off (private repo) w/ token/stub-feed support; release flow in BUILD.md |
+| Polish | ✅ | command palette drives the app for real (views/panes/lanes/settings/themes/sync); mock purge — real data or honest empty state everywhere; pill bar = live lanes + dispatched agents |
+
+**Integration:** Shell palette kept polish's action system with spaces' one-lane-per-SPACE gate; AgentPillBar took polish's real-data version.
+
+**STATE: 0.0.1→0.0.4 ALL SHIPPED. Morz is daily-drive ready — next: owner dogfoods (codes in Morz); fixes flow from real usage. Parked: remote app, signing, SaaS.**
 
 ## Previous target: **0.0.2 — "The Bus + Additions"** ([spec](../roadmap/0.0.2.md)) — COMPLETE
 
