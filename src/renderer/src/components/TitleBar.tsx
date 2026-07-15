@@ -1,5 +1,6 @@
 import { IconSearch } from '@tabler/icons-react'
 import { colors } from '@/lib/tokens'
+import { MorzSignal, MorzWordmark } from './Brand'
 
 interface TitleBarProps {
   onOpenPalette: () => void
@@ -16,20 +17,9 @@ export function TitleBar({ onOpenPalette }: TitleBarProps): JSX.Element {
         WebkitAppRegion: 'drag'
       } as React.CSSProperties}
     >
-      <div className="flex items-center gap-2">
-        <span
-          className="flex size-5 items-center justify-center rounded-md text-[11px] font-bold"
-          style={{
-            background: `linear-gradient(135deg, ${colors.bronzeHot}, #9a7226)`,
-            color: '#241c0a',
-            fontFamily: 'var(--font-display)'
-          }}
-        >
-          M
-        </span>
-        <span className="text-[13px] font-semibold" style={{ fontFamily: 'var(--font-display)' }}>
-          Morz
-        </span>
+      <div className="flex items-center gap-1.5" aria-label="Morz">
+        <MorzSignal className="h-[22px] w-[30px] shrink-0" />
+        <MorzWordmark className="text-[15px] leading-none" />
       </div>
 
       <nav className="flex items-end gap-1 self-end" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
