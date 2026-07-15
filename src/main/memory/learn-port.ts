@@ -86,13 +86,37 @@ export function createInMemoryMemoryPort(): InMemoryMemoryPort {
   }
 }
 
-/** Temporary wave-8 stub. Integration replaces this export with the real store port. */
-export const memoryPort = createInMemoryMemoryPort()
+/*
+ * INTEGRATED (wave-8 merge): the live port is backed by the REAL store
+ * (w8/memory-core) — markdown files + FTS index + approval-gated proposals.
+ * The in-memory port above remains for tests. MORZ_MEMORY_STUB=1 keeps the
+ * fixed e2e render (prevents environment-controlled prompt injection).
+ */
+import {
+  listMemoryProposals,
+  proposeMemory,
+  resolveMemoryProposal as storeResolveProposal
+} from './index'
+import { MemoryInjection as storeInjection } from './store'
 
-/** Temporary wave-8 resolver paired with the stub port's proposal state. */
-export function resolveMemoryProposal(id: string, approved: boolean): Promise<MemoryProposal> {
-  return memoryPort.resolveProposal(id, approved)
+export const memoryPort: MemoryPort = {
+  async propose(proposal) {
+    return proposeMemory(proposal)
+  },
+  render(opts) {
+    if (process.env.MORZ_MEMORY_STUB === '1') {
+      return '## How the user works\n\n- **Use pnpm instead of npm**'
+    }
+    return storeInjection.render(opts)
+  }
 }
+
+/** Resolve against the real store (approve materializes the entry on disk). */
+export function resolveMemoryProposal(id: string, approved: boolean): Promise<MemoryProposal> {
+  return Promise.resolve(storeResolveProposal(id, approved))
+}
+
+export { listMemoryProposals }
 
 function joinPreamble(preamble: string, prompt: string): string {
   const block = preamble.trim()
