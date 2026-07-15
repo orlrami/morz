@@ -8,6 +8,7 @@ import { themes, useThemeStore } from '@/lib/themes'
 import { ObsidianSettings } from './ObsidianSettings'
 import { AssistantSettings } from './AssistantSettings' // w6/assistant
 import { PulseSettings } from './PulseSettings' // w6/pulse
+import { MemorySettings } from './MemorySettings'
 
 type Tab = 'limits' | 'appearance' | 'control'
 
@@ -186,6 +187,7 @@ export function SettingsPanel(): JSX.Element {
             {/* // w4/obsidian */}<ObsidianSettings />
             {/* w6/assistant */}<AssistantSettings />
             {/* w6/pulse */}<PulseSettings />
+            <MemorySettings /> {/* // w8/memory-core */}
           </div>
         )}
       </div>
