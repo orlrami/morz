@@ -58,6 +58,9 @@ win:
       arch:
         - x64
 
+mac:
+  icon: resources/icon.icns
+
 nsis:
   oneClick: true
   perMachine: false
@@ -65,6 +68,8 @@ nsis:
   artifactName: ${name}-${version}-setup.${ext}
   shortcutName: ${productName}
   uninstallDisplayName: ${productName}
+  installerIcon: resources/icon.ico
+  uninstallerIcon: resources/icon.ico
   deleteAppDataOnUninstall: false
 
 # electron-updater feed config. Publishing stays manual/off for now
