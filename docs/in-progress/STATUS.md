@@ -32,7 +32,21 @@ Wave 5 (8 agents: 3 Fable + 5 GPT-5.6 Sol) merged. **E2E: 40 passed + 6 live-gat
 
 **Integration notes:** SettingsPanel hosts assistant+pulse mounts; single `window.morz` expose invariant held (notify attached before it); deduped NotifyItem import.
 
-**NEXT — wave 7: design-system adoption + deep error research.** Official Brand & Design System v1.0 delivered (see memory morz-brand-system). Adopt brand tokens/fonts/logos/icons; a dedicated agent does deep research on the remaining sync+design/console errors and fixes them.
+### Wave 7 — merged (brand adoption + error audit). E2E 62.
+Brand tokens/fonts (Hanken Grotesk + Quicksand)/Signal logo/real icons adopted; registry pagination false-failure root-caused + fixed; global error handlers + boundary; ERROR-AUDIT.md.
+
+## Current target: **0.0.4 — "Learns You"** ([spec](../roadmap/0.0.4.md))
+
+### Wave 8 (5 agents: 4 Sol + 1 Fable) — merged. **E2E 84 passed + 6 live-gated.**
+| Deliverable | Status | Notes |
+|---|---|---|
+| Learning-memory store | ✅ | markdown-per-entry (%APPDATA%\Morz\memory), scopes global/project/space/agent, FTS5 index, approval-gated proposals, MemorySettings UI |
+| Correction learning + injection | ✅ | deterministic correction detector (fingerprinted repeats → staged proposal w/ evidence), notify chip, approved memory prepended to every lane's first prompt + every dispatched promptSeed. Integration wired learner→real store (stub swap) |
+| Routing | ✅ | rules table (math→agy, review→codex, private→local), consult() MCP tool (untrusted-labeled), Ollama/LM Studio detect, RoutingSettings + plan suggestion chips |
+| Voice | ✅ | optional push-to-talk via user's local whisper exe; hidden when unconfigured |
+| **Browser + element-pick** | ❌ NOT DELIVERED | agent produced zero commits (2nd no-show, same as w4 organizer) — re-run in wave 9 |
+
+**NEXT — wave 9 (final before daily-drive):** browser+element-pick re-run; installer produce+install with brand icons; auto-update enable; dogfood pass.
 
 ## Previous target: **0.0.2 — "The Bus + Additions"** ([spec](../roadmap/0.0.2.md)) — COMPLETE
 
