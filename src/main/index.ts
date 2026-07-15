@@ -644,3 +644,7 @@ app.whenReady().then(() => registerVoiceIpc())
 import { registerDialogIpc } from './services/dialog-service'
 app.whenReady().then(() => registerDialogIpc(ipcMain))
 // end w9/spaces
+// w9/browser — append-only WebContentsView + CDP browser registration.
+import { registerBrowserIpc } from './services/browser-host'
+app.whenReady().then(() => registerBrowserIpc())
+// end w9/browser
