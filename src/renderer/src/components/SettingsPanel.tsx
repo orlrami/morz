@@ -11,6 +11,7 @@ import { PulseSettings } from './PulseSettings' // w6/pulse
 import { MemorySettings } from './MemorySettings'
 import { RoutingSettings } from './RoutingSettings' // w8/routing
 import { VoiceSettings } from './VoiceSettings'
+import { UpdateSettings } from './UpdateSettings'
 
 type Tab = 'limits' | 'appearance' | 'control'
 
@@ -192,6 +193,7 @@ export function SettingsPanel(): JSX.Element {
             <MemorySettings /> {/* // w8/memory-core */}
             {/* w8/routing */}<RoutingSettings />
             {/* // w8/voice */}<VoiceSettings />
+            {/* // w9/installer */}<UpdateSettings />
           </div>
         )}
       </div>

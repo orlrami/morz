@@ -531,3 +531,22 @@ const voiceBridge: VoiceBridge = {
 }
 
 contextBridge.exposeInMainWorld('morzVoice', voiceBridge)
+
+// w9/installer
+import {
+  UpdaterApi as UpdaterChannels,
+  type UpdaterBridge,
+  type UpdaterSnapshot
+} from '../shared/ipc'
+
+const updaterBridge: UpdaterBridge = {
+  status: (): Promise<UpdaterSnapshot> => ipcRenderer.invoke(UpdaterChannels.status),
+  check: (): Promise<UpdaterSnapshot> => ipcRenderer.invoke(UpdaterChannels.check),
+  onChanged: (callback) => {
+    const listener = (_event: unknown, value: UpdaterSnapshot): void => callback(value)
+    ipcRenderer.on(UpdaterChannels.changed, listener)
+    return () => ipcRenderer.off(UpdaterChannels.changed, listener)
+  }
+}
+
+contextBridge.exposeInMainWorld('morzUpdater', updaterBridge)

@@ -25,7 +25,8 @@ npm run build:win
 This runs `electron-vite build` then `electron-builder --win --publish never` and drops artifacts into `release/`:
 
 - `morz-<version>-setup.exe` — NSIS **one-click, per-user** installer (no admin prompt)
-- `latest.yml` + blockmap — electron-updater metadata (updates not enabled yet)
+- `morz-<version>-setup.exe.blockmap` — differential-update map
+- `latest.yml` — electron-updater metadata
 
 Install by running the setup exe. It installs to `%LOCALAPPDATA%\Programs\Morz` and creates Start Menu + desktop shortcuts. Uninstall via Windows Settings → Apps.
 
@@ -72,10 +73,25 @@ if ($uninstall.ExitCode -ne 0) {
 }
 ```
 
-This flow was verified on Windows x64 for Morz 0.1.0 on 2026-07-13. The
-installed app spawned PowerShell, emitted nonce-signed A/B/C/D OSC-133 marks,
-rendered green (`#22C55E`) and red (`#EF4444`) gutters, and uninstalled with
-exit code 0.
+This flow was re-verified against the **branded NSIS-installed artifact** on
+Windows x64 for Morz 0.0.4 on 2026-07-15:
+
+- `npm run build:win` exited 0 and produced the 102,164,377-byte installer,
+  `latest.yml`, and a 106,842-byte blockmap without rebuilding native modules.
+- Silent install (`/S`) exited 0 and installed
+  `%LOCALAPPDATA%\Programs\Morz\Morz.exe` with product version `0.0.4.0`.
+- The installed app opened a visible `Morz` window, rendered the Morz Signal
+  and Quicksand wordmark, mounted xterm, and spawned a real PowerShell prompt.
+- `echo hi` and `cmd /c exit 3` emitted nonce-signed OSC-133 completion marks;
+  the installed UI rendered success `rgb(127, 183, 126)` and failure
+  `rgb(217, 124, 106)` gutters.
+- Windows extracted the same Morz Signal icon from both the installer and
+  installed executable (PNG SHA-256
+  `F004A7C27641EFBE155F8F6223206CC53C5FFFF32B8D2DC1F19198D11CBA11F7`),
+  covering installer and taskbar icon branding.
+- The installed Settings panel showed `Version 0.0.4 · Stable channel` and the
+  private/no-token updater state remained silent-off.
+- Silent uninstall (`/S`) exited 0 and removed the install directory.
 
 ## Native modules
 
@@ -100,11 +116,49 @@ If terminals or the DB fail in a packaged build but work in dev, check that the 
 
 Uninstalling does **not** delete these (`deleteAppDataOnUninstall: false`).
 
-## Signing & updates (not yet)
+## Signing and automatic updates
 
-Builds are **UNSIGNED** for now — SmartScreen will warn on first run ("More info" → "Run anyway"). Plan: **Azure Trusted Signing** before wider distribution. Note the unsigned→signed switch breaks the electron-updater chain, so signing lands before auto-update is turned on.
+Builds are currently **UNSIGNED**. Windows SmartScreen is therefore expected to
+warn on first install/run (choose "More info" then "Run anyway" only when the
+installer came from the trusted Morz release). Signing must be established
+before wider distribution; changing from unsigned to signed installers can
+break an existing updater trust chain and must be release-tested explicitly.
 
-`electron-builder.yml` already carries the electron-updater GitHub-releases feed config (`publish: github`), but every build runs with `--publish never`; releases are manual until signing is in place.
+The updater waits 30 seconds after boot, then checks the fixed
+`orlrami/morz` GitHub repository visibility. If the repository is public, the
+normal anonymous GitHub release feed is enabled. While it is private, the
+updater is enabled only when `MORZ_UPDATE_TOKEN` is present in the Morz process
+environment. The token is captured by Main and removed from `process.env`
+before PTY/utility children start, so terminal sessions do not inherit it.
+Never put this token in source, `electron-builder.yml`, logs, or release assets.
+
+If the repository is private and no token is present, both the boot checker and
+manual IPC check stay silent-off: no authenticated updater request, no error
+notice, and no crash. Offline visibility/feed failures also fail closed; once
+updates are enabled, feed errors surface as an in-app warning.
+
+Available updates download in the background using the NSIS blockmap. The
+Notification Center records available, downloading, and ready states. The
+trusted **Restart to update** action calls `autoUpdater.quitAndInstall()`; Morz's
+existing `before-quit` handler still shuts down the tray-resident PTY host before
+the process exits.
+
+### Creating a release
+
+Set `package.json` to the release version first, then build and upload the
+installer, differential blockmap, and channel metadata together:
+
+```powershell
+npm run build:win
+gh release create vX.Y.Z release/*.exe release/*.exe.blockmap release/latest.yml
+```
+
+The tag must match the package version (`v0.0.4` for version `0.0.4`), and the
+release must be published rather than left as a draft. Installed clients on the
+stable channel then discover `latest.yml`, download the installer (differentially
+when possible), and surface the restart action through the Notification Center.
+Builds always use `--publish never`; `gh release create` is the intentional
+publication boundary.
 
 ## Tests
 

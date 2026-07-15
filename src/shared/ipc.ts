@@ -830,3 +830,36 @@ export interface VoiceBridge {
   testTranscription(): Promise<string | null>
   transcribe(audio: Uint8Array): Promise<string>
 }
+
+// w9/installer
+export type UpdaterStatus =
+  | 'disabled'
+  | 'idle'
+  | 'checking'
+  | 'available'
+  | 'downloading'
+  | 'ready'
+  | 'up-to-date'
+  | 'error'
+
+export interface UpdaterSnapshot {
+  version: string
+  channel: 'stable'
+  enabled: boolean
+  status: UpdaterStatus
+  detail: string
+  availableVersion?: string
+  progress?: number
+}
+
+export const UpdaterApi = {
+  status: 'updater:status',
+  check: 'updater:check',
+  changed: 'updater:changed'
+} as const
+
+export interface UpdaterBridge {
+  status(): Promise<UpdaterSnapshot>
+  check(): Promise<UpdaterSnapshot>
+  onChanged(callback: (snapshot: UpdaterSnapshot) => void): () => void
+}

@@ -639,3 +639,10 @@ app.whenReady().then(() => registerRoutingIpc())
 // w8/voice — append-only local Whisper registration.
 import { registerVoiceIpc } from './services/voice'
 app.whenReady().then(() => registerVoiceIpc())
+
+// w9/installer
+import { registerUpdater } from './services/updater'
+app.whenReady().then(() => {
+  registerUpdater()
+  tray?.setToolTip(`Morz ${app.getVersion()} — terminals keep running here`)
+})
