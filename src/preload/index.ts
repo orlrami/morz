@@ -443,3 +443,30 @@ if (process.env.MORZ_E2E === '1') {
 }
 
 contextBridge.exposeInMainWorld('morzPulse', pulseBridge)
+
+// w8/routing — append-only routing/settings bridge.
+import {
+  RoutingApi as RoutingChannels,
+  type RouteDecision,
+  type RouteOptions,
+  type RoutingBridge,
+  type RoutingRule,
+  type RoutingSnapshot,
+  type LocalModelStatus
+} from '../shared/ipc'
+
+const routingBridge: RoutingBridge = {
+  snapshot: (spaceRoot?: string): Promise<RoutingSnapshot> =>
+    ipcRenderer.invoke(RoutingChannels.snapshot, spaceRoot),
+  saveRules: (rules: RoutingRule[]): Promise<RoutingRule[]> =>
+    ipcRenderer.invoke(RoutingChannels.saveRules, rules),
+  setSpacePrivate: (spaceRoot: string, value: boolean): Promise<boolean> =>
+    ipcRenderer.invoke(RoutingChannels.setSpacePrivate, { spaceRoot, value }),
+  refreshLocalModels: (): Promise<LocalModelStatus[]> =>
+    ipcRenderer.invoke(RoutingChannels.refreshLocalModels),
+  route: (taskText: string, options: RouteOptions = {}): Promise<RouteDecision> =>
+    ipcRenderer.invoke(RoutingChannels.route, { taskText, options })
+}
+
+contextBridge.exposeInMainWorld('morzRouting', routingBridge)
+// end w8/routing
