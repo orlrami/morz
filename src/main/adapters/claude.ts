@@ -29,6 +29,24 @@ import type {
   AgentAdapter
 } from './types'
 
+// w8/memory-learn (a) — correction learning + staged proposal notification seam.
+import {
+  createMemoryLearner,
+  distillCorrectionsWithClaude,
+  formatMemoryProposalNoticeDetail,
+  type MemoryLearner
+} from '../memory/learner'
+import {
+  createMemorySessionPreamble,
+  memoryPort,
+  resolveMemoryProposal
+} from '../memory/learn-port'
+import {
+  dismissNotice,
+  notify,
+  registerNotifyAction
+} from '../services/notify-center'
+
 interface ClaudeProc {
   agentId: string
   child: ChildProcessWithoutNullStreams
@@ -41,11 +59,74 @@ interface ClaudeProc {
   /** Running totals captured from result events. */
   totalCostUsd: number
   controlSeq: number
+  // Rendered at start, consumed by the first user prompt.
+  applyMemoryPreamble: (prompt: string) => string
 }
 
 const procs = new Map<string, ClaudeProc>()
 /** requestId → pending can_use_tool context (input echoed back on allow). */
 const pendingPermissions = new Map<string, { agentId: string; input: unknown }>()
+
+// Feed lane turns, stage proposals, and wire save/dismiss actions.
+let activeMemoryLearner: MemoryLearner | null = null
+let memoryActionsRegistered = false
+const MEMORY_NOTICE_PREFIX = 'memory:proposal:'
+
+function getMemoryLearner(): MemoryLearner {
+  if (!activeMemoryLearner) {
+    activeMemoryLearner = createMemoryLearner({
+      port: memoryPort,
+      historyPath: join(app.getPath('appData'), 'Morz', 'memory-corrections.jsonl'),
+      distill: distillCorrectionsWithClaude,
+      onProposal: ({ proposal }) => {
+        notify({
+          id: `${MEMORY_NOTICE_PREFIX}${proposal.id}`,
+          level: 'info',
+          source: 'app',
+          title: `I noticed you prefer ${proposal.entry.title} — save as a rule?`,
+          detail: formatMemoryProposalNoticeDetail(proposal),
+          actions: [
+            { id: 'memory-proposal-save', label: 'Save rule' },
+            { id: 'memory-proposal-dismiss', label: 'Dismiss' }
+          ]
+        })
+      }
+    })
+  }
+  return activeMemoryLearner
+}
+
+function observeMemoryTurn(turn: Parameters<MemoryLearner['observeTurn']>[0]): void {
+  void getMemoryLearner().observeTurn(turn).catch((error) => {
+    console.warn('[morz] memory learner skipped a turn:', error)
+    notify({
+      id: 'app:memory-learner',
+      level: 'warning',
+      source: 'app',
+      title: 'Memory learning skipped a correction',
+      detail: 'The local learner could not safely stage this observation.'
+    })
+  })
+}
+
+function proposalIdFromNotice(noticeId: string): string | null {
+  return noticeId.startsWith(MEMORY_NOTICE_PREFIX)
+    ? noticeId.slice(MEMORY_NOTICE_PREFIX.length)
+    : null
+}
+
+function registerMemoryProposalActions(): void {
+  if (memoryActionsRegistered) return
+  memoryActionsRegistered = true
+  const resolve = (approved: boolean) => async (noticeId: string): Promise<void> => {
+    const proposalId = proposalIdFromNotice(noticeId)
+    if (!proposalId) return
+    await resolveMemoryProposal(proposalId, approved)
+    dismissNotice(noticeId)
+  }
+  registerNotifyAction('memory-proposal-save', resolve(true))
+  registerNotifyAction('memory-proposal-dismiss', resolve(false))
+}
 
 const CLAUDE_ARGS = [
   // stream-json only works in print mode (verified against claude 2.1.187)
@@ -169,6 +250,10 @@ function normalizeClaudeEvent(event: ClaudeEvent): AdapterEvent | null {
 function emit(agentId: string, event: ClaudeEvent): void {
   broadcast(ClaudeApi.event, { agentId, event })
   const normalized = normalizeClaudeEvent(event)
+  // Assistant side of the lane turn stream.
+  if (normalized?.type === 'message' && normalized.role === 'assistant') {
+    observeMemoryTurn({ laneId: agentId, role: 'assistant', text: normalized.text })
+  }
   if (normalized) for (const l of eventListeners) l(agentId, normalized)
 }
 
@@ -265,7 +350,19 @@ function start(opts: ClaudeStartOpts): { agentId: string } {
     model: null,
     capabilities: null,
     totalCostUsd: 0,
-    controlSeq: 0
+    controlSeq: 0,
+    // w8/memory-learn (b) — render at lane launch; never re-render/repeat per turn.
+    applyMemoryPreamble: (() => {
+      try {
+        return createMemorySessionPreamble(memoryPort, {
+          projectRoot: opts.cwd,
+          agentId: opts.agentId
+        }, Boolean(opts.resume))
+      } catch (error) {
+        console.warn('[morz] memory launch preamble unavailable:', error)
+        return (prompt: string) => prompt
+      }
+    })()
   }
   procs.set(opts.agentId, proc)
   child.stdout.on('data', (d: Buffer) => onStdout(proc, d))
@@ -290,6 +387,14 @@ function start(opts: ClaudeStartOpts): { agentId: string } {
 function send(agentId: string, text: string): void {
   const proc = procs.get(agentId)
   if (!proc) return
+  // Learn from the original user turn, inject only into turn one.
+  observeMemoryTurn({
+    laneId: agentId,
+    sessionId: proc.sessionId ?? undefined,
+    role: 'user',
+    text
+  })
+  text = proc.applyMemoryPreamble(text)
   writeLine(proc, {
     type: 'user',
     message: { role: 'user', content: [{ type: 'text', text }] }
@@ -375,6 +480,8 @@ export const claudeAdapter: AgentAdapter = {
 }
 
 export function registerClaudeIpc(): void {
+  // Trusted notification actions resolve staged writes.
+  registerMemoryProposalActions()
   ipcMain.handle(ClaudeApi.start, (_e, opts: ClaudeStartOpts) => start(opts))
   ipcMain.on(ClaudeApi.send, (_e, m: { agentId: string; text: string }) => send(m.agentId, m.text))
   ipcMain.on(ClaudeApi.interrupt, (_e, m: { agentId: string }) => interrupt(m.agentId))
