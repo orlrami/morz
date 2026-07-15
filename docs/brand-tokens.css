@@ -1,0 +1,57 @@
+/* Morz — Design Tokens v1.0 · morz.dev
+   Neutrals carry structure. Color carries meaning. */
+:root {
+  /* Brand neutrals */
+  --morz-graphite-page: #26241E;
+  --morz-graphite-panel: #2E2B24;
+  --morz-graphite-raised: #37332B;
+  --morz-quartz: #EEE6D9;
+  --morz-quartz-dim: rgba(238,230,217,.66);
+  --morz-quartz-faint: rgba(238,230,217,.40);
+  --morz-hairline: rgba(238,230,217,.09);
+
+  /* Accent — intent only */
+  --morz-bronze: #CBA25A;
+  --morz-gold: #E4BC77;
+
+  /* Status */
+  --morz-working: #6AA6D9;
+  --morz-blocked: #E4A94F;
+  --morz-done: #7FB77E;
+  --morz-error: #D97C6A;
+  --morz-warning: #E0904C;
+
+  /* Agent identity tints */
+  --morz-agent-claude: #E0904C;
+  --morz-agent-codex: #5FB39A;
+  --morz-agent-gemini: #6FA0D8;
+  --morz-agent-opencode: #A98BD1;
+
+  /* Type */
+  --morz-font-ui: 'Hanken Grotesk','Segoe UI',system-ui,sans-serif;
+  --morz-font-mono: 'JetBrains Mono','Cascadia Code',ui-monospace,monospace;
+  --morz-font-wordmark: 'Quicksand',sans-serif;
+
+  /* Radius */
+  --morz-radius-sm: 6px;  --morz-radius-md: 10px;
+  --morz-radius-lg: 16px; --morz-radius-pill: 999px;
+
+  /* Spacing — 4pt */
+  --morz-space-1: 4px;  --morz-space-2: 8px;  --morz-space-3: 12px;
+  --morz-space-4: 16px; --morz-space-6: 24px; --morz-space-8: 32px; --morz-space-12: 48px;
+
+  /* Elevation */
+  --morz-shadow-card: 0 8px 24px rgba(0,0,0,.35);
+  --morz-shadow-pop: 0 20px 50px rgba(0,0,0,.45);
+  --morz-glow-gold: 0 0 14px rgba(228,188,119,.7);
+
+  /* Focus */
+  --morz-focus-ring: 0 0 0 2px var(--morz-graphite-page), 0 0 0 4px var(--morz-gold);
+
+  /* Motion */
+  --morz-dur-fast: 120ms; --morz-dur-base: 180ms; --morz-dur-slow: 240ms;
+  --morz-ease: cubic-bezier(.2,.7,.2,1);
+
+  /* Z-index */
+  --morz-z-base: 0; --morz-z-panel: 10; --morz-z-overlay: 100; --morz-z-toast: 1000;
+}
