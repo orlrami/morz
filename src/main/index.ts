@@ -537,3 +537,6 @@ app.whenReady().then(() => registerCostMeterIpc())
 import { registerNotifyCenter } from './services/notify-center'
 registerNotifyCenter()
 // end w6/errors
+// w6/assistant — APPEND-ONLY: optional assistant proposal source
+import { registerAssistantIpc } from './assistant/bridge'
+app.whenReady().then(() => registerAssistantIpc())

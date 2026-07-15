@@ -646,3 +646,34 @@ export interface CostBridge {
   /** Dev-only; absent unless MORZ_E2E=1 in both preload and Main. */
   testTrack?(input: CostTestTrackInput): Promise<void>
 }
+
+// w6/assistant — APPEND-ONLY: bring-your-own assistant proposal source
+export type AssistantProviderKind = 'hosted' | 'local'
+export interface AssistantProvider {
+  id: string
+  name: string
+  kind: AssistantProviderKind
+  description: string
+}
+export type AssistantConnectionState = 'disconnected' | 'connecting' | 'connected' | 'error'
+export interface AssistantConnectionStatus {
+  state: AssistantConnectionState
+  providerId: string | null
+  detail?: string
+}
+export const AssistantApi = {
+  listProviders: 'assistant:list-providers',
+  status: 'assistant:status',
+  setEnabled: 'assistant:set-enabled',
+  connect: 'assistant:connect',
+  disconnect: 'assistant:disconnect',
+  propose: 'assistant:propose'
+} as const
+export interface AssistantBridge {
+  listProviders(): Promise<AssistantProvider[]>
+  status(): Promise<AssistantConnectionStatus>
+  setEnabled(enabled: boolean): Promise<AssistantConnectionStatus>
+  connect(providerId: string): Promise<AssistantConnectionStatus>
+  disconnect(): Promise<AssistantConnectionStatus>
+  propose(goal: string, spaceRoot: string): Promise<StoredSpawnPlan>
+}

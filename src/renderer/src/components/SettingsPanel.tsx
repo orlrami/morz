@@ -6,6 +6,7 @@ import { colors } from '@/lib/tokens'
 import { springs } from '@/lib/springs'
 import { themes, useThemeStore } from '@/lib/themes'
 import { ObsidianSettings } from './ObsidianSettings'
+import { AssistantSettings } from './AssistantSettings' // w6/assistant
 
 type Tab = 'limits' | 'appearance' | 'control'
 
@@ -182,6 +183,7 @@ export function SettingsPanel(): JSX.Element {
               ))}
             </div>
             {/* // w4/obsidian */}<ObsidianSettings />
+            {/* w6/assistant */}<AssistantSettings />
           </div>
         )}
       </div>
