@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
 import {
   IconTerminal2,
@@ -19,14 +19,14 @@ import { SpacesSidebar } from './SpacesSidebar'
 import { AgentPillBar } from './AgentPillBar'
 import { OrchestratorPanel } from './OrchestratorPanel'
 import { StatusBar } from './StatusBar'
-import { CommandPalette } from './CommandPalette'
+import { CommandPalette, type PaletteAction } from './CommandPalette'
 import { FileExplorer } from './FileExplorer'
 import { CommitPanel } from './CommitPanel'
 import { ReviewerPanel } from './ReviewerPanel'
 import { DagView } from './DagView'
 import { BrowserPanel } from './BrowserPanel'
 import { RemotePanel } from './RemotePanel'
-import { SettingsPanel } from './SettingsPanel'
+import { SettingsPanel, type SettingsTab } from './SettingsPanel'
 import { WorkshopPanel } from './WorkshopPanel'
 // w6/organizer-ui
 import { OrganizerPanel } from './OrganizerPanel'
@@ -38,8 +38,11 @@ import { serializeTerminal, useTerminal } from '@/hooks/useTerminal'
 import { emit, off, on } from '@/lib/app-events'
 import { colors } from '@/lib/tokens'
 import { springs } from '@/lib/springs'
+import { themes, useThemeStore } from '@/lib/themes'
+import { useCatalogStore } from '@/store/catalogStore'
 import { claudeAllowed, useModeStore } from '@/store/modeStore'
 import { useLaneStore } from '@/store/laneStore'
+import { getRunApi, hydrateRuns } from '@/store/runsStore'
 import {
   clampRatio,
   newPaneId,
@@ -162,10 +165,14 @@ export function Shell(): JSX.Element {
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [explorerOpen, setExplorerOpen] = useState(initial.explorer)
   const [view, setView] = useState<CenterView>(initial.view)
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>('limits')
+  const [settingsRevision, setSettingsRevision] = useState(0)
 
   const mode = useModeStore((s) => s.mode)
   const root = useLayoutStore((s) => s.root)
   const hydrated = useLayoutStore((s) => s.hydrated)
+  const panes = useLayoutStore((s) => s.panes)
+  const activePaneId = useLayoutStore((s) => s.activePaneId)
   const lanes = useLaneStore((s) => s.lanes)
   const spacesReady = useSpaceStore((state) => state.ready)
   const spaceRoot = useSpaceStore(selectActiveSpaceRoot)
@@ -298,10 +305,145 @@ export function Shell(): JSX.Element {
     [spaceRoot]
   )
 
-  const paletteExtras =
-    claudeAllowed(mode) && activeLanes.length === 0
-      ? [{ id: 'spawn-claude-lane', group: 'spawn', label: 'spawn: Claude lane', hint: 'assisted' }]
-      : []
+  const paletteActions = useMemo<PaletteAction[]>(() => {
+    const actions: PaletteAction[] = VIEWS.map((item) => ({
+      id: `view-${item.id}`,
+      group: 'view',
+      label: `view: ${item.label.toLowerCase()}`
+    }))
+
+    actions.push(
+      { id: 'view-workshop', group: 'view', label: 'view: workshop' },
+      { id: 'view-settings', group: 'view', label: 'view: settings' },
+      { id: 'toggle-explorer', group: 'view', label: 'view: toggle file explorer', hint: 'Ctrl+B' },
+      { id: 'spawn-terminal', group: 'spawn', label: 'spawn: terminal pane' },
+      { id: 'settings-limits', group: 'settings', label: 'settings: limits & usage' },
+      { id: 'settings-appearance', group: 'settings', label: 'settings: appearance' },
+      { id: 'settings-control', group: 'settings', label: 'settings: control' },
+      { id: 'settings-memory', group: 'settings', label: 'settings: open memory settings' }
+    )
+
+    if (activePaneId && panes.some((pane) => pane.paneId === activePaneId)) {
+      actions.push(
+        { id: 'split-pane-right', group: 'spawn', label: 'spawn: split focused pane right' },
+        { id: 'split-pane-down', group: 'spawn', label: 'spawn: split focused pane down' },
+        { id: 'close-focused-pane', group: 'view', label: 'view: close focused pane' }
+      )
+    }
+
+    if (
+      claudeAllowed(mode) &&
+      activeLanes.length === 0 && // one lane per SPACE (w9/spaces semantics)
+      typeof window.morz?.claude?.start === 'function'
+    ) {
+      actions.push({
+        id: 'spawn-claude-lane',
+        group: 'spawn',
+        label: 'spawn: Claude lane',
+        hint: 'assisted'
+      })
+    }
+
+    if (window.morz?.catalog && typeof window.morz.catalog.refresh === 'function') {
+      actions.push({ id: 'workshop-sync', group: 'workshop', label: 'workshop: sync catalog' })
+    }
+
+    if (getRunApi()) {
+      actions.push({ id: 'run-refresh', group: 'run', label: 'run: refresh orchestration runs' })
+    }
+
+    for (const theme of themes) {
+      actions.push({
+        id: `theme-${theme.id}`,
+        group: 'theme',
+        label: `theme: switch to ${theme.name}`
+      })
+    }
+
+    return actions
+  }, [activePaneId, activeLanes.length, mode, panes])
+
+  const openSettings = useCallback((tab: SettingsTab, focusMemory = false): void => {
+    setSettingsTab(tab)
+    setSettingsRevision((revision) => revision + 1)
+    setView('settings')
+    if (focusMemory) {
+      window.setTimeout(() => {
+        document
+          .querySelector<HTMLElement>('section[aria-label="Learning memory"]')
+          ?.scrollIntoView({ block: 'start' })
+      }, 0)
+    }
+  }, [])
+
+  const runPaletteAction = useCallback(
+    (id: string): void => {
+      const centerView = id.startsWith('view-') ? id.slice('view-'.length) : ''
+      if (
+        centerView &&
+        [...VIEWS.map((item) => item.id), 'settings', 'workshop'].includes(centerView as CenterView)
+      ) {
+        setView(centerView as CenterView)
+        return
+      }
+
+      if (id === 'toggle-explorer') {
+        setExplorerOpen((open) => !open)
+        return
+      }
+
+      if (id === 'spawn-terminal') {
+        const layout = useLayoutStore.getState()
+        const source = layout.panes.find((pane) => pane.paneId === layout.activePaneId)
+        layout.addPane({
+          paneId: newPaneId('term'),
+          kind: 'terminal',
+          cwd: source?.cwd || spaceRoot,
+          shell: source?.kind === 'terminal' ? source.shell : ''
+        })
+        setView('terminals')
+        return
+      }
+
+      if (id === 'spawn-claude-lane') {
+        startClaudeLane()
+        setView('terminals')
+        return
+      }
+
+      if (id === 'split-pane-right' || id === 'split-pane-down') {
+        const paneId = useLayoutStore.getState().activePaneId
+        if (paneId) emit('split-pane', { paneId, dir: id.endsWith('down') ? 'down' : 'right' })
+        setView('terminals')
+        return
+      }
+
+      if (id === 'close-focused-pane') {
+        const paneId = useLayoutStore.getState().activePaneId
+        if (paneId) emit('close-pane', { paneId })
+        setView('terminals')
+        return
+      }
+
+      if (id === 'settings-limits') openSettings('limits')
+      if (id === 'settings-appearance') openSettings('appearance')
+      if (id === 'settings-control') openSettings('control')
+      if (id === 'settings-memory') openSettings('control', true)
+
+      if (id === 'workshop-sync' && window.morz?.catalog) {
+        setView('workshop')
+        void useCatalogStore.getState().refresh()
+      }
+
+      if (id === 'run-refresh' && getRunApi()) void hydrateRuns()
+
+      if (id.startsWith('theme-')) {
+        const themeId = id.slice('theme-'.length)
+        if (themes.some((theme) => theme.id === themeId)) useThemeStore.getState().setTheme(themeId)
+      }
+    },
+    [openSettings, spaceRoot, startClaudeLane]
+  )
 
   return (
     <div className="relative flex h-full flex-col overflow-hidden">
@@ -412,7 +554,9 @@ export function Shell(): JSX.Element {
           {view === 'browser' && <BrowserPanel />}
           {view === 'remote' && <RemotePanel />}
           {view === 'organizer' && <OrganizerPanel />}
-          {view === 'settings' && <SettingsPanel />}
+          {view === 'settings' && (
+            <SettingsPanel key={`${settingsTab}-${settingsRevision}`} initialTab={settingsTab} />
+          )}
           {view === 'workshop' && <WorkshopPanel />}
         </main>
 
@@ -430,11 +574,9 @@ export function Shell(): JSX.Element {
 
       <CommandPalette
         open={paletteOpen}
+        actions={paletteActions}
         onClose={() => setPaletteOpen(false)}
-        extraActions={paletteExtras}
-        onAction={(id) => {
-          if (id === 'spawn-claude-lane') startClaudeLane()
-        }}
+        onAction={runPaletteAction}
       />
     </div>
   )

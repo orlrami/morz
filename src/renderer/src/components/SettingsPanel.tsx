@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { motion } from 'framer-motion'
 import { IconGauge, IconPalette, IconAdjustments, IconUpload } from '@tabler/icons-react'
-import { cliUsages, cliTint, cliLabel } from '@/lib/mock'
 import { colors } from '@/lib/tokens'
 import { springs } from '@/lib/springs'
 import { themes, useThemeStore } from '@/lib/themes'
@@ -13,22 +12,25 @@ import { RoutingSettings } from './RoutingSettings' // w8/routing
 import { VoiceSettings } from './VoiceSettings'
 import { UpdateSettings } from './UpdateSettings'
 
-type Tab = 'limits' | 'appearance' | 'control'
+export type SettingsTab = 'limits' | 'appearance' | 'control'
 
-const TABS: { id: Tab; label: string; icon: typeof IconGauge }[] = [
+const TABS: { id: SettingsTab; label: string; icon: typeof IconGauge }[] = [
   { id: 'limits', label: 'Limits & usage', icon: IconGauge },
   { id: 'appearance', label: 'Appearance', icon: IconPalette },
   { id: 'control', label: 'Control', icon: IconAdjustments }
 ]
 
-/* Settings: per-CLI membership limits, theme importer, and the control defaults. */
-export function SettingsPanel(): JSX.Element {
-  const [tab, setTab] = useState<Tab>('limits')
+/* Settings: live usage availability, theme importer, and the control defaults. */
+export function SettingsPanel({ initialTab = 'limits' }: { initialTab?: SettingsTab }): JSX.Element {
+  const [tab, setTab] = useState<SettingsTab>(initialTab)
   const { themeId, setTheme } = useThemeStore()
 
   return (
     <section className="flex min-w-0 flex-1" style={{ background: colors.page }} aria-label="Settings">
-      <nav className="w-[200px] shrink-0 border-r p-3" style={{ borderColor: 'var(--color-line)' }}>
+      <nav
+        className="w-[200px] shrink-0 border-r p-3"
+        style={{ borderColor: 'var(--color-line)' }}
+      >
         <p className="px-2 pb-2 text-[10px] uppercase tracking-wider" style={{ color: colors.quartzDim }}>
           Settings
         </p>
@@ -38,6 +40,7 @@ export function SettingsPanel(): JSX.Element {
           return (
             <button
               key={t.id}
+              type="button"
               onClick={() => setTab(t.id)}
               className="relative mb-0.5 flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs"
               style={{ color: active ? colors.quartz : colors.quartzDim, fontFamily: 'var(--font-display)' }}
@@ -66,51 +69,21 @@ export function SettingsPanel(): JSX.Element {
               Limits &amp; usage
             </h2>
             <p className="mt-1 text-xs leading-relaxed" style={{ color: colors.quartzDim }}>
-              Morz tracks each CLI&apos;s rolling window from its membership. The status bar warns before an agent
-              hits a wall; the orchestrator routes around exhausted CLIs.
+              Live session and run totals appear in the status bar when adapters report them.
             </p>
-            <div className="mt-4 space-y-2.5">
-              {cliUsages.map((u) => (
-                <div key={u.cli} className="rounded-xl border p-3" style={{ background: colors.panel, borderColor: 'var(--color-line)' }}>
-                  <div className="flex items-center gap-2">
-                    <span className="size-2 rounded-full" style={{ background: cliTint[u.cli] }} />
-                    <span className="text-xs font-semibold" style={{ fontFamily: 'var(--font-display)' }}>
-                      {cliLabel[u.cli]}
-                    </span>
-                    <span className="rounded-md border px-1.5 py-px text-[9px]" style={{ borderColor: 'var(--color-line-strong)', color: colors.quartzDim }}>
-                      {u.plan}
-                    </span>
-                    <span className="ml-auto text-[10.5px]" style={{ color: colors.quartzDim }}>
-                      {u.used}% used · resets in {u.resetIn}
-                    </span>
-                  </div>
-                  <div className="mt-2 h-1.5 overflow-hidden rounded-full" style={{ background: 'rgba(238,230,217,0.10)' }}>
-                    <motion.span
-                      className="block h-full rounded-full"
-                      initial={{ width: 0 }}
-                      animate={{ width: `${u.used}%`, transition: { ...springs.layout, delay: 0.1 } }}
-                      style={{ background: u.used >= 75 ? colors.blocked ?? '#E4A94F' : cliTint[u.cli] }}
-                    />
-                  </div>
-                  <div className="mt-2 flex items-center gap-2 text-[10px]" style={{ color: colors.quartzDim }}>
-                    Pause agents at
-                    <span className="rounded-md border px-1.5 py-px font-mono" style={{ borderColor: 'var(--color-line-strong)', color: colors.quartz }}>
-                      90%
-                    </span>
-                    of the window · route overflow to
-                    <span className="rounded-md border px-1.5 py-px" style={{ borderColor: 'var(--color-line-strong)', color: colors.quartz }}>
-                      next available CLI
-                    </span>
-                  </div>
-                </div>
-              ))}
+            <div
+              className="mt-4 rounded-xl border border-dashed p-4"
+              style={{ background: colors.panel, borderColor: 'var(--color-line-strong)' }}
+              role="status"
+            >
+              <p className="text-xs font-semibold" style={{ fontFamily: 'var(--font-display)' }}>
+                Per-CLI usage is not available yet
+              </p>
+              <p className="mt-1 text-[10.5px] leading-relaxed" style={{ color: colors.quartzDim }}>
+                Rolling membership-window tracking arrives with live lanes. Morz will show unknown usage as a dash,
+                never as an invented percentage.
+              </p>
             </div>
-            <label className="mt-4 flex cursor-pointer items-center gap-2 text-xs" style={{ color: colors.quartzDim }}>
-              <span className="flex h-4 w-7 items-center rounded-full p-0.5" style={{ background: 'rgba(238,230,217,0.15)' }}>
-                <span className="size-3 rounded-full" style={{ background: colors.quartzDim }} />
-              </span>
-              Show token &amp; cost counter in the status bar
-            </label>
           </div>
         )}
 
