@@ -636,3 +636,6 @@ configureConsultAdapters(
 )
 app.whenReady().then(() => registerRoutingIpc())
 // end w8/routing
+// w8/voice — append-only local Whisper registration.
+import { registerVoiceIpc } from './services/voice'
+app.whenReady().then(() => registerVoiceIpc())

@@ -12,6 +12,7 @@ import { useSpaceStore } from '@/store/spaceStore'
 import { ApprovalChip } from './ApprovalChip'
 import { AmendmentCard, PlanCard } from './PlanCard'
 import { RunsPanel } from './RunsPanel'
+import { VoiceInput } from './VoiceInput'
 
 /*
  * Orchestrator side panel = the live blackboard (0.0.2, w4/handoff).
@@ -309,19 +310,28 @@ function PlannerFlow(): JSX.Element {
         }}
         className="flex gap-1.5"
       >
-        <input
-          aria-label="Goal"
-          value={goal}
-          onChange={(event) => setGoal(event.target.value)}
-          maxLength={4_000}
-          placeholder="What should the team finish?"
-          className="min-w-0 flex-1 rounded-md border bg-black/10 px-2 py-1.5 text-[10.5px] outline-none focus:ring-1"
-          style={{
-            borderColor: 'var(--color-line-strong)',
-            color: colors.quartz,
-            '--tw-ring-color': colors.bronze
-          } as React.CSSProperties}
-        />
+        {/* // w8/voice */}<div className="flex min-w-0 flex-1 gap-1">
+          <input
+            aria-label="Goal"
+            value={goal}
+            onChange={(event) => setGoal(event.target.value)}
+            maxLength={4_000}
+            placeholder="What should the team finish?"
+            className="min-w-0 flex-1 rounded-md border bg-black/10 px-2 py-1.5 text-[10.5px] outline-none focus:ring-1"
+            style={{
+              borderColor: 'var(--color-line-strong)',
+              color: colors.quartz,
+              '--tw-ring-color': colors.bronze
+            } as React.CSSProperties}
+          />
+          <VoiceInput
+            onText={(text) =>
+              setGoal((current) =>
+                [current.trimEnd(), text.trim()].filter(Boolean).join(' ').slice(0, 4_000)
+              )
+            }
+          />
+        </div>
         <button
           type="submit"
           disabled={busy || !goal.trim() || !getPlanner()}

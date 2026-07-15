@@ -809,3 +809,24 @@ export interface RoutingBridge {
   route(taskText: string, options?: RouteOptions): Promise<RouteDecision>
 }
 // end w8/routing
+// w8/voice — append-only local Whisper contract.
+export interface VoiceSettingsSnapshot {
+  configured: boolean
+  enginePath: string | null
+}
+
+export const VoiceApi = {
+  settings: 'voice:settings',
+  chooseEngine: 'voice:choose-engine',
+  clearEngine: 'voice:clear-engine',
+  testTranscription: 'voice:test-transcription',
+  transcribe: 'voice:transcribe'
+} as const
+
+export interface VoiceBridge {
+  settings(): Promise<VoiceSettingsSnapshot>
+  chooseEngine(): Promise<VoiceSettingsSnapshot>
+  clearEngine(): Promise<VoiceSettingsSnapshot>
+  testTranscription(): Promise<string | null>
+  transcribe(audio: Uint8Array): Promise<string>
+}
