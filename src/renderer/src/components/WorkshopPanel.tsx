@@ -21,7 +21,7 @@ import type {
   MorzApi
 } from '@shared/ipc'
 import { colors } from '@/lib/tokens'
-import { cliTint } from '@/lib/mock'
+import { cliTint } from '@/lib/cli'
 import { staggerContainer, staggerItem, springs } from '@/lib/springs'
 import { useCatalogStore } from '@/store/catalogStore'
 

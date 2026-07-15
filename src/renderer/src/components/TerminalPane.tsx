@@ -8,14 +8,13 @@ import {
   IconLayoutRows,
   IconX
 } from '@tabler/icons-react'
-import type { MockAgent, MockBlock } from '@/lib/mock'
-import { colors, statusColor } from '@/lib/tokens'
+import { colors, statusColor, type AgentStatus } from '@/lib/tokens'
 import { useTerminal, copyTerminalSelection, pasteIntoTerminal } from '@/hooks/useTerminal'
 import { emit } from '@/lib/app-events'
 
 interface TerminalPaneProps {
-  agent: MockAgent
-  blocks: MockBlock[]
+  agent: { id: string; name: string; status: AgentStatus; worktree: string }
+  blocks?: unknown[]
   /** Live tail under the blocks: what the agent is doing right now. */
   tail?: 'cursor' | 'approval'
 }

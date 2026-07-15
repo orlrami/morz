@@ -1,8 +1,10 @@
 import { IconGitBranch } from '@tabler/icons-react'
 import { useEffect } from 'react'
-import { cliUsages, cliTint, cliLabel } from '@/lib/mock'
 import { colors, statusColor } from '@/lib/tokens'
 import { useCostStore } from '@/store/costStore'
+import { useLaneStore } from '@/store/laneStore'
+import { subscribeRuns, useRunsStore } from '@/store/runsStore'
+import { useSpaceStore } from '@/store/spaceStore'
 import type { CostRunMeter, CostUsageTotals } from '@shared/ipc'
 import { ModeDialCompact } from './ModeDialCompact'
 import { NotificationCenter } from './NotificationCenter'
@@ -12,9 +14,8 @@ interface StatusBarProps {
 }
 
 /*
- * Bottom status bar: branch, fleet counts, live cost/token usage, per-CLI
- * rate-limit meters, and the control dial. Unknown usage stays explicitly
- * unknown: a grey dash is safer than a fabricated zero.
+ * Bottom status bar: live branch, fleet counts, cost/token usage, notices,
+ * and the control dial. Unknown usage stays explicitly unknown.
  */
 export function StatusBar({ onOpenCommit }: StatusBarProps): JSX.Element {
   const snapshot = useCostStore((state) => state.snapshot)
@@ -22,8 +23,22 @@ export function StatusBar({ onOpenCommit }: StatusBarProps): JSX.Element {
   const startCostMeter = useCostStore((state) => state.start)
   const resume = useCostStore((state) => state.resume)
   const stop = useCostStore((state) => state.stop)
+  const lanes = useLaneStore((state) => state.lanes)
+  const statuses = useRunsStore((state) => state.statuses)
+  const activeRoot = useSpaceStore((state) => state.spaces[0]?.root ?? '')
+  const git = useSpaceStore((state) => state.gitByRoot[activeRoot])
 
   useEffect(() => startCostMeter(), [startCostMeter])
+  useEffect(() => subscribeRuns(), [])
+
+  const agentStates = Object.values(statuses).flatMap((status) => Object.values(status.agents))
+  const activeAgents =
+    lanes.length + agentStates.filter((state) => ['spawning', 'running', 'review'].includes(state)).length
+  const blockedAgents = agentStates.filter((state) => state === 'blocked' || state === 'rate-limited').length
+  const doneAgents = agentStates.filter((state) => state === 'done').length
+  const branchLabel = git
+    ? `${git.branch ?? 'detached'}${git.ahead ? ` ↑${git.ahead}` : ''}${git.behind ? ` ↓${git.behind}` : ''}`
+    : 'Branch unavailable'
 
   return (
     <>
@@ -68,11 +83,11 @@ export function StatusBar({ onOpenCommit }: StatusBarProps): JSX.Element {
           title="Open commit panel"
         >
           <IconGitBranch size={11} stroke={1.5} />
-          main ↑2
+          {branchLabel}
         </button>
-        <Count color={statusColor.working} label="2 working" />
-        <Count color={statusColor.blocked} label="1 blocked" />
-        <Count color={statusColor.done} label="1 done" />
+        <Count color={statusColor.working} label={`${activeAgents} active`} />
+        <Count color={statusColor.blocked} label={`${blockedAgents} blocked`} />
+        <Count color={statusColor.done} label={`${doneAgents} done`} />
 
         <div className="ml-auto flex min-w-0 items-center gap-3">
           {/* w6/errors: persistent background notices */}
@@ -81,39 +96,6 @@ export function StatusBar({ onOpenCommit }: StatusBarProps): JSX.Element {
           <SessionMeter usage={snapshot?.session ?? null} />
           <RunMeter run={snapshot?.activeRun ?? null} />
           <span className="h-3 w-px" style={{ background: 'var(--color-line)' }} />
-
-          {cliUsages.map((usage) => (
-            <span
-              key={usage.cli}
-              className="flex items-center gap-1.5"
-              title={`${cliLabel[usage.cli]} ${usage.plan} — ${usage.used}% of window used · resets in ${usage.resetIn}`}
-            >
-              <span
-                className="text-[9.5px] font-medium"
-                style={{ color: cliTint[usage.cli] }}
-              >
-                {cliLabel[usage.cli]}
-              </span>
-              <span
-                className="h-[5px] w-9 overflow-hidden rounded-full"
-                style={{ background: 'rgba(238,230,217,0.10)' }}
-                role="meter"
-                aria-valuenow={usage.used}
-                aria-valuemin={0}
-                aria-valuemax={100}
-                aria-label={`${cliLabel[usage.cli]} usage`}
-              >
-                <span
-                  className="block h-full rounded-full"
-                  style={{
-                    width: `${usage.used}%`,
-                    background: usage.used >= 75 ? statusColor.blocked : cliTint[usage.cli]
-                  }}
-                />
-              </span>
-            </span>
-          ))}
-
           <ModeDialCompact />
         </div>
       </footer>

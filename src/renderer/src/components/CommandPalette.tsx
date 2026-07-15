@@ -1,58 +1,87 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { IconSearch, IconRobot, IconRocket, IconSparkles, IconLayoutSidebar } from '@tabler/icons-react'
-import { paletteActions, type PaletteAction } from '@/lib/mock'
+import {
+  IconAdjustments,
+  IconLayoutSidebar,
+  IconPalette,
+  IconRefresh,
+  IconRobot,
+  IconRocket,
+  IconSearch,
+  IconSparkles
+} from '@tabler/icons-react'
 import { colors } from '@/lib/tokens'
 import { springs } from '@/lib/springs'
 
-const GROUP_ICON: Record<string, typeof IconRobot> = {
-  agent: IconRobot,
+export type PaletteGroup = 'run' | 'settings' | 'spawn' | 'theme' | 'view' | 'workshop'
+
+export interface PaletteAction {
+  id: string
+  group: PaletteGroup
+  label: string
+  hint?: string
+}
+
+const GROUP_ICON: Record<PaletteGroup, typeof IconRobot> = {
+  run: IconRobot,
+  settings: IconAdjustments,
   spawn: IconRocket,
-  skill: IconSparkles,
-  view: IconLayoutSidebar
+  theme: IconPalette,
+  view: IconLayoutSidebar,
+  workshop: IconRefresh
 }
 
 interface CommandPaletteProps {
   open: boolean
-  onClose: () => void
-  /** Live actions prepended to the mock list (wave-2 seam: Shell's Claude lane). */
-  extraActions?: PaletteAction[]
-  onAction?: (id: string) => void
+  actions: PaletteAction[]
+  onClose(): void
+  onAction(id: string): void
+}
+
+function fuzzyMatch(label: string, needle: string): boolean {
+  let index = 0
+  for (const character of label.toLowerCase()) {
+    if (character === needle[index]) index += 1
+    if (index === needle.length) return true
+  }
+  return false
 }
 
 /*
- * cmd-K palette with typed filters: `agent:` `spawn:` `skill:` `view:`.
- * Subsequence fuzzy match; spring-down entrance over a blurred backdrop.
+ * Ctrl-K palette with typed filters such as `spawn:` and `view:`. Actions are
+ * supplied by Shell so unavailable IPC capabilities never render as commands.
  */
-export function CommandPalette({ open, onClose, extraActions, onAction }: CommandPaletteProps): JSX.Element {
+export function CommandPalette({ open, actions, onClose, onAction }: CommandPaletteProps): JSX.Element {
   const [query, setQuery] = useState('')
+  const [activeIndex, setActiveIndex] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
-    if (open) {
-      setQuery('')
-      requestAnimationFrame(() => inputRef.current?.focus())
-    }
+    if (!open) return
+    setQuery('')
+    setActiveIndex(0)
+    requestAnimationFrame(() => inputRef.current?.focus())
   }, [open])
 
   const results = useMemo(() => {
-    const all = [...(extraActions ?? []), ...paletteActions]
-    const q = query.trim().toLowerCase()
-    if (!q) return all
-    const [prefix, ...rest] = q.split(':')
-    const scoped = rest.length > 0 ? all.filter((a) => a.group === prefix) : all
-    const needle = (rest.length > 0 ? rest.join(':') : q).trim()
-    if (!needle) return scoped
-    return scoped.filter((a) => {
-      // subsequence fuzzy match
-      let i = 0
-      for (const ch of a.label.toLowerCase()) {
-        if (ch === needle[i]) i++
-        if (i === needle.length) return true
-      }
-      return false
-    })
-  }, [query, extraActions])
+    const normalized = query.trim().toLowerCase()
+    if (!normalized) return actions
+    const [prefix, ...rest] = normalized.split(':')
+    const scoped = rest.length > 0 ? actions.filter((action) => action.group === prefix) : actions
+    const needle = (rest.length > 0 ? rest.join(':') : normalized).trim()
+    return needle ? scoped.filter((action) => fuzzyMatch(action.label, needle)) : scoped
+  }, [actions, query])
+
+  useEffect(() => {
+    setActiveIndex((index) => Math.min(index, Math.max(0, results.length - 1)))
+  }, [results.length])
+
+  const runSelected = (): void => {
+    const action = results[activeIndex]
+    if (!action) return
+    onAction(action.id)
+    onClose()
+  }
 
   return (
     <AnimatePresence>
@@ -73,18 +102,45 @@ export function CommandPalette({ open, onClose, extraActions, onAction }: Comman
             exit={{ opacity: 0, y: -16, scale: 0.98, transition: { duration: 0.12 } }}
             className="w-[560px] overflow-hidden rounded-2xl border shadow-2xl"
             style={{ background: colors.panel, borderColor: 'var(--color-line-strong)' }}
-            onClick={(e) => e.stopPropagation()}
+            onClick={(event) => event.stopPropagation()}
           >
             <div className="flex items-center gap-2.5 border-b px-4 py-3" style={{ borderColor: 'var(--color-line)' }}>
               <IconSearch size={16} stroke={1.5} style={{ color: colors.quartzDim }} />
               <input
                 ref={inputRef}
                 value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                onKeyDown={(e) => e.key === 'Escape' && onClose()}
-                placeholder="Type a command — or filter with agent: spawn: skill: view:"
+                onChange={(event) => {
+                  setQuery(event.target.value)
+                  setActiveIndex(0)
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === 'Escape') onClose()
+                  if (event.key === 'ArrowDown') {
+                    event.preventDefault()
+                    setActiveIndex((index) => results.length === 0 ? 0 : (index + 1) % results.length)
+                  }
+                  if (event.key === 'ArrowUp') {
+                    event.preventDefault()
+                    setActiveIndex((index) => results.length === 0 ? 0 : (index - 1 + results.length) % results.length)
+                  }
+                  if (event.key === 'Home') {
+                    event.preventDefault()
+                    setActiveIndex(0)
+                  }
+                  if (event.key === 'End') {
+                    event.preventDefault()
+                    setActiveIndex(Math.max(0, results.length - 1))
+                  }
+                  if (event.key === 'Enter') {
+                    event.preventDefault()
+                    runSelected()
+                  }
+                }}
+                placeholder="Type a command — or filter with spawn: view: settings: theme:"
                 className="flex-1 bg-transparent text-[13px] outline-none placeholder:text-[rgba(238,230,217,0.35)]"
                 style={{ color: colors.quartz }}
+                aria-controls="command-palette-results"
+                aria-activedescendant={results[activeIndex] ? `palette-action-${results[activeIndex].id}` : undefined}
               />
               <kbd
                 className="rounded border px-1.5 py-0.5 text-[9.5px]"
@@ -94,29 +150,35 @@ export function CommandPalette({ open, onClose, extraActions, onAction }: Comman
               </kbd>
             </div>
 
-            <ul className="max-h-[320px] overflow-y-auto p-1.5">
+            <ul id="command-palette-results" className="max-h-[320px] overflow-y-auto p-1.5">
               {results.length === 0 && (
                 <li className="px-3 py-6 text-center text-xs" style={{ color: colors.quartzDim }}>
                   No matching commands. Clear the filter to see everything.
                 </li>
               )}
-              {results.map((action, i) => {
+              {results.map((action, index) => {
                 const Icon = GROUP_ICON[action.group] ?? IconSparkles
+                const active = index === activeIndex
                 return (
                   <motion.li
                     key={action.id}
                     initial={{ opacity: 0, y: 4 }}
-                    animate={{ opacity: 1, y: 0, transition: { ...springs.snappy, delay: i * 0.02 } }}
+                    animate={{ opacity: 1, y: 0, transition: { ...springs.snappy, delay: index * 0.015 } }}
                   >
                     <button
+                      id={`palette-action-${action.id}`}
+                      type="button"
+                      onMouseEnter={() => setActiveIndex(index)}
                       onClick={() => {
-                        onAction?.(action.id)
+                        onAction(action.id)
                         onClose()
                       }}
-                      className="flex w-full cursor-pointer items-center gap-2.5 rounded-[10px] px-2.5 py-2 text-left text-xs transition-colors"
-                      style={{ color: colors.quartz }}
-                      onMouseEnter={(e) => (e.currentTarget.style.background = colors.card)}
-                      onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                      className="flex w-full cursor-pointer items-center gap-2.5 rounded-[10px] px-2.5 py-2 text-left text-xs transition-colors focus-visible:outline focus-visible:outline-2"
+                      style={{
+                        color: colors.quartz,
+                        background: active ? colors.card : 'transparent',
+                        outlineColor: active ? colors.bronze : undefined
+                      }}
                     >
                       <span
                         className="flex size-6 items-center justify-center rounded-md border"
