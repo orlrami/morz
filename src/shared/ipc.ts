@@ -677,3 +677,69 @@ export interface AssistantBridge {
   disconnect(): Promise<AssistantConnectionStatus>
   propose(goal: string, spaceRoot: string): Promise<StoredSpawnPlan>
 }
+// w6/pulse — append-only Daily Pulse contract.
+export type PulseMode = 'manual' | 'assisted' | 'orchestrated'
+export type PulseTrigger = 'scheduled' | 'manual'
+
+export interface PulseSettingsSnapshot {
+  enabled: boolean
+  time: string
+  nextFire: number | null
+  mode: PulseMode
+  spaceRoot: string
+}
+
+export interface PulseBrief {
+  id: string
+  createdAt: number
+  spaceRoot: string
+  markdown: string
+  trigger: PulseTrigger
+}
+
+export interface PulseSnapshot {
+  settings: PulseSettingsSnapshot
+  briefs: PulseBrief[]
+  pendingNotices: import('./notify').NotifyItem[]
+  running: boolean
+}
+
+export interface PulseConfigureInput {
+  enabled: boolean
+  time: string
+  mode: PulseMode
+  spaceRoot: string
+}
+
+export interface PulseRunInput {
+  mode: PulseMode
+  spaceRoot: string
+}
+
+export interface PulseReadyEvent {
+  brief: PulseBrief
+  notice: import('./notify').NotifyItem
+}
+
+export const PulseApi = {
+  snapshot: 'pulse:snapshot',
+  configure: 'pulse:configure',
+  runNow: 'pulse:run-now',
+  ready: 'pulse:ready',
+  notice: 'pulse:notice',
+  ackNotice: 'pulse:ack-notice',
+  open: 'pulse:open',
+  testNextFire: 'pulse:test-next-fire'
+} as const
+
+export interface PulseBridge {
+  snapshot(): Promise<PulseSnapshot>
+  configure(input: PulseConfigureInput): Promise<PulseSnapshot>
+  runNow(input: PulseRunInput): Promise<PulseBrief>
+  onReady(callback: (event: PulseReadyEvent) => void): () => void
+  onNotice(callback: (notice: import('./notify').NotifyItem) => void): () => void
+  ackNotice(id: string): Promise<void>
+  onOpen(callback: (brief: PulseBrief) => void): () => void
+  /** Present only when MORZ_E2E=1. */
+  testNextFire?(time: string, now: number): Promise<number>
+}

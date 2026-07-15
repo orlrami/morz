@@ -540,3 +540,20 @@ registerNotifyCenter()
 // w6/assistant — APPEND-ONLY: optional assistant proposal source
 import { registerAssistantIpc } from './assistant/bridge'
 app.whenReady().then(() => registerAssistantIpc())
+// w6/pulse — append-only Daily Pulse registration and native-notification open path.
+import { registerPulseIpc } from './services/pulse'
+import { PulseApi as PulseChannels, type PulseBrief } from '../shared/ipc'
+app.whenReady().then(() =>
+  registerPulseIpc({
+    openBrief: (brief: PulseBrief) => {
+      let win = BrowserWindow.getAllWindows()[0]
+      if (!win) win = createWindow()
+      if (win.isMinimized()) win.restore()
+      win.show()
+      win.focus()
+      const push = (): void => win.webContents.send(PulseChannels.open, brief)
+      if (win.webContents.isLoading()) win.webContents.once('did-finish-load', push)
+      else push()
+    }
+  })
+)

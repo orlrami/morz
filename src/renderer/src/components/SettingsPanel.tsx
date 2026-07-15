@@ -7,6 +7,7 @@ import { springs } from '@/lib/springs'
 import { themes, useThemeStore } from '@/lib/themes'
 import { ObsidianSettings } from './ObsidianSettings'
 import { AssistantSettings } from './AssistantSettings' // w6/assistant
+import { PulseSettings } from './PulseSettings' // w6/pulse
 
 type Tab = 'limits' | 'appearance' | 'control'
 
@@ -184,6 +185,7 @@ export function SettingsPanel(): JSX.Element {
             </div>
             {/* // w4/obsidian */}<ObsidianSettings />
             {/* w6/assistant */}<AssistantSettings />
+            {/* w6/pulse */}<PulseSettings />
           </div>
         )}
       </div>
