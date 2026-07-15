@@ -42,6 +42,8 @@ import { MORZ_AGENT_ID, type AgentId } from '../../shared/bus'
 import { acceptTask, createTask } from '../bus/board'
 import { journalEntries } from '../store/db'
 import { PortPool } from './port-pool'
+// Memory launch helper; the marked write-site below is the only behavior change.
+import { memoryPort, prependRenderedMemory } from '../memory/learn-port'
 import {
   agentTransition,
   consumeApprovedPlan,
@@ -258,7 +260,13 @@ async function launchAgent(
   const seedDir = join(worktree, '.morz')
   mkdirSync(seedDir, { recursive: true })
   const seedPath = join(seedDir, 'kickoff.md')
-  writeFileSync(seedPath, agent.promptSeed, 'utf8')
+  // w8/memory-learn — prepend approved memory once per dispatched agent promptSeed.
+  const promptSeed = prependRenderedMemory(
+    memoryPort,
+    { projectRoot: plan.spaceRoot, agentId: agent.agentId },
+    agent.promptSeed
+  )
+  writeFileSync(seedPath, promptSeed, 'utf8')
 
   const paneId = `${runTag}-${agent.agentId}`
   const env: Record<string, string> = {
