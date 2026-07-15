@@ -35,6 +35,8 @@ Point: `cx 52 cy 13 r 7.5`. The mark works fully in one color — gold is option
 
 ## Export instructions
 
+Regenerate the packaged app icons and favicon with `node scripts/gen-icons.mjs`.
+
 - **PNG / WebP** — render each SVG at 16·20·24·32·48·64·128·256·512·1024·2048 px with
   transparent padding. Verify the gold point survives at 16px.
 - **.ico** — pack 16/24/32/48/256 from `03-Favicons/morz-favicon.svg`.
