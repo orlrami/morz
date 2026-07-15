@@ -614,3 +614,7 @@ app.whenReady().then(() =>
     }
   })
 )
+
+// w8/voice — append-only local Whisper registration.
+import { registerVoiceIpc } from './services/voice'
+app.whenReady().then(() => registerVoiceIpc())

@@ -443,3 +443,23 @@ if (process.env.MORZ_E2E === '1') {
 }
 
 contextBridge.exposeInMainWorld('morzPulse', pulseBridge)
+
+// w8/voice — append-only local Whisper bridge.
+import {
+  VoiceApi as VoiceChannels,
+  type VoiceBridge,
+  type VoiceSettingsSnapshot
+} from '../shared/ipc'
+
+const voiceBridge: VoiceBridge = {
+  settings: (): Promise<VoiceSettingsSnapshot> => ipcRenderer.invoke(VoiceChannels.settings),
+  chooseEngine: (): Promise<VoiceSettingsSnapshot> =>
+    ipcRenderer.invoke(VoiceChannels.chooseEngine),
+  clearEngine: (): Promise<VoiceSettingsSnapshot> => ipcRenderer.invoke(VoiceChannels.clearEngine),
+  testTranscription: (): Promise<string | null> =>
+    ipcRenderer.invoke(VoiceChannels.testTranscription),
+  transcribe: (audio: Uint8Array): Promise<string> =>
+    ipcRenderer.invoke(VoiceChannels.transcribe, audio)
+}
+
+contextBridge.exposeInMainWorld('morzVoice', voiceBridge)
