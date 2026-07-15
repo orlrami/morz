@@ -250,12 +250,23 @@ export interface CatalogQuery {
   limit?: number
 }
 
+export type CatalogSourceState = 'ok' | 'offline' | 'rate-limited' | 'needs-key' | 'error'
+
+export interface CatalogSourceStatus {
+  source: 'mcp-registry' | 'openrouter-models' | 'openrouter-benchmarks' | 'github'
+  status: CatalogSourceState
+  lastError: string | null
+  nextRetry: number | null
+  lastSyncAt: number | null
+}
+
 export interface CatalogSnapshot {
   items: CatalogItem[]
   lastSyncAt: number | null
   offline: boolean
   syncing: boolean
   error: string | null
+  sources: CatalogSourceStatus[]
 }
 
 export const CatalogApi = {
@@ -271,6 +282,8 @@ export interface MorzApi {
     refresh(query?: CatalogQuery): Promise<CatalogSnapshot>
     onUpdated?(callback: () => void): () => void
   }
+  /** Persistent in-app notice log (wave 6). */
+  notify?: import('./notify').MorzNotifyApi
 }
 
 // w4/config

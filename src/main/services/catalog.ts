@@ -7,17 +7,39 @@ import {
   type CatalogInstallSpec,
   type CatalogItem,
   type CatalogQuery,
-  type CatalogSnapshot
+  type CatalogSnapshot,
+  type CatalogSourceState,
+  type CatalogSourceStatus
 } from '../../shared/ipc'
+import { notify, registerNotifyAction } from './notify-center'
 
-const REGISTRY_URL = 'https://registry.modelcontextprotocol.io/v0/servers'
-const OPENROUTER_MODELS_URL = 'https://openrouter.ai/api/v1/models'
-const OPENROUTER_BENCHMARKS_URL = 'https://openrouter.ai/api/v1/benchmarks'
+function sourceUrl(envName: string, fallback: string): string {
+  if (process.env.MORZ_E2E !== '1') return fallback
+  const override = process.env[envName]
+  if (!override) return fallback
+  const parsed = new URL(override)
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw new Error(`Invalid ${envName}`)
+  return parsed.toString()
+}
+
+const REGISTRY_URL = sourceUrl('MORZ_CATALOG_REGISTRY_URL', 'https://registry.modelcontextprotocol.io/v0/servers')
+const OPENROUTER_MODELS_URL = sourceUrl('MORZ_CATALOG_MODELS_URL', 'https://openrouter.ai/api/v1/models')
+const OPENROUTER_BENCHMARKS_URL = sourceUrl('MORZ_CATALOG_BENCHMARKS_URL', 'https://openrouter.ai/api/v1/benchmarks')
+const GITHUB_API_URL = sourceUrl('MORZ_CATALOG_GITHUB_URL', 'https://api.github.com/')
 const FETCH_TIMEOUT_MS = 15_000
 const REGISTRY_FETCH_TIMEOUT_MS = 45_000
 const GITHUB_CACHE_MS = 24 * 60 * 60 * 1_000
 const MAX_REGISTRY_PAGES = 200
 const MAX_GITHUB_FETCHES = 12
+const OFFLINE_RETRY_MS = 5 * 60 * 1_000
+const ERROR_RETRY_MS = 15 * 60 * 1_000
+
+class HttpError extends Error {
+  constructor(readonly status: number, readonly hostname: string) {
+    super(`HTTP ${status} from ${hostname}`)
+    this.name = 'HttpError'
+  }
+}
 
 type JsonRecord = Record<string, unknown>
 
@@ -30,6 +52,8 @@ interface SourceRow {
   last_attempt_at: number | null
   last_error: string | null
   backoff_until: number | null
+  status: CatalogSourceState
+  next_retry: number | null
 }
 
 interface CatalogRow {
@@ -117,7 +141,9 @@ function openCatalogDb(): Database.Database {
       last_sync_at    INTEGER,
       last_attempt_at INTEGER,
       last_error      TEXT,
-      backoff_until   INTEGER
+      backoff_until   INTEGER,
+      status          TEXT NOT NULL DEFAULT 'ok',
+      next_retry      INTEGER
     );
 
     CREATE TABLE IF NOT EXISTS catalog_github_cache (
@@ -137,6 +163,12 @@ function openCatalogDb(): Database.Database {
   }
   if (!sourceColumns.has('scan_newest')) {
     catalogDb.exec('ALTER TABLE catalog_sources ADD COLUMN scan_newest TEXT')
+  }
+  if (!sourceColumns.has('status')) {
+    catalogDb.exec("ALTER TABLE catalog_sources ADD COLUMN status TEXT NOT NULL DEFAULT 'ok'")
+  }
+  if (!sourceColumns.has('next_retry')) {
+    catalogDb.exec('ALTER TABLE catalog_sources ADD COLUMN next_retry INTEGER')
   }
   return catalogDb
 }
@@ -162,9 +194,9 @@ function markSourceSuccess(source: string, updatedSince?: string | null): void {
     .prepare(
       `INSERT INTO catalog_sources (
          source, updated_since, page_cursor, scan_newest,
-         last_sync_at, last_attempt_at, last_error, backoff_until
+         last_sync_at, last_attempt_at, last_error, backoff_until, status, next_retry
        )
-       VALUES (?, ?, NULL, NULL, ?, ?, NULL, NULL)
+       VALUES (?, ?, NULL, NULL, ?, ?, NULL, NULL, 'ok', NULL)
        ON CONFLICT(source) DO UPDATE SET
          updated_since = COALESCE(excluded.updated_since, catalog_sources.updated_since),
          page_cursor = NULL,
@@ -172,7 +204,9 @@ function markSourceSuccess(source: string, updatedSince?: string | null): void {
          last_sync_at = excluded.last_sync_at,
          last_attempt_at = excluded.last_attempt_at,
          last_error = NULL,
-         backoff_until = NULL`
+         backoff_until = NULL,
+         status = 'ok',
+         next_retry = NULL`
     )
     .run(source, updatedSince ?? null, Date.now(), Date.now())
 }
@@ -180,28 +214,76 @@ function markSourceSuccess(source: string, updatedSince?: string | null): void {
 function markSourceProgress(source: string, cursor: string, newest: string | null): void {
   openCatalogDb()
     .prepare(
-      `INSERT INTO catalog_sources (source, page_cursor, scan_newest, last_attempt_at, last_error)
-       VALUES (?, ?, ?, ?, NULL)
+      `INSERT INTO catalog_sources (source, page_cursor, scan_newest, last_attempt_at, last_error, status, next_retry)
+       VALUES (?, ?, ?, ?, NULL, 'ok', NULL)
        ON CONFLICT(source) DO UPDATE SET
          page_cursor = excluded.page_cursor,
          scan_newest = COALESCE(excluded.scan_newest, catalog_sources.scan_newest),
          last_attempt_at = excluded.last_attempt_at,
-         last_error = NULL`
+          last_error = NULL,
+          status = 'ok',
+          next_retry = NULL`
     )
     .run(source, cursor, newest, Date.now())
 }
 
-function markSourceError(source: string, error: unknown, backoffUntil?: number): void {
+function markSourceError(
+  source: string,
+  error: unknown,
+  status: Exclude<CatalogSourceState, 'ok'> = 'error',
+  nextRetry?: number
+): void {
   openCatalogDb()
     .prepare(
-      `INSERT INTO catalog_sources (source, last_attempt_at, last_error, backoff_until)
-       VALUES (?, ?, ?, ?)
+      `INSERT INTO catalog_sources (source, last_attempt_at, last_error, backoff_until, status, next_retry)
+       VALUES (?, ?, ?, ?, ?, ?)
        ON CONFLICT(source) DO UPDATE SET
          last_attempt_at = excluded.last_attempt_at,
          last_error = excluded.last_error,
-         backoff_until = COALESCE(excluded.backoff_until, catalog_sources.backoff_until)`
+         backoff_until = excluded.backoff_until,
+         status = excluded.status,
+         next_retry = excluded.next_retry`
     )
-    .run(source, Date.now(), errorMessage(error), backoffUntil ?? null)
+    .run(source, Date.now(), errorMessage(error), nextRetry ?? null, status, nextRetry ?? null)
+}
+
+function errorChain(error: unknown): string {
+  const parts: string[] = []
+  let current: unknown = error
+  for (let depth = 0; depth < 3 && current; depth++) {
+    if (current instanceof Error) {
+      parts.push(`${current.name} ${current.message}`)
+      current = current.cause
+    } else {
+      parts.push(String(current))
+      break
+    }
+  }
+  return parts.join(' ')
+}
+
+function offlineFailure(error: unknown): boolean {
+  const chain = errorChain(error)
+  return /AbortError|fetch failed|ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ECONNRESET|ETIMEDOUT|network/i.test(chain)
+}
+
+function reportSourceFailure(source: string, label: string, error: unknown): void {
+  const offline = offlineFailure(error)
+  const status: CatalogSourceState = offline ? 'offline' : 'error'
+  const nextRetry = Date.now() + (offline ? OFFLINE_RETRY_MS : ERROR_RETRY_MS)
+  const detail = `${errorMessage(error)} · retrying ${new Date(nextRetry).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+  markSourceError(source, error, status, nextRetry)
+  notify({
+    id: `catalog:${source}`,
+    level: offline ? 'warning' : 'error',
+    source: 'catalog',
+    title: offline ? `${label} unavailable` : `${label} sync failed`,
+    detail,
+    actions: [{ id: 'retry-sync', label: 'Retry now' }]
+  })
+  const log = `[morz] ${label} sync ${offline ? 'offline' : 'failed'}: ${errorMessage(error)}`
+  if (offline) console.warn(log)
+  else console.error(log)
 }
 
 async function fetchJson(
@@ -222,7 +304,7 @@ async function fetchJson(
         ...init?.headers
       }
     })
-    if (!response.ok) throw new Error(`HTTP ${response.status} from ${new URL(response.url).hostname}`)
+    if (!response.ok) throw new HttpError(response.status, new URL(response.url).hostname)
     return { data: (await response.json()) as unknown, response }
   } finally {
     clearTimeout(timer)
@@ -514,8 +596,7 @@ async function continueRegistrySync(
     }
     markSourceSuccess(source, newest)
   } catch (error) {
-    markSourceError(source, error)
-    console.error('[morz] registry background sync failed:', errorMessage(error))
+    reportSourceFailure(source, 'MCP registry', error)
   }
 }
 
@@ -523,6 +604,7 @@ async function syncRegistry(): Promise<void> {
   if (registryBackgroundPromise) return
   const source = 'mcp-registry'
   const state = sourceRow(source)
+  if (state?.next_retry && state.next_retry > Date.now()) return
   const prior = state?.updated_since ?? null
   const resumeCursor = state?.page_cursor ?? null
   markSourceAttempt(source)
@@ -548,8 +630,7 @@ async function syncRegistry(): Promise<void> {
         }
       })
   } catch (error) {
-    markSourceError(source, error)
-    throw error
+    reportSourceFailure(source, 'MCP registry', error)
   }
 }
 
@@ -597,19 +678,50 @@ function externalBenchmarkMap(data: unknown): Map<string, { score: number; label
 }
 
 async function optionalBenchmarks(): Promise<Map<string, { score: number; label: string }>> {
+  const source = 'openrouter-benchmarks'
+  const apiKey = cleanString(process.env.OPENROUTER_API_KEY, 2_000)
+  if (!apiKey) {
+    markSourceError(source, 'OPENROUTER_API_KEY is not configured', 'needs-key')
+    notify({
+      id: `catalog:${source}`,
+      level: 'info',
+      source: 'catalog',
+      title: 'OpenRouter benchmarks not configured',
+      detail: 'Models still sync normally. Set OPENROUTER_API_KEY to add optional benchmark enrichment.'
+    })
+    return new Map()
+  }
+  const state = sourceRow(source)
+  if (state?.next_retry && state.next_retry > Date.now()) return new Map()
+  markSourceAttempt(source)
   try {
-    const apiKey = cleanString(process.env.OPENROUTER_API_KEY, 2_000)
-    const { data } = await fetchJson(OPENROUTER_BENCHMARKS_URL, apiKey
-      ? { headers: { Authorization: `Bearer ${apiKey}` } }
-      : undefined)
+    const { data } = await fetchJson(OPENROUTER_BENCHMARKS_URL, {
+      headers: { Authorization: `Bearer ${apiKey}` }
+    })
+    markSourceSuccess(source)
     return externalBenchmarkMap(data)
-  } catch {
+  } catch (error) {
+    if (error instanceof HttpError && (error.status === 401 || error.status === 403)) {
+      markSourceError(source, 'OpenRouter API key was rejected', 'needs-key')
+      notify({
+        id: `catalog:${source}`,
+        level: 'info',
+        source: 'catalog',
+        title: 'OpenRouter benchmarks need a valid key',
+        detail: 'Models still sync normally. Update OPENROUTER_API_KEY to restore optional benchmark enrichment.'
+      })
+      console.info(`[morz] OpenRouter benchmarks skipped: HTTP ${error.status} (API key required)`)
+      return new Map()
+    }
+    reportSourceFailure(source, 'OpenRouter benchmarks', error)
     return new Map()
   }
 }
 
 async function syncModels(): Promise<void> {
-  const source = 'openrouter'
+  const source = 'openrouter-models'
+  const state = sourceRow(source)
+  if (state?.next_retry && state.next_retry > Date.now()) return
   markSourceAttempt(source)
   try {
     const [{ data }, extraBenchmarks] = await Promise.all([
@@ -654,14 +766,15 @@ async function syncModels(): Promise<void> {
     })()
     markSourceSuccess(source)
   } catch (error) {
-    markSourceError(source, error)
-    throw error
+    reportSourceFailure(source, 'OpenRouter models', error)
   }
 }
 
 function githubBackoffFrom(response: Response): number {
   const resetSeconds = Number(response.headers.get('x-ratelimit-reset'))
-  if (Number.isFinite(resetSeconds) && resetSeconds > 0) return resetSeconds * 1_000
+  if (Number.isFinite(resetSeconds) && resetSeconds > 0) {
+    return Math.max(resetSeconds * 1_000, Date.now() + 60_000)
+  }
   const retrySeconds = Number(response.headers.get('retry-after'))
   return Date.now() + (Number.isFinite(retrySeconds) && retrySeconds > 0 ? retrySeconds * 1_000 : 60 * 60 * 1_000)
 }
@@ -675,7 +788,10 @@ async function fetchGithubStars(repo: string): Promise<number | null> {
   if (cached?.backoff_until && cached.backoff_until > Date.now()) return cached.stars
 
   const [owner, name] = repo.split('/')
-  const url = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`
+  const url = new URL(
+    `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`,
+    GITHUB_API_URL.endsWith('/') ? GITHUB_API_URL : `${GITHUB_API_URL}/`
+  )
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
   try {
@@ -690,7 +806,17 @@ async function fetchGithubStars(repo: string): Promise<number | null> {
     })
     if (response.status === 403 || response.status === 429) {
       const backoffUntil = githubBackoffFrom(response)
-      markSourceError('github', `GitHub rate limited (${response.status})`, backoffUntil)
+      const retryAt = new Date(backoffUntil).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      markSourceError('github', `GitHub rate limited (${response.status})`, 'rate-limited', backoffUntil)
+      notify({
+        id: 'catalog:github',
+        level: 'warning',
+        source: 'catalog',
+        title: 'GitHub stars rate-limited',
+        detail: `Cached stars are unchanged · retrying ${retryAt}`,
+        actions: [{ id: 'retry-sync', label: 'Retry now' }]
+      })
+      console.warn(`[morz] GitHub stars rate-limited (${response.status}); retrying ${retryAt}`)
       db.prepare(
         `INSERT INTO catalog_github_cache (repo, stars, fetched_at, backoff_until)
          VALUES (?, ?, ?, ?)
@@ -716,7 +842,17 @@ async function fetchGithubStars(repo: string): Promise<number | null> {
     ).run(repo, stars, Date.now())
     const remaining = Number(response.headers.get('x-ratelimit-remaining'))
     if (remaining === 0) {
-      markSourceError('github', 'GitHub rate limit exhausted', githubBackoffFrom(response))
+      const backoffUntil = githubBackoffFrom(response)
+      const retryAt = new Date(backoffUntil).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      markSourceError('github', 'GitHub rate limit exhausted', 'rate-limited', backoffUntil)
+      notify({
+        id: 'catalog:github',
+        level: 'warning',
+        source: 'catalog',
+        title: 'GitHub stars rate-limited',
+        detail: `Cached stars are unchanged · retrying ${retryAt}`,
+        actions: [{ id: 'retry-sync', label: 'Retry now' }]
+      })
     }
     return stars
   } finally {
@@ -726,7 +862,7 @@ async function fetchGithubStars(repo: string): Promise<number | null> {
 
 async function enrichGithubStars(): Promise<void> {
   const state = sourceRow('github')
-  if (state?.backoff_until && state.backoff_until > Date.now()) return
+  if (state?.next_retry && state.next_retry > Date.now()) return
   markSourceAttempt('github')
   const rows = openCatalogDb()
     .prepare(
@@ -745,7 +881,7 @@ async function enrichGithubStars(): Promise<void> {
   let failed = false
   for (const { repo } of rows) {
     const latestState = sourceRow('github')
-    if (latestState?.backoff_until && latestState.backoff_until > Date.now()) {
+    if (latestState?.next_retry && latestState.next_retry > Date.now()) {
       failed = true
       break
     }
@@ -753,12 +889,12 @@ async function enrichGithubStars(): Promise<void> {
       const stars = await fetchGithubStars(repo)
       openCatalogDb().prepare('UPDATE catalog_items SET stars = ? WHERE github_repo = ?').run(stars, repo)
       const updatedState = sourceRow('github')
-      if (updatedState?.backoff_until && updatedState.backoff_until > Date.now()) {
+      if (updatedState?.next_retry && updatedState.next_retry > Date.now()) {
         failed = true
         break
       }
     } catch (error) {
-      markSourceError('github', error)
+      reportSourceFailure('github', 'GitHub stars', error)
       failed = true
       break
     }
@@ -849,9 +985,9 @@ export function queryCatalog(query?: CatalogQuery): CatalogSnapshot {
     .all(...params) as CatalogRow[]
 
   const sources = openCatalogDb()
-    .prepare("SELECT * FROM catalog_sources WHERE source IN ('mcp-registry', 'openrouter')")
+    .prepare("SELECT * FROM catalog_sources WHERE source IN ('mcp-registry', 'openrouter-models', 'openrouter-benchmarks', 'github')")
     .all() as SourceRow[]
-  const failures = sources.filter((source) => source.last_error)
+  const failures = sources.filter((source) => source.status !== 'ok')
   const lastSyncAt = sources.reduce<number | null>(
     (latest, source) => source.last_sync_at !== null && (latest === null || source.last_sync_at > latest) ? source.last_sync_at : latest,
     null
@@ -859,9 +995,16 @@ export function queryCatalog(query?: CatalogQuery): CatalogSnapshot {
   return {
     items: rows.map(rowToItem),
     lastSyncAt,
-    offline: failures.length > 0,
+    offline: failures.some((source) => source.status === 'offline'),
     syncing: syncPromise !== null || registryBackgroundPromise !== null,
-    error: failures.map((source) => `${source.source}: ${source.last_error}`).join(' · ') || null
+    error: failures.map((source) => `${source.source}: ${source.last_error}`).join(' · ') || null,
+    sources: sources.map((source): CatalogSourceStatus => ({
+      source: source.source as CatalogSourceStatus['source'],
+      status: source.status,
+      lastError: source.last_error,
+      nextRetry: source.next_retry,
+      lastSyncAt: source.last_sync_at
+    }))
   }
 }
 
@@ -885,4 +1028,17 @@ export function registerCatalogIpc(): void {
   openCatalogDb()
   ipcMain.handle(CatalogApi.query, (_event, query?: CatalogQuery) => queryCatalog(query))
   ipcMain.handle(CatalogApi.refresh, (_event, query?: CatalogQuery) => refreshCatalog(query))
+  registerNotifyAction('retry-sync', async (noticeId) => {
+    const requestedSource = noticeId.startsWith('catalog:') ? noticeId.slice('catalog:'.length) : ''
+    if (requestedSource) {
+      openCatalogDb()
+        .prepare('UPDATE catalog_sources SET next_retry = NULL, backoff_until = NULL WHERE source = ?')
+        .run(requestedSource)
+    }
+    if (requestedSource === 'github') await enrichGithubStars()
+    else await refreshCatalog()
+    for (const window of BrowserWindow.getAllWindows()) {
+      if (!window.isDestroyed()) window.webContents.send(CatalogApi.updated)
+    }
+  })
 }

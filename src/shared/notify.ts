@@ -61,6 +61,8 @@ export interface MorzNotifyApi {
   list(): Promise<NotifyItem[]>
   markRead(id: string): void
   dismiss(id: string): void
+  /** Invoke one of the allowlisted actions carried by a notice. */
+  action(id: string, actionId: string): void
   onPushed(cb: (item: NotifyItem) => void): () => void
   onAction(cb: (payload: { id: string; actionId: string }) => void): () => void
 }

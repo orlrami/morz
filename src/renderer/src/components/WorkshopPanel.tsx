@@ -15,6 +15,8 @@ import type {
   CatalogCategory,
   CatalogInstallSpec,
   CatalogItem,
+  CatalogSourceState,
+  CatalogSourceStatus,
   CatalogTargetCli,
   MorzApi
 } from '@shared/ipc'
@@ -38,6 +40,28 @@ const TYPE_COLOR: Record<CatalogItem['kind'], string> = {
   mcp: '#7FA6F0',
   plugin: '#C09AE6',
   model: '#E4BC77'
+}
+
+const SOURCE_LABEL: Record<CatalogSourceStatus['source'], string> = {
+  'mcp-registry': 'MCP Registry',
+  'openrouter-models': 'OpenRouter models',
+  'openrouter-benchmarks': 'Benchmarks',
+  github: 'GitHub stars'
+}
+
+const SOURCE_STATUS_LABEL: Record<CatalogSourceState, string> = {
+  ok: 'ok',
+  offline: 'offline',
+  'rate-limited': 'rate-limited',
+  'needs-key': 'needs key',
+  error: 'error'
+}
+
+function sourceStatusColor(status: CatalogSourceState): string {
+  if (status === 'ok') return colors.done
+  if (status === 'error') return colors.error
+  if (status === 'needs-key') return colors.bronzeHot
+  return colors.warning
 }
 
 interface ConfigWriterBridge {
@@ -242,6 +266,7 @@ export function WorkshopPanel(): JSX.Element {
     syncing,
     loading,
     error,
+    sources,
     setCategory,
     setSearch,
     query,
@@ -310,6 +335,24 @@ export function WorkshopPanel(): JSX.Element {
             <IconAlertCircle size={10} /> enrichment limited
           </span>
         )}
+        {sources.map((source) => {
+          const color = sourceStatusColor(source.status)
+          const retry = source.nextRetry
+            ? ` · retry ${new Date(source.nextRetry).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+            : ''
+          return (
+            <span
+              key={source.source}
+              data-testid={`catalog-source-${source.source}`}
+              className="flex items-center gap-1 rounded-full border px-1.5 py-0.5"
+              style={{ borderColor: `${color}55`, color, background: `${color}0d` }}
+              title={`${source.lastError ?? `${SOURCE_LABEL[source.source]} synced`}${retry}`}
+            >
+              <span className="size-1 rounded-full" style={{ background: color }} />
+              {SOURCE_LABEL[source.source]} {SOURCE_STATUS_LABEL[source.status]}
+            </span>
+          )
+        })}
         <button
           type="button"
           aria-label="Refresh catalog"

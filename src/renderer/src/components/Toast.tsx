@@ -1,71 +1,71 @@
-import { useEffect, useState } from 'react'
+import { useEffect } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { IconBellRinging, IconX } from '@tabler/icons-react'
-import { colors, statusColor } from '@/lib/tokens'
+import { IconAlertCircle, IconX } from '@tabler/icons-react'
+import { colors } from '@/lib/tokens'
 import { springs } from '@/lib/springs'
+import { useNotifyStore } from '@/store/notifyStore'
 
-/*
- * Notification toast — fires when a background agent flips state
- * (blocked / done / error). Mock: shows one blocked toast after load.
- */
+/** Error notices get a short, throttled toast; the durable copy remains in the Center. */
 export function ToastHost(): JSX.Element {
-  const [visible, setVisible] = useState(false)
+  const toast = useNotifyStore((state) => state.toast)
+  const clearToast = useNotifyStore((state) => state.clearToast)
+  const runAction = useNotifyStore((state) => state.runAction)
 
   useEffect(() => {
-    const show = setTimeout(() => setVisible(true), 1400)
-    const hide = setTimeout(() => setVisible(false), 9000)
-    return () => {
-      clearTimeout(show)
-      clearTimeout(hide)
-    }
-  }, [])
+    if (!toast) return
+    const timer = window.setTimeout(clearToast, 8_000)
+    return () => window.clearTimeout(timer)
+  }, [clearToast, toast])
 
+  const action = toast?.actions?.[0]
   return (
     <div className="pointer-events-none absolute bottom-10 right-3 z-50">
       <AnimatePresence>
-        {visible && (
+        {toast && (
           <motion.div
+            key={`${toast.id}:${toast.ts ?? 0}`}
             initial={{ opacity: 0, y: 24, scale: 0.97 }}
             animate={{ opacity: 1, y: 0, scale: 1, transition: springs.float }}
             exit={{ opacity: 0, scale: 0.95, transition: { duration: 0.15 } }}
-            className="pointer-events-auto flex w-[300px] items-start gap-2.5 rounded-2xl border p-3 shadow-2xl"
-            style={{ background: colors.panel, borderColor: 'rgba(245,158,11,0.45)' }}
-            role="status"
+            className="pointer-events-auto flex w-[320px] items-start gap-2.5 rounded-2xl border p-3 shadow-2xl"
+            style={{ background: colors.panel, borderColor: `${colors.error}99` }}
+            role="alert"
+            aria-live="assertive"
           >
             <span
               className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg"
-              style={{ background: 'rgba(245,158,11,0.16)', color: statusColor.blocked }}
+              style={{ background: `${colors.error}1f`, color: colors.error }}
             >
-              <IconBellRinging size={14} stroke={1.5} />
+              <IconAlertCircle size={15} stroke={1.6} />
             </span>
-            <span className="min-w-0 text-xs leading-snug">
-              <span className="font-bold" style={{ fontFamily: 'var(--font-display)' }}>
-                builder-2 needs you
-              </span>
-              <span className="block" style={{ color: colors.quartzDim }}>
-                Approve write to <span className="font-mono" style={{ color: colors.bronzeHot }}>src/db/migrate.ts</span>
-              </span>
-              <span className="mt-1.5 flex gap-1.5">
+            <span className="min-w-0 flex-1 text-xs leading-snug">
+              <strong className="block" style={{ fontFamily: 'var(--font-display)' }}>
+                {toast.title}
+              </strong>
+              {toast.detail && (
+                <span className="mt-0.5 block" style={{ color: colors.quartzDim }}>
+                  {toast.detail}
+                </span>
+              )}
+              {action && (
                 <button
-                  className="cursor-pointer rounded-lg px-2.5 py-1 text-[10.5px] font-bold"
-                  style={{ background: `linear-gradient(180deg, ${colors.bronzeHot}, ${colors.bronze})`, color: '#241c0a' }}
-                  onClick={() => setVisible(false)}
+                  type="button"
+                  className="mt-2 rounded-lg border px-2.5 py-1 text-[10px] font-bold hover:brightness-125"
+                  style={{ borderColor: `${colors.error}88`, color: colors.error }}
+                  onClick={() => {
+                    runAction(toast.id, action.id)
+                    clearToast()
+                  }}
                 >
-                  Approve
+                  {action.label}
                 </button>
-                <button
-                  className="cursor-pointer rounded-lg border px-2.5 py-1 text-[10.5px]"
-                  style={{ borderColor: 'var(--color-line-strong)', color: colors.quartzDim }}
-                  onClick={() => setVisible(false)}
-                >
-                  View
-                </button>
-              </span>
+              )}
             </span>
             <button
-              onClick={() => setVisible(false)}
+              type="button"
+              onClick={clearToast}
               className="cursor-pointer rounded p-0.5 hover:bg-[#37332B]"
-              aria-label="Dismiss"
+              aria-label="Dismiss error toast"
               style={{ color: colors.quartzDim }}
             >
               <IconX size={12} stroke={1.5} />
