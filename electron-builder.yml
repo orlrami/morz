@@ -65,6 +65,7 @@ nsis:
   oneClick: true
   perMachine: false
   allowToChangeInstallationDirectory: false
+  differentialPackage: true
   artifactName: ${name}-${version}-setup.${ext}
   shortcutName: ${productName}
   uninstallDisplayName: ${productName}
@@ -72,9 +73,10 @@ nsis:
   uninstallerIcon: resources/icon.ico
   deleteAppDataOnUninstall: false
 
-# electron-updater feed config. Publishing stays manual/off for now
-# (builds run with --publish never); flip when signing is set up.
+# electron-updater feed config. Builds remain local/manual (`--publish never`);
+# release assets are uploaded by the documented GitHub release flow.
 publish:
   provider: github
   owner: orlrami
   repo: morz
+  releaseType: release

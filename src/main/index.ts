@@ -648,3 +648,9 @@ app.whenReady().then(() => registerDialogIpc(ipcMain))
 import { registerBrowserIpc } from './services/browser-host'
 app.whenReady().then(() => registerBrowserIpc())
 // end w9/browser
+// w9/installer
+import { registerUpdater } from './services/updater'
+app.whenReady().then(() => {
+  registerUpdater()
+  tray?.setToolTip(`Morz ${app.getVersion()} — terminals keep running here`)
+})

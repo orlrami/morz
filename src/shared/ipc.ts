@@ -918,3 +918,35 @@ export interface BrowserBridge {
   testPick?(selector: string): Promise<ElementContext>
 }
 // end w9/browser
+// w9/installer
+export type UpdaterStatus =
+  | 'disabled'
+  | 'idle'
+  | 'checking'
+  | 'available'
+  | 'downloading'
+  | 'ready'
+  | 'up-to-date'
+  | 'error'
+
+export interface UpdaterSnapshot {
+  version: string
+  channel: 'stable'
+  enabled: boolean
+  status: UpdaterStatus
+  detail: string
+  availableVersion?: string
+  progress?: number
+}
+
+export const UpdaterApi = {
+  status: 'updater:status',
+  check: 'updater:check',
+  changed: 'updater:changed'
+} as const
+
+export interface UpdaterBridge {
+  status(): Promise<UpdaterSnapshot>
+  check(): Promise<UpdaterSnapshot>
+  onChanged(callback: (snapshot: UpdaterSnapshot) => void): () => void
+}

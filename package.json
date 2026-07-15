@@ -1,6 +1,6 @@
 {
   "name": "morz",
-  "version": "0.1.0",
+  "version": "0.0.4",
   "private": true,
   "description": "Windows-first AI terminal + lightweight IDE + opt-in multi-agent CLI orchestration",
   "author": "OJ",
