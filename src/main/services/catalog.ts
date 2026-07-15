@@ -29,7 +29,8 @@ const GITHUB_API_URL = sourceUrl('MORZ_CATALOG_GITHUB_URL', 'https://api.github.
 const FETCH_TIMEOUT_MS = 15_000
 const REGISTRY_FETCH_TIMEOUT_MS = 45_000
 const GITHUB_CACHE_MS = 24 * 60 * 60 * 1_000
-const MAX_REGISTRY_PAGES = 200
+const REGISTRY_SLICE_PAGES = 200
+const REGISTRY_CONTINUE_DELAY_MS = 250
 const MAX_GITHUB_FETCHES = 12
 const OFFLINE_RETRY_MS = 5 * 60 * 1_000
 const ERROR_RETRY_MS = 15 * 60 * 1_000
@@ -76,6 +77,9 @@ interface CatalogRow {
 let catalogDb: Database.Database | null = null
 let syncPromise: Promise<CatalogSnapshot> | null = null
 let registryBackgroundPromise: Promise<void> | null = null
+let registryContinuationTimer: ReturnType<typeof setTimeout> | null = null
+let registrySyncActive = false
+const registrySeenCursors = new Set<string>()
 let ipcRegistered = false
 
 function asRecord(value: unknown): JsonRecord | null {
@@ -281,9 +285,6 @@ function reportSourceFailure(source: string, label: string, error: unknown): voi
     detail,
     actions: [{ id: 'retry-sync', label: 'Retry now' }]
   })
-  const log = `[morz] ${label} sync ${offline ? 'offline' : 'failed'}: ${errorMessage(error)}`
-  if (offline) console.warn(log)
-  else console.error(log)
 }
 
 async function fetchJson(
@@ -577,38 +578,54 @@ async function continueRegistrySync(
   updatedSince: string | null,
   firstCursor: string,
   firstNewest: string | null
-): Promise<void> {
+): Promise<'complete' | 'continue' | 'failed'> {
   const source = 'mcp-registry'
   let cursor: string | null = firstCursor
   let newest = firstNewest ?? updatedSince
-  const seenCursors = new Set<string>()
   try {
-    for (let page = 1; page < MAX_REGISTRY_PAGES && cursor; page++) {
-      if (seenCursors.has(cursor)) throw new Error('Registry pagination repeated a cursor')
-      seenCursors.add(cursor)
+    for (let page = 1; page < REGISTRY_SLICE_PAGES && cursor; page++) {
+      if (registrySeenCursors.has(cursor)) throw new Error('Registry pagination repeated a cursor')
+      registrySeenCursors.add(cursor)
       const result = await readRegistryPage(updatedSince, cursor)
       if (result.newest && (!newest || result.newest > newest)) newest = result.newest
       cursor = result.next
       if (cursor) markSourceProgress(source, cursor, newest)
-      if (page === MAX_REGISTRY_PAGES - 1 && cursor) {
-        throw new Error('Registry pagination exceeded safety limit')
-      }
     }
+    if (cursor) return 'continue'
     markSourceSuccess(source, newest)
+    registrySeenCursors.clear()
+    return 'complete'
   } catch (error) {
     reportSourceFailure(source, 'MCP registry', error)
+    registrySeenCursors.clear()
+    return 'failed'
   }
 }
 
+function scheduleRegistryContinuation(): void {
+  if (registryContinuationTimer) return
+  registryContinuationTimer = setTimeout(() => {
+    registryContinuationTimer = null
+    void syncRegistry()
+  }, REGISTRY_CONTINUE_DELAY_MS)
+}
+
 async function syncRegistry(): Promise<void> {
-  if (registryBackgroundPromise) return
+  if (registrySyncActive) return
+  registrySyncActive = true
+  let backgroundStarted = false
   const source = 'mcp-registry'
-  const state = sourceRow(source)
-  if (state?.next_retry && state.next_retry > Date.now()) return
-  const prior = state?.updated_since ?? null
-  const resumeCursor = state?.page_cursor ?? null
-  markSourceAttempt(source)
   try {
+    const state = sourceRow(source)
+    if (state?.next_retry && state.next_retry > Date.now()) return
+    const prior = state?.updated_since ?? null
+    const resumeCursor = state?.page_cursor ?? null
+    if (!resumeCursor) registrySeenCursors.clear()
+    if (resumeCursor) {
+      if (registrySeenCursors.has(resumeCursor)) throw new Error('Registry pagination repeated a cursor')
+      registrySeenCursors.add(resumeCursor)
+    }
+    markSourceAttempt(source)
     const first = await readRegistryPage(prior, resumeCursor)
     const firstNewest =
       first.newest && state?.scan_newest
@@ -618,19 +635,38 @@ async function syncRegistry(): Promise<void> {
         : first.newest ?? state?.scan_newest ?? prior
     if (!first.next) {
       markSourceSuccess(source, firstNewest)
+      registrySeenCursors.clear()
       return
     }
     markSourceProgress(source, first.next, firstNewest)
+    let shouldContinue = false
+    backgroundStarted = true
     registryBackgroundPromise = continueRegistrySync(prior, first.next, firstNewest)
-      .then(() => enrichGithubStars())
+      .then(async (result) => {
+        shouldContinue = result === 'continue'
+        try {
+          await enrichGithubStars()
+        } catch (error) {
+          reportSourceFailure('github', 'GitHub stars', error)
+        }
+      })
+      .catch((error) => {
+        shouldContinue = false
+        reportSourceFailure(source, 'MCP registry', error)
+      })
       .finally(() => {
         registryBackgroundPromise = null
+        registrySyncActive = false
         for (const window of BrowserWindow.getAllWindows()) {
           if (!window.isDestroyed()) window.webContents.send(CatalogApi.updated)
         }
+        if (shouldContinue) scheduleRegistryContinuation()
       })
   } catch (error) {
+    registrySeenCursors.clear()
     reportSourceFailure(source, 'MCP registry', error)
+  } finally {
+    if (!backgroundStarted) registrySyncActive = false
   }
 }
 
@@ -710,7 +746,6 @@ async function optionalBenchmarks(): Promise<Map<string, { score: number; label:
         title: 'OpenRouter benchmarks need a valid key',
         detail: 'Models still sync normally. Update OPENROUTER_API_KEY to restore optional benchmark enrichment.'
       })
-      console.info(`[morz] OpenRouter benchmarks skipped: HTTP ${error.status} (API key required)`)
       return new Map()
     }
     reportSourceFailure(source, 'OpenRouter benchmarks', error)
@@ -816,7 +851,6 @@ async function fetchGithubStars(repo: string): Promise<number | null> {
         detail: `Cached stars are unchanged · retrying ${retryAt}`,
         actions: [{ id: 'retry-sync', label: 'Retry now' }]
       })
-      console.warn(`[morz] GitHub stars rate-limited (${response.status}); retrying ${retryAt}`)
       db.prepare(
         `INSERT INTO catalog_github_cache (repo, stars, fetched_at, backoff_until)
          VALUES (?, ?, ?, ?)
@@ -996,7 +1030,7 @@ export function queryCatalog(query?: CatalogQuery): CatalogSnapshot {
     items: rows.map(rowToItem),
     lastSyncAt,
     offline: failures.some((source) => source.status === 'offline'),
-    syncing: syncPromise !== null || registryBackgroundPromise !== null,
+    syncing: syncPromise !== null || registrySyncActive,
     error: failures.map((source) => `${source.source}: ${source.last_error}`).join(' · ') || null,
     sources: sources.map((source): CatalogSourceStatus => ({
       source: source.source as CatalogSourceStatus['source'],

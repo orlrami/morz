@@ -1,6 +1,7 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App'
+import { ErrorBoundary } from './components/ErrorBoundary'
 
 /* w7/design-brand fonts — local WOFF2 assets, loaded once for the renderer. */
 import '@fontsource/hanken-grotesk/400.css'
@@ -21,6 +22,8 @@ document.documentElement.classList.add('dark')
 
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
   <React.StrictMode>
-    <App />
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
   </React.StrictMode>
 )
