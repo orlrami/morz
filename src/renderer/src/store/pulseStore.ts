@@ -7,7 +7,7 @@ import type {
 } from '@shared/ipc'
 import type { MorzNotifyApi, NotifyItem } from '@shared/notify'
 import { useModeStore } from './modeStore'
-import { useSpaceStore } from './spaceStore'
+import { selectActiveSpaceRoot, useSpaceStore } from './spaceStore'
 
 interface PulseState {
   snapshot: PulseSnapshot | null
@@ -41,7 +41,7 @@ function errorMessage(error: unknown): string {
 function currentContext(): { mode: PulseMode; spaceRoot: string } {
   return {
     mode: useModeStore.getState().mode,
-    spaceRoot: useSpaceStore.getState().spaces[0]?.root ?? ''
+    spaceRoot: selectActiveSpaceRoot(useSpaceStore.getState())
   }
 }
 
@@ -165,12 +165,12 @@ async function syncContext(): Promise<void> {
   const settings = state.snapshot?.settings
   if (!settings) return
   const context = currentContext()
-  if (!context.spaceRoot) return
+  if (!context.spaceRoot && !settings.enabled) return
   if (settings.mode === context.mode && settings.spaceRoot === context.spaceRoot) return
   syncing = true
   try {
     const next = await bridge().configure({
-      enabled: settings.enabled,
+      enabled: context.spaceRoot ? settings.enabled : false,
       time: settings.time,
       ...context
     })
@@ -188,7 +188,7 @@ async function syncContext(): Promise<void> {
 
 useModeStore.subscribe(() => void syncContext())
 useSpaceStore.subscribe((state, previous) => {
-  if (state.spaces[0]?.root !== previous.spaces[0]?.root) void syncContext()
+  if (selectActiveSpaceRoot(state) !== selectActiveSpaceRoot(previous)) void syncContext()
 })
 
 queueMicrotask(() => void usePulseStore.getState().initialize())

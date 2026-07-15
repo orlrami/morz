@@ -127,11 +127,11 @@ interface LayoutState {
   activePaneId: string
   /** False until the session snapshot has been loaded — don't render/spawn before. */
   hydrated: boolean
-  hydrate(root: LayoutNode | null): void
+  hydrate(root: LayoutNode | null, defaultCwd?: string): void
   /** Append as a right sibling of the whole tree (Claude lane slot). */
   addPane(pane: PaneDef): void
   removePane(paneId: string): void
-  splitPane(paneId: string, dir: 'right' | 'down'): void
+  splitPane(paneId: string, dir: 'right' | 'down', cwd?: string): void
   setRatio(splitId: string, ratio: number): void
   setActivePane(paneId: string): void
 }
@@ -141,9 +141,9 @@ export const useLayoutStore = create<LayoutState>()((set) => ({
   panes: [],
   activePaneId: '',
   hydrated: false,
-  hydrate: (root) =>
+  hydrate: (root, defaultCwd = '') =>
     set(() => {
-      const r = root ?? rowOf(DEFAULT_PANES)
+      const r = root ?? rowOf(DEFAULT_PANES.map((pane) => ({ ...pane, cwd: defaultCwd })))
       const panes = panesOf(r)
       return { root: r, panes, activePaneId: panes[0]?.paneId ?? '', hydrated: true }
     }),
@@ -166,7 +166,7 @@ export const useLayoutStore = create<LayoutState>()((set) => ({
         activePaneId: s.activePaneId === paneId ? (panes[0]?.paneId ?? '') : s.activePaneId
       }
     }),
-  splitPane: (paneId, dir) =>
+  splitPane: (paneId, dir, cwd) =>
     set((s) => {
       if (!s.root) return s
       const src = s.panes.find((p) => p.paneId === paneId)
@@ -174,7 +174,7 @@ export const useLayoutStore = create<LayoutState>()((set) => ({
       const sibling: PaneDef = {
         paneId: newPaneId('term'),
         kind: 'terminal',
-        cwd: src.cwd,
+        cwd: cwd ?? src.cwd,
         shell: src.kind === 'terminal' ? src.shell : ''
       }
       const root = splitLeafInTree(s.root, paneId, dir, sibling)

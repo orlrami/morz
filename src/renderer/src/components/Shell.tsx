@@ -51,7 +51,7 @@ import {
   type PaneDef,
   type SplitNode
 } from '@/store/layoutStore'
-import { getMorz, useSpaceStore } from '@/store/spaceStore'
+import { getMorz, selectActiveSpaceRoot, useSpaceStore } from '@/store/spaceStore'
 import type { SessionSnapshot } from '@shared/ipc'
 
 type CenterView = 'terminals' | 'commit' | 'review' | 'dag' | 'browser' | 'remote' | 'organizer' | 'settings' | 'workshop'
@@ -74,6 +74,11 @@ function initialFromUrl(): { view: CenterView; explorer: boolean } {
     view: view && VIEWS.some((v) => v.id === view) ? view : 'terminals',
     explorer: params.get('explorer') === '1'
   }
+}
+
+function sameRoot(left: string, right: string): boolean {
+  const key = (value: string): string => value.replace(/[\\/]+$/, '').replace(/\\/g, '/').toLowerCase()
+  return !!left && !!right && key(left) === key(right)
 }
 
 /* ── session snapshot (Slice 2) ──────────────────────────────── */
@@ -162,7 +167,9 @@ export function Shell(): JSX.Element {
   const root = useLayoutStore((s) => s.root)
   const hydrated = useLayoutStore((s) => s.hydrated)
   const lanes = useLaneStore((s) => s.lanes)
-  const spaceRoot = useSpaceStore((s) => s.spaces[0]?.root ?? '')
+  const spacesReady = useSpaceStore((state) => state.ready)
+  const spaceRoot = useSpaceStore(selectActiveSpaceRoot)
+  const activeLanes = lanes.filter((lane) => sameRoot(lane.cwd, spaceRoot))
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
@@ -182,6 +189,7 @@ export function Shell(): JSX.Element {
   /* Session restore: load once, recreate panes; terminals reattach and the
    * PTY-host replays scrollback. Lane panes only survive outside Manual. */
   useEffect(() => {
+    if (!spacesReady) return
     if (useLayoutStore.getState().hydrated) return
     const finish = (loaded: LayoutNode | null): void => {
       if (useLayoutStore.getState().hydrated) return
@@ -192,7 +200,7 @@ export function Shell(): JSX.Element {
           if (p.kind === 'claude') usable = removePaneFromTree(usable, p.paneId)
         }
       }
-      useLayoutStore.getState().hydrate(usable)
+      useLayoutStore.getState().hydrate(usable, spaceRoot)
       if (currentMode !== 'manual' && usable) {
         for (const p of panesOf(usable)) {
           if (p.kind === 'claude' && p.agentId) {
@@ -210,7 +218,7 @@ export function Shell(): JSX.Element {
       .load()
       .then((snap) => finish(layoutFromSnapshot(snap)))
       .catch(() => finish(null))
-  }, [])
+  }, [spaceRoot, spacesReady])
 
   /* Session save: debounced on pane-list change, 30s idle tick for scrollback
    * drift (never per chunk), and on window unload. */
@@ -253,7 +261,8 @@ export function Shell(): JSX.Element {
       useLayoutStore.getState().removePane(paneId)
     }
     const onSplitPane = ({ paneId, dir }: { paneId: string; dir: 'right' | 'down' }): void => {
-      useLayoutStore.getState().splitPane(paneId, dir)
+      const cwd = selectActiveSpaceRoot(useSpaceStore.getState())
+      useLayoutStore.getState().splitPane(paneId, dir, cwd || undefined)
     }
     const onFocusPane = ({ paneId }: { paneId: string }): void => {
       useLayoutStore.getState().setActivePane(paneId)
@@ -276,13 +285,11 @@ export function Shell(): JSX.Element {
    * The lane itself calls claude:start on the first prompt (ClaudeLane owns
    * the adapter handshake — start() is kill-and-respawn, so no double-start). */
   const startClaudeLane = useCallback(
-    (fromPaneId?: string): void => {
+    (): void => {
       if (!claudeAllowed(useModeStore.getState().mode)) return
-      if (useLaneStore.getState().lanes.length > 0) return // one lane per space (0.0.1)
-      const src = fromPaneId
-        ? useLayoutStore.getState().panes.find((p) => p.paneId === fromPaneId)
-        : undefined
-      const cwd = src?.cwd || spaceRoot
+      const cwd = spaceRoot
+      if (!cwd) return
+      if (useLaneStore.getState().lanes.some((lane) => sameRoot(lane.cwd, cwd))) return
       const paneId = newPaneId('lane')
       const agentId = `claude-${paneId}`
       useLaneStore.getState().addLane({ paneId, agentId, cwd })
@@ -292,7 +299,7 @@ export function Shell(): JSX.Element {
   )
 
   const paletteExtras =
-    claudeAllowed(mode) && lanes.length === 0
+    claudeAllowed(mode) && activeLanes.length === 0
       ? [{ id: 'spawn-claude-lane', group: 'spawn', label: 'spawn: Claude lane', hint: 'assisted' }]
       : []
 
@@ -387,8 +394,8 @@ export function Shell(): JSX.Element {
                           key={pane.paneId}
                           pane={pane}
                           showStartLane={claudeAllowed(mode)}
-                          laneTaken={lanes.length > 0}
-                          onStartLane={() => startClaudeLane(pane.paneId)}
+                          laneTaken={activeLanes.length > 0}
+                          onStartLane={startClaudeLane}
                         />
                       ) : (
                         <LanePaneSlot key={pane.paneId} pane={pane} manual={mode === 'manual'} />

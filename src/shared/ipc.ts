@@ -830,3 +830,13 @@ export interface VoiceBridge {
   testTranscription(): Promise<string | null>
   transcribe(audio: Uint8Array): Promise<string>
 }
+
+// w9/spaces — append-only native project-folder picker contract.
+export const DialogApi = {
+  pickFolder: 'dialog:pick-folder'
+} as const
+
+export interface DialogBridge {
+  pickFolder(): Promise<string | null>
+}
+// end w9/spaces

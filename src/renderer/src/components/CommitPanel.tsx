@@ -14,7 +14,7 @@ import type { GitFile } from '@shared/ipc'
 import { colors } from '@/lib/tokens'
 import { useCommitStore } from '@/store/commitStore'
 import { useModeStore } from '@/store/modeStore'
-import { useSpaceStore } from '@/store/spaceStore'
+import { selectActiveSpaceRoot, useSpaceStore } from '@/store/spaceStore'
 
 interface DiffHunk {
   heading: string
@@ -70,9 +70,10 @@ function statusColor(code: string): string {
 }
 
 export function CommitPanel(): JSX.Element {
-  const root = useSpaceStore((state) => state.spaces[0]?.root ?? '')
+  const root = useSpaceStore(selectActiveSpaceRoot)
   const mode = useModeStore((state) => state.mode)
   const {
+    root: loadedRoot,
     files,
     selectedPath,
     diff,
@@ -99,9 +100,12 @@ export function CommitPanel(): JSX.Element {
   const unstaged = useMemo(() => files.filter(isUnstaged), [files])
   const staged = useMemo(() => files.filter(isStaged), [files])
   const aiAllowed = mode !== 'manual'
-  const working = busy !== null
+  const interactive = !!root && loadedRoot === root && !loading
+  const effectiveBusy = interactive ? busy : 'space-root'
+  const working = !interactive || busy !== null
 
   const confirmDiscard = (path: string): void => {
+    if (!interactive) return
     if (!window.confirm(`Discard all unstaged changes in ${path}? This cannot be undone.`)) return
     void discardFile(root, path, true)
   }
@@ -117,7 +121,7 @@ export function CommitPanel(): JSX.Element {
         files={unstaged}
         staged={false}
         selectedPath={selectedPath}
-        busy={busy}
+        busy={effectiveBusy}
         onSelect={(path) => void selectFile(root, path)}
         onPrimary={(path) => void stageFile(root, path)}
         onDiscard={confirmDiscard}
@@ -129,7 +133,7 @@ export function CommitPanel(): JSX.Element {
           files={staged}
           staged
           selectedPath={selectedPath}
-          busy={busy}
+          busy={effectiveBusy}
           onSelect={(path) => void selectFile(root, path)}
           onPrimary={(path) => void unstageFile(root, path)}
         />

@@ -531,3 +531,13 @@ const voiceBridge: VoiceBridge = {
 }
 
 contextBridge.exposeInMainWorld('morzVoice', voiceBridge)
+
+// w9/spaces — append-only native folder picker bridge.
+import { DialogApi as DialogChannels, type DialogBridge } from '../shared/ipc'
+
+const dialogBridge: DialogBridge = {
+  pickFolder: (): Promise<string | null> => ipcRenderer.invoke(DialogChannels.pickFolder)
+}
+
+contextBridge.exposeInMainWorld('morzDialog', dialogBridge)
+// end w9/spaces
