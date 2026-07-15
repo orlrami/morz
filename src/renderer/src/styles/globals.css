@@ -15,25 +15,25 @@
 
   /* neutrals */
   --color-quartz: #eee6d9;
-  --color-quartz-dim: rgba(238, 230, 217, 0.45);
-  --color-quartz-faint: rgba(238, 230, 217, 0.25);
+  --color-quartz-dim: rgba(238, 230, 217, 0.66);
+  --color-quartz-faint: rgba(238, 230, 217, 0.40);
 
   /* brand + interactive */
   --color-bronze: #cba25a;
   --color-bronze-hot: #e4bc77;
 
   /* status — color = meaning */
-  --color-working: #3b82f6;
-  --color-blocked: #f59e0b;
-  --color-done: #22c55e;
-  --color-error: #ef4444;
-  --color-warning: #f97316;
+  --color-working: #6AA6D9;
+  --color-blocked: #E4A94F;
+  --color-done: #7FB77E;
+  --color-error: #D97C6A;
+  --color-warning: #E0904C;
 
   /* per-agent identity tints */
-  --color-agent-claude: #fb923c;
-  --color-agent-codex: #2dd4bf;
-  --color-agent-gemini: #60a5fa;
-  --color-agent-opencode: #a78bfa;
+  --color-agent-claude: #E0904C;
+  --color-agent-codex: #5FB39A;
+  --color-agent-gemini: #6FA0D8;
+  --color-agent-opencode: #A98BD1;
 
   /* hairlines */
   --color-line: rgba(238, 230, 217, 0.08);
@@ -49,6 +49,26 @@
   --radius-card: 14px;
   --radius-control: 10px;
   --radius-data: 7px;
+
+  /* canonical brand radius aliases — preserve the existing app scale */
+  --morz-radius-sm: 6px;
+  --morz-radius-md: var(--radius-control);
+  --morz-radius-lg: var(--radius-shell);
+  --morz-radius-pill: 999px;
+
+  /* elevation */
+  --morz-shadow-card: 0 8px 24px rgba(0, 0, 0, 0.35);
+  --morz-shadow-pop: 0 20px 50px rgba(0, 0, 0, 0.45);
+  --morz-glow-gold: 0 0 14px rgba(228, 188, 119, 0.7);
+
+  /* focus */
+  --morz-focus-ring: 0 0 0 2px var(--color-page), 0 0 0 4px var(--color-bronze-hot);
+
+  /* motion */
+  --morz-dur-fast: 120ms;
+  --morz-dur-base: 180ms;
+  --morz-dur-slow: 240ms;
+  --morz-ease: cubic-bezier(0.2, 0.7, 0.2, 1);
 }
 
 * {

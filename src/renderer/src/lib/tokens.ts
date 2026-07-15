@@ -7,24 +7,25 @@ export const colors = {
 
   // Neutrals
   quartz: '#EEE6D9', // primary text, labels, active surfaces
-  quartzDim: 'rgba(238,230,217,0.45)', // secondary text, placeholders
+  quartzDim: 'rgba(238,230,217,0.66)', // secondary text, placeholders
+  quartzFaint: 'rgba(238,230,217,0.40)', // tertiary text, ghost labels
 
   // Brand + interactive
   bronze: '#CBA25A', // buttons, links, focus, brand
   bronzeHot: '#E4BC77', // hover, active bronze
 
   // Status semantic (pills, rings — context-separated from bronze)
-  working: '#3B82F6', // blue — in progress
-  blocked: '#F59E0B', // amber — needs you
-  done: '#22C55E', // green — complete
-  error: '#EF4444', // red — failed
-  warning: '#F97316', // orange — caution
+  working: '#6AA6D9', // soft blue — in progress
+  blocked: '#E4A94F', // muted amber — needs you
+  done: '#7FB77E', // sage — complete
+  error: '#D97C6A', // clay — failed
+  warning: '#E0904C', // warm orange — caution
 
   // Per-agent identity tints (pane border, sidebar dot, DAG node)
-  agentClaude: '#FB923C', // orange
-  agentCodex: '#2DD4BF', // teal-green
-  agentGemini: '#60A5FA', // blue
-  agentOpenCode: '#A78BFA' // violet
+  agentClaude: '#E0904C', // warm orange
+  agentCodex: '#5FB39A', // muted teal-green
+  agentGemini: '#6FA0D8', // soft blue
+  agentOpenCode: '#A98BD1' // muted violet
 }
 
 export type AgentStatus = 'working' | 'blocked' | 'done' | 'error' | 'idle'

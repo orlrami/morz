@@ -90,15 +90,15 @@ test.describe.serial('OSC-133 command blocks', () => {
 
     const failed = page.locator('[data-morz-block-gutter="true"][data-morz-exit-code="3"]')
     await expect(failed).toBeVisible()
-    await expect(failed).toHaveCSS('border-left-color', 'rgb(239, 68, 68)')
+    await expect(failed).toHaveCSS('border-left-color', 'rgb(217, 124, 106)')
 
     const succeeded = page.locator('[data-morz-block-gutter="true"][data-morz-exit-code="0"]')
     await expect(succeeded).toBeVisible()
     expect(await succeeded.evaluate((el) => getComputedStyle(el).borderLeftColor)).toBe(
-      'rgb(34, 197, 94)'
+      'rgb(127, 183, 126)'
     )
-    expect(colors.done).toBe('#22C55E')
-    expect(colors.error).toBe('#EF4444')
+    expect(colors.done).toBe('#7FB77E')
+    expect(colors.error).toBe('#D97C6A')
   })
 
   test('known foreground process forwards TUI state transitions', async () => {
