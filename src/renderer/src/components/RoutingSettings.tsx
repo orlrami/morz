@@ -3,7 +3,7 @@ import { IconRefresh, IconRoute, IconShieldLock } from '@tabler/icons-react'
 import type { RoutingTarget } from '@shared/ipc'
 import { colors } from '@/lib/tokens'
 import { useRoutingStore } from '@/store/routingStore'
-import { useSpaceStore } from '@/store/spaceStore'
+import { selectActiveSpaceRoot, useSpaceStore } from '@/store/spaceStore'
 
 const TARGET_LABEL: Record<RoutingTarget, string> = {
   agy: 'Antigravity',
@@ -21,7 +21,7 @@ function commaList(value: string): string[] {
 
 /** Compact control-panel editor matching the existing Morz card language. */
 export function RoutingSettings(): JSX.Element {
-  const spaceRoot = useSpaceStore((state) => state.spaces[0]?.root ?? '')
+  const spaceRoot = useSpaceStore(selectActiveSpaceRoot)
   const {
     rules,
     localModels,

@@ -33,6 +33,7 @@ function errorMessage(error: unknown): string {
 }
 
 let refreshGeneration = 0
+let operationGeneration = 0
 
 export const useCommitStore = create<CommitState>((set, get) => ({
   root: '',
@@ -47,11 +48,18 @@ export const useCommitStore = create<CommitState>((set, get) => ({
   setMessage: (message) => set({ message }),
   refresh: async (root) => {
     const generation = ++refreshGeneration
+    const rootChanged = get().root !== root
+    if (rootChanged) operationGeneration += 1
     if (!root) {
-      set({ root, files: [], selectedPath: null, diff: null, log: [], loading: false })
+      set({ root, files: [], selectedPath: null, diff: null, log: [], message: '', loading: false, busy: null, error: null })
       return
     }
-    set({ loading: true, error: null })
+    set({
+      root,
+      loading: true,
+      error: null,
+      ...(rootChanged ? { files: [], selectedPath: null, diff: null, log: [], message: '', busy: null } : {})
+    })
     try {
       const [status, log] = await Promise.all([window.morz.git.status(root), bridge().log(root)])
       if (generation !== refreshGeneration) return
@@ -68,79 +76,98 @@ export const useCommitStore = create<CommitState>((set, get) => ({
     }
   },
   selectFile: async (root, path) => {
+    if (get().root !== root) return
     set({ selectedPath: path, error: null })
     try {
       const diff = await bridge().fileDiff(root, path)
       if (get().root === root && get().selectedPath === path) set({ diff })
     } catch (error) {
-      set({ error: errorMessage(error) })
+      if (get().root === root && get().selectedPath === path) set({ error: errorMessage(error) })
     }
   },
   stageFile: async (root, path) => {
+    if (get().root !== root) return
+    const operation = ++operationGeneration
     set({ busy: `stage:${path}`, error: null })
     try {
       await bridge().stageFile(root, path)
+      if (operation !== operationGeneration || get().root !== root) return
       await get().refresh(root)
     } catch (error) {
-      set({ error: errorMessage(error) })
+      if (operation === operationGeneration && get().root === root) set({ error: errorMessage(error) })
     } finally {
-      set({ busy: null })
+      if (operation === operationGeneration && get().root === root) set({ busy: null })
     }
   },
   unstageFile: async (root, path) => {
+    if (get().root !== root) return
+    const operation = ++operationGeneration
     set({ busy: `unstage:${path}`, error: null })
     try {
       await bridge().unstageFile(root, path)
+      if (operation !== operationGeneration || get().root !== root) return
       await get().refresh(root)
     } catch (error) {
-      set({ error: errorMessage(error) })
+      if (operation === operationGeneration && get().root === root) set({ error: errorMessage(error) })
     } finally {
-      set({ busy: null })
+      if (operation === operationGeneration && get().root === root) set({ busy: null })
     }
   },
   stageHunk: async (root, patch) => {
+    if (get().root !== root) return
+    const operation = ++operationGeneration
     set({ busy: 'stage-hunk', error: null })
     try {
       await bridge().stageHunk(root, patch)
+      if (operation !== operationGeneration || get().root !== root) return
       await get().refresh(root)
     } catch (error) {
-      set({ error: errorMessage(error) })
+      if (operation === operationGeneration && get().root === root) set({ error: errorMessage(error) })
     } finally {
-      set({ busy: null })
+      if (operation === operationGeneration && get().root === root) set({ busy: null })
     }
   },
   discardFile: async (root, path, confirmed) => {
+    if (get().root !== root) return
+    const operation = ++operationGeneration
     set({ busy: `discard:${path}`, error: null })
     try {
       await bridge().discardFile(root, path, confirmed)
+      if (operation !== operationGeneration || get().root !== root) return
       await get().refresh(root)
     } catch (error) {
-      set({ error: errorMessage(error) })
+      if (operation === operationGeneration && get().root === root) set({ error: errorMessage(error) })
     } finally {
-      set({ busy: null })
+      if (operation === operationGeneration && get().root === root) set({ busy: null })
     }
   },
   createCommit: async (root) => {
+    if (get().root !== root) return
+    const operation = ++operationGeneration
+    const message = get().message
     set({ busy: 'commit', error: null })
     try {
-      await bridge().commit(root, get().message)
+      await bridge().commit(root, message)
+      if (operation !== operationGeneration || get().root !== root) return
       set({ message: '' })
       await get().refresh(root)
     } catch (error) {
-      set({ error: errorMessage(error) })
+      if (operation === operationGeneration && get().root === root) set({ error: errorMessage(error) })
     } finally {
-      set({ busy: null })
+      if (operation === operationGeneration && get().root === root) set({ busy: null })
     }
   },
   suggestMessage: async (root) => {
+    if (get().root !== root) return
+    const operation = ++operationGeneration
     set({ busy: 'suggest', error: null })
     try {
       const message = await bridge().suggestMessage(root)
-      set({ message })
+      if (operation === operationGeneration && get().root === root) set({ message })
     } catch (error) {
-      set({ error: errorMessage(error) })
+      if (operation === operationGeneration && get().root === root) set({ error: errorMessage(error) })
     } finally {
-      set({ busy: null })
+      if (operation === operationGeneration && get().root === root) set({ busy: null })
     }
   }
 }))

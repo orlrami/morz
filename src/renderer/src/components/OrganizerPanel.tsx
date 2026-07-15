@@ -16,7 +16,7 @@ import type { OrganizerOperation, OrganizerViolation } from '@shared/ipc'
 import { emit } from '@/lib/app-events'
 import { colors } from '@/lib/tokens'
 import { useOrganizerStore } from '@/store/organizerStore'
-import { useSpaceStore } from '@/store/spaceStore'
+import { selectActiveSpaceRoot, useSpaceStore } from '@/store/spaceStore'
 
 function absolutePath(root: string, path: string): string {
   if (/^(?:[A-Za-z]:[\\/]|\/)/.test(path)) return path
@@ -156,7 +156,7 @@ function OperationRow({ operation }: { operation: OrganizerOperation }): JSX.Ele
 }
 
 export function OrganizerPanel(): JSX.Element {
-  const activeRoot = useSpaceStore((state) => state.spaces[0]?.root ?? '')
+  const activeRoot = useSpaceStore(selectActiveSpaceRoot)
   const previousActiveRoot = useRef(activeRoot)
   const {
     root,

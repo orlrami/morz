@@ -8,7 +8,7 @@ import { staggerContainer, staggerItem } from '@/lib/springs'
 import { useModeStore } from '@/store/modeStore'
 import { useBusStore, getBus } from '@/store/busStore'
 import { useLaneStore } from '@/store/laneStore'
-import { useSpaceStore } from '@/store/spaceStore'
+import { selectActiveSpaceRoot, useSpaceStore } from '@/store/spaceStore'
 import { ApprovalChip } from './ApprovalChip'
 import { AmendmentCard, PlanCard } from './PlanCard'
 import { RunsPanel } from './RunsPanel'
@@ -212,7 +212,7 @@ function getPlanner(): PlannerBridge | undefined {
 }
 
 function PlannerFlow(): JSX.Element {
-  const spaceRoot = useSpaceStore((state) => state.spaces[0]?.root ?? '')
+  const spaceRoot = useSpaceStore(selectActiveSpaceRoot)
   const [goal, setGoal] = useState('')
   const [record, setRecord] = useState<StoredSpawnPlan | null>(null)
   const [amendments, setAmendments] = useState<StoredPlanAmendment[]>([])

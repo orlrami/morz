@@ -3,13 +3,13 @@ import { IconSparkles } from '@tabler/icons-react'
 import { colors } from '@/lib/tokens'
 import { useAssistantStore } from '@/store/assistantStore'
 import { useModeStore } from '@/store/modeStore'
-import { useSpaceStore } from '@/store/spaceStore'
+import { selectActiveSpaceRoot, useSpaceStore } from '@/store/spaceStore'
 import { PlanCard } from './PlanCard'
 
 /** Assistant input surface. It only mounts in Orchestrated mode and never dispatches directly. */
 export function AssistantPanel(): JSX.Element | null {
   const mode = useModeStore((state) => state.mode)
-  const spaceRoot = useSpaceStore((state) => state.spaces[0]?.root ?? '')
+  const spaceRoot = useSpaceStore(selectActiveSpaceRoot)
   const {
     status,
     record,

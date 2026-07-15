@@ -639,3 +639,8 @@ app.whenReady().then(() => registerRoutingIpc())
 // w8/voice — append-only local Whisper registration.
 import { registerVoiceIpc } from './services/voice'
 app.whenReady().then(() => registerVoiceIpc())
+
+// w9/spaces — append-only native folder picker registration.
+import { registerDialogIpc } from './services/dialog-service'
+app.whenReady().then(() => registerDialogIpc(ipcMain))
+// end w9/spaces

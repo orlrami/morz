@@ -11,7 +11,7 @@ import {
 } from '@tabler/icons-react'
 import type { FsEntry } from '@shared/ipc'
 import { emit } from '@/lib/app-events'
-import { useSpaceStore, getMorz } from '@/store/spaceStore'
+import { useSpaceStore, getMorz, selectActiveSpace, selectActiveSpaceRoot } from '@/store/spaceStore'
 import { colors } from '@/lib/tokens'
 import { springs } from '@/lib/springs'
 
@@ -28,9 +28,8 @@ interface FileExplorerProps {
  * popout window in Phase 1.
  */
 export function FileExplorer({ open, onClose }: FileExplorerProps): JSX.Element {
-  // no active-space selection yet (0.0.1) — the first space is the active one
-  const space = useSpaceStore((s) => s.spaces[0])
-  const root = space?.root
+  const space = useSpaceStore(selectActiveSpace)
+  const root = useSpaceStore(selectActiveSpaceRoot)
 
   const [childrenByPath, setChildrenByPath] = useState<Record<string, FsEntry[]>>({})
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
@@ -50,6 +49,12 @@ export function FileExplorer({ open, onClose }: FileExplorerProps): JSX.Element 
       setError(`cannot list ${dir}`)
     }
   }, [])
+
+  useEffect(() => {
+    setChildrenByPath({})
+    setExpanded(new Set())
+    setError(null)
+  }, [root])
 
   // (re)load the root whenever the explorer opens on a space
   useEffect(() => {
@@ -125,7 +130,12 @@ export function FileExplorer({ open, onClose }: FileExplorerProps): JSX.Element 
                 {error}
               </div>
             )}
-            {!error && !rootEntries && (
+            {!root && (
+              <div className="px-1.5 py-1" style={{ color: colors.quartzDim }}>
+                Open a folder to browse files.
+              </div>
+            )}
+            {root && !error && !rootEntries && (
               <div className="px-1.5 py-1" style={{ color: colors.quartzDim }}>
                 loading…
               </div>
