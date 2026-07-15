@@ -531,3 +531,50 @@ const voiceBridge: VoiceBridge = {
 }
 
 contextBridge.exposeInMainWorld('morzVoice', voiceBridge)
+
+// w9/browser — append-only isolated embedded-browser bridge.
+import {
+  BrowserApi as BrowserChannels,
+  type BrowserAgentKind,
+  type BrowserBridge,
+  type BrowserRect,
+  type BrowserState,
+  type ElementContext
+} from '../shared/ipc'
+
+const browserBridge: BrowserBridge = {
+  create: (): Promise<BrowserState> => ipcRenderer.invoke(BrowserChannels.create),
+  destroy: (): Promise<void> => ipcRenderer.invoke(BrowserChannels.destroy),
+  state: (): Promise<BrowserState> => ipcRenderer.invoke(BrowserChannels.state),
+  navigate: (url: string): Promise<BrowserState> =>
+    ipcRenderer.invoke(BrowserChannels.navigate, url),
+  setBounds: (rect: BrowserRect): void => ipcRenderer.send(BrowserChannels.setBounds, rect),
+  back: (): Promise<BrowserState> => ipcRenderer.invoke(BrowserChannels.back),
+  forward: (): Promise<BrowserState> => ipcRenderer.invoke(BrowserChannels.forward),
+  reload: (): Promise<BrowserState> => ipcRenderer.invoke(BrowserChannels.reload),
+  setPickMode: (enabled: boolean): Promise<BrowserState> =>
+    ipcRenderer.invoke(BrowserChannels.setPickMode, enabled),
+  discoverLocalhost: (): Promise<string[]> =>
+    ipcRenderer.invoke(BrowserChannels.discoverLocalhost),
+  liveAgents: (kind: BrowserAgentKind): Promise<string[]> =>
+    ipcRenderer.invoke(BrowserChannels.liveAgents, kind),
+  copyText: (text: string): Promise<void> => ipcRenderer.invoke(BrowserChannels.copyText, text),
+  onStateChanged: (callback) => {
+    const listener = (_event: unknown, state: BrowserState): void => callback(state)
+    ipcRenderer.on(BrowserChannels.stateChanged, listener)
+    return () => ipcRenderer.off(BrowserChannels.stateChanged, listener)
+  },
+  onPicked: (callback) => {
+    const listener = (_event: unknown, context: ElementContext): void => callback(context)
+    ipcRenderer.on(BrowserChannels.picked, listener)
+    return () => ipcRenderer.off(BrowserChannels.picked, listener)
+  }
+}
+
+if (process.env.MORZ_E2E === '1') {
+  browserBridge.testPick = (selector: string): Promise<ElementContext> =>
+    ipcRenderer.invoke(BrowserChannels.testPick, selector)
+}
+
+contextBridge.exposeInMainWorld('morzBrowser', browserBridge)
+// end w9/browser

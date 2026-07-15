@@ -639,3 +639,8 @@ app.whenReady().then(() => registerRoutingIpc())
 // w8/voice — append-only local Whisper registration.
 import { registerVoiceIpc } from './services/voice'
 app.whenReady().then(() => registerVoiceIpc())
+
+// w9/browser — append-only WebContentsView + CDP browser registration.
+import { registerBrowserIpc } from './services/browser-host'
+app.whenReady().then(() => registerBrowserIpc())
+// end w9/browser

@@ -830,3 +830,82 @@ export interface VoiceBridge {
   testTranscription(): Promise<string | null>
   transcribe(audio: Uint8Array): Promise<string>
 }
+
+// w9/browser — append-only embedded browser + CDP element-pick contract.
+export interface BrowserRect {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+export interface ElementContext {
+  selector: string
+  a11y: { role: string; name: string }
+  curatedStyles: {
+    color: string
+    backgroundColor: string
+    fontFamily: string
+    fontSize: string
+    fontWeight: string
+    margin: string
+    padding: string
+    border: string
+  }
+  boundingRect: BrowserRect
+  croppedScreenshotDataUrl: string
+  /** Absolute path to the same crop in the OS temp directory. */
+  screenshotPath: string
+  sourceLoc?: string
+  html: string
+}
+
+export interface BrowserState {
+  url: string
+  title: string
+  canGoBack: boolean
+  canGoForward: boolean
+  loading: boolean
+  picking: boolean
+  error?: string
+}
+
+export type BrowserAgentKind = 'agy' | 'claude'
+
+export const BrowserApi = {
+  create: 'browser:create',
+  destroy: 'browser:destroy',
+  state: 'browser:state',
+  navigate: 'browser:navigate',
+  setBounds: 'browser:set-bounds',
+  back: 'browser:back',
+  forward: 'browser:forward',
+  reload: 'browser:reload',
+  setPickMode: 'browser:set-pick-mode',
+  discoverLocalhost: 'browser:discover-localhost',
+  liveAgents: 'browser:live-agents',
+  copyText: 'browser:copy-text',
+  stateChanged: 'browser:state-changed',
+  picked: 'browser:picked',
+  testPick: 'browser:e2e-pick'
+} as const
+
+export interface BrowserBridge {
+  create(): Promise<BrowserState>
+  destroy(): Promise<void>
+  state(): Promise<BrowserState>
+  navigate(url: string): Promise<BrowserState>
+  setBounds(rect: BrowserRect): void
+  back(): Promise<BrowserState>
+  forward(): Promise<BrowserState>
+  reload(): Promise<BrowserState>
+  setPickMode(enabled: boolean): Promise<BrowserState>
+  discoverLocalhost(): Promise<string[]>
+  liveAgents(kind: BrowserAgentKind): Promise<string[]>
+  copyText(text: string): Promise<void>
+  onStateChanged(callback: (state: BrowserState) => void): () => void
+  onPicked(callback: (context: ElementContext) => void): () => void
+  /** Present only when MORZ_E2E=1. */
+  testPick?(selector: string): Promise<ElementContext>
+}
+// end w9/browser
