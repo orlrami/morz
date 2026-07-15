@@ -96,7 +96,7 @@ test.describe.serial('DAG waves and machine-verified Definition of Done', () => 
       await bus.claimTask(taskId, 'codex-dag')
     }, ids.first)
     await expect(firstNode).toHaveAttribute('data-task-state', 'working')
-    await expect(firstNode.locator('[data-state-dot]')).toHaveCSS('background-color', 'rgb(59, 130, 246)')
+    await expect(firstNode.locator('[data-state-dot]')).toHaveCSS('background-color', 'rgb(106, 166, 217)')
 
     const selfReport = await morz.page.evaluate(async (taskId) => {
       const bus = (window as unknown as DagWindow).morz.bus
@@ -116,7 +116,7 @@ test.describe.serial('DAG waves and machine-verified Definition of Done', () => 
     }, ids.first)
     expect(completed.state).toBe('done')
     await expect(firstNode).toHaveAttribute('data-task-state', 'done')
-    await expect(firstNode.locator('[data-state-dot]')).toHaveCSS('background-color', 'rgb(34, 197, 94)')
+    await expect(firstNode.locator('[data-state-dot]')).toHaveCSS('background-color', 'rgb(127, 183, 126)')
     await expect(secondNode).toHaveAttribute('data-locked', 'false')
     await expect(
       morz.page.locator(`[data-dag-edge-from="${ids.first}"][data-dag-edge-to="${ids.second}"]`)
@@ -127,7 +127,7 @@ test.describe.serial('DAG waves and machine-verified Definition of Done', () => 
       await bus.claimTask(taskId, 'codex-dag')
     }, ids.second)
     await expect(secondNode).toHaveAttribute('data-task-state', 'working')
-    await expect(secondNode.locator('[data-state-dot]')).toHaveCSS('background-color', 'rgb(59, 130, 246)')
+    await expect(secondNode.locator('[data-state-dot]')).toHaveCSS('background-color', 'rgb(106, 166, 217)')
 
     const failure = await morz.page.evaluate(async (taskId) => {
       const bus = (window as unknown as DagWindow).morz.bus
@@ -152,7 +152,7 @@ test.describe.serial('DAG waves and machine-verified Definition of Done', () => 
     }, ids.second)
     await expect(secondNode).toHaveAttribute('data-task-state', 'blocked')
     await expect(secondNode).toHaveAttribute('data-blocked-pulse', 'true')
-    await expect(secondNode.locator('[data-state-dot]')).toHaveCSS('background-color', 'rgb(245, 158, 11)')
+    await expect(secondNode.locator('[data-state-dot]')).toHaveCSS('background-color', 'rgb(228, 169, 79)')
     await expect(thirdNode).toHaveAttribute('data-locked', 'true')
   })
 })

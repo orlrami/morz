@@ -128,7 +128,7 @@ export function CommandPalette({ open, onClose, extraActions, onAction }: Comman
                       {action.hint && (
                         <span
                           className="ml-auto rounded-full px-2 py-px text-[9px] font-semibold"
-                          style={{ background: 'rgba(245,158,11,0.16)', color: '#F59E0B' }}
+                          style={{ background: 'rgba(228,169,79,0.16)', color: '#E4A94F' }}
                         >
                           {action.hint}
                         </span>

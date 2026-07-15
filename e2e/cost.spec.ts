@@ -95,7 +95,7 @@ test.describe.serial('cost/token kill-switch', () => {
     ).toEqual(['agent-cost-1', 'agent-cost-2'])
     await expect
       .poll(() => meter.locator('span').evaluate((el) => getComputedStyle(el).backgroundColor))
-      .toBe('rgb(239, 68, 68)')
+      .toBe('rgb(217, 124, 106)')
 
     await page.getByRole('button', { name: 'Resume (raises cap 25%)' }).click()
     await expect(page.getByText('Run paused: cost cap reached')).toHaveCount(0)

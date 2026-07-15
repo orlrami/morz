@@ -85,7 +85,7 @@ export function SettingsPanel(): JSX.Element {
                       className="block h-full rounded-full"
                       initial={{ width: 0 }}
                       animate={{ width: `${u.used}%`, transition: { ...springs.layout, delay: 0.1 } }}
-                      style={{ background: u.used >= 75 ? colors.blocked ?? '#F59E0B' : cliTint[u.cli] }}
+                      style={{ background: u.used >= 75 ? colors.blocked ?? '#E4A94F' : cliTint[u.cli] }}
                     />
                   </div>
                   <div className="mt-2 flex items-center gap-2 text-[10px]" style={{ color: colors.quartzDim }}>
