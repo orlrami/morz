@@ -19,7 +19,20 @@ Wave 5 (8 agents: 3 Fable + 5 GPT-5.6 Sol) merged. **E2E: 40 passed + 6 live-gat
 
 **Integration wiring of note:** planner's LoggingDispatchStub → REAL dispatcher (approve registers in the dispatcher store AND dispatches — the two approval stores can't drift); single `window.morz` expose (a duplicate expose was aborting the rest of preload → dropped morzCommit/morzCost + dag.completeVerified); planner/dispatch hash canonicalizers confirmed identical.
 
-**0.0.3 remaining:** bring-your-own-assistant (Hermes/OpenClaw/Comet) + Daily Pulse (deferred from wave 5) → wave 6.
+**0.0.3 remaining:** bring-your-own-assistant + Daily Pulse → done in wave 6.
+
+### Wave 6 (5 GPT-5.6 agents) — merged, E2E 55 passed + 6 live-gated
+| Deliverable | Status | Notes |
+|---|---|---|
+| Sync reliability + Notification Center | ✅ | registry/GitHub/benchmarks sync fixed: OpenRouter benchmarks 401 → "needs-key" (optional OPENROUTER_API_KEY), GitHub 403 → rate-limited warning not error, offline = one warning not per-page spam. New in-app Notification Center (bell + unread in StatusBar, SQLite-persisted, per-source status, retry actions) via src/shared/notify.ts — nothing fails silently to console. |
+| Bring-your-own-assistant | ✅ | Hermes/OpenClaw/Comet providers → propose SpawnPlan → enters the SAME per-plan hash approval (never auto-dispatches); Manual-inert. |
+| Daily Pulse | ✅ | scheduled brief (git+board+inbox → headless claude); Run-now live; surfaces via Notification Center + tray; gated (enabled + non-Manual). |
+| Organizer GUI | ✅ | Organizer view in the switcher: audit → violations → propose (hash+tree) → apply in sandbox worktree; closes the 0.0.2 backend's missing UI. |
+| Runs monitor | ✅ | live dispatched-team view in OrchestratorPanel: per-agent state, Stop (kill tree) + Cleanup (remove worktrees) from the UI. |
+
+**Integration notes:** SettingsPanel hosts assistant+pulse mounts; single `window.morz` expose invariant held (notify attached before it); deduped NotifyItem import.
+
+**NEXT — wave 7: design-system adoption + deep error research.** Official Brand & Design System v1.0 delivered (see memory morz-brand-system). Adopt brand tokens/fonts/logos/icons; a dedicated agent does deep research on the remaining sync+design/console errors and fixes them.
 
 ## Previous target: **0.0.2 — "The Bus + Additions"** ([spec](../roadmap/0.0.2.md)) — COMPLETE
 
