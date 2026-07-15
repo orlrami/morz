@@ -1,0 +1,359 @@
+import { useEffect, useState, type FormEvent } from 'react'
+import {
+  IconBrain,
+  IconCheck,
+  IconPencil,
+  IconPlus,
+  IconSearch,
+  IconTrash,
+  IconX
+} from '@tabler/icons-react'
+import type { MemoryEntry, MemoryScope } from '@shared/memory'
+import { colors } from '@/lib/tokens'
+import { useMemoryStore } from '@/store/memoryStore'
+
+const SCOPES: MemoryScope[] = ['global', 'project', 'space', 'agent']
+
+function EntryCard({ entry }: { entry: MemoryEntry }): JSX.Element {
+  const busy = useMemoryStore((state) => state.busy)
+  const save = useMemoryStore((state) => state.save)
+  const remove = useMemoryStore((state) => state.remove)
+  const setEnabled = useMemoryStore((state) => state.setEnabled)
+  const [editing, setEditing] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [title, setTitle] = useState(entry.title)
+  const [body, setBody] = useState(entry.body)
+  const isBusy = busy?.endsWith(entry.id) ?? false
+
+  const submitEdit = (event: FormEvent): void => {
+    event.preventDefault()
+    if (!title.trim()) return
+    void save({ ...entry, title: title.trim(), body }).then(() => setEditing(false)).catch(() => undefined)
+  }
+
+  return (
+    <article
+      className="rounded-lg border px-3 py-2.5"
+      style={{
+        background: colors.card,
+        borderColor: entry.enabled ? 'var(--color-line)' : 'rgba(238,230,217,0.08)',
+        opacity: entry.enabled ? 1 : 0.68
+      }}
+      aria-label={`Memory ${entry.title}`}
+    >
+      {editing ? (
+        <form onSubmit={submitEdit} className="space-y-2">
+          <input
+            aria-label={`Edit title for ${entry.title}`}
+            value={title}
+            onChange={(event) => setTitle(event.target.value)}
+            maxLength={240}
+            className="w-full rounded-md border bg-transparent px-2 py-1.5 text-[11px] outline-none focus:border-[#CBA25A]"
+            style={{ borderColor: 'var(--color-line-strong)', color: colors.quartz }}
+          />
+          <textarea
+            aria-label={`Edit body for ${entry.title}`}
+            value={body}
+            onChange={(event) => setBody(event.target.value)}
+            rows={3}
+            className="w-full resize-y rounded-md border bg-transparent px-2 py-1.5 text-[10.5px] leading-relaxed outline-none focus:border-[#CBA25A]"
+            style={{ borderColor: 'var(--color-line-strong)', color: colors.quartz }}
+          />
+          <div className="flex justify-end gap-1.5">
+            <button
+              type="button"
+              onClick={() => {
+                setTitle(entry.title)
+                setBody(entry.body)
+                setEditing(false)
+              }}
+              className="flex min-h-7 items-center gap-1 rounded-md border px-2 text-[10px]"
+              style={{ borderColor: 'var(--color-line-strong)', color: colors.quartzDim }}
+            >
+              <IconX size={11} /> Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={isBusy || !title.trim()}
+              className="flex min-h-7 items-center gap-1 rounded-md px-2 text-[10px] font-semibold disabled:opacity-40"
+              style={{ background: colors.bronze, color: colors.page }}
+            >
+              <IconCheck size={11} /> Save
+            </button>
+          </div>
+        </form>
+      ) : (
+        <>
+          <div className="flex items-start gap-2">
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-[11px] font-semibold" style={{ fontFamily: 'var(--font-display)' }}>
+                {entry.title}
+              </p>
+              <div className="mt-1 flex flex-wrap items-center gap-1 text-[9px] uppercase tracking-[0.08em]" style={{ color: colors.quartzDim }}>
+                <span>{entry.kind}</span>
+                <span aria-hidden="true">·</span>
+                <span>{entry.origin}</span>
+                <span aria-hidden="true">·</span>
+                <span>{entry.scope}</span>
+                {entry.scopeRef && <span className="max-w-44 truncate normal-case tracking-normal">{entry.scopeRef}</span>}
+              </div>
+            </div>
+            <label className="flex min-h-7 cursor-pointer items-center gap-1.5 text-[9.5px]" style={{ color: colors.quartzDim }}>
+              <input
+                type="checkbox"
+                aria-label={`Enable ${entry.title}`}
+                checked={entry.enabled}
+                disabled={isBusy}
+                onChange={(event) => void setEnabled(entry.id, event.target.checked)}
+                className="size-3.5 accent-[#CBA25A]"
+              />
+              {entry.enabled ? 'On' : 'Off'}
+            </label>
+          </div>
+          {entry.body && (
+            <p className="mt-2 line-clamp-3 whitespace-pre-wrap text-[10px] leading-relaxed" style={{ color: colors.quartzDim }}>
+              {entry.body}
+            </p>
+          )}
+          <div className="mt-2 flex justify-end gap-1">
+            <button
+              type="button"
+              aria-label={`Edit ${entry.title}`}
+              onClick={() => setEditing(true)}
+              className="rounded-md p-1.5"
+              style={{ color: colors.quartzDim }}
+            >
+              <IconPencil size={12} stroke={1.5} />
+            </button>
+            {confirmDelete ? (
+              <button
+                type="button"
+                aria-label={`Confirm delete ${entry.title}`}
+                disabled={isBusy}
+                onBlur={() => setConfirmDelete(false)}
+                onClick={() => void remove(entry.id)}
+                className="rounded-md border px-2 py-1 text-[9.5px] disabled:opacity-40"
+                style={{ borderColor: 'rgba(213,106,106,0.45)', color: colors.error }}
+              >
+                Confirm delete
+              </button>
+            ) : (
+              <button
+                type="button"
+                aria-label={`Delete ${entry.title}`}
+                onClick={() => setConfirmDelete(true)}
+                className="rounded-md p-1.5"
+                style={{ color: colors.quartzDim }}
+              >
+                <IconTrash size={12} stroke={1.5} />
+              </button>
+            )}
+          </div>
+        </>
+      )}
+    </article>
+  )
+}
+
+export function MemorySettings(): JSX.Element {
+  const scope = useMemoryStore((state) => state.scope)
+  const scopeRef = useMemoryStore((state) => state.scopeRef)
+  const entries = useMemoryStore((state) => state.entries)
+  const proposals = useMemoryStore((state) => state.proposals)
+  const searchResults = useMemoryStore((state) => state.searchResults)
+  const loading = useMemoryStore((state) => state.loading)
+  const busy = useMemoryStore((state) => state.busy)
+  const error = useMemoryStore((state) => state.error)
+  const start = useMemoryStore((state) => state.start)
+  const setScope = useMemoryStore((state) => state.setScope)
+  const setScopeRef = useMemoryStore((state) => state.setScopeRef)
+  const search = useMemoryStore((state) => state.search)
+  const addRule = useMemoryStore((state) => state.addRule)
+  const resolveProposal = useMemoryStore((state) => state.resolveProposal)
+  const [query, setQuery] = useState('')
+  const [title, setTitle] = useState('')
+  const [body, setBody] = useState('')
+
+  useEffect(() => start(), [start])
+  useEffect(() => {
+    const timer = window.setTimeout(() => void search(query), 250)
+    return () => window.clearTimeout(timer)
+  }, [query, search])
+
+  const pending = proposals.filter((proposal) => proposal.state === 'pending')
+  const visibleEntries = query.trim() ? searchResults : entries
+
+  const submitRule = (event: FormEvent): void => {
+    event.preventDefault()
+    void addRule(title, body).then(() => {
+      setTitle('')
+      setBody('')
+    }).catch(() => undefined)
+  }
+
+  return (
+    <section
+      className="mt-5 rounded-xl border p-3"
+      style={{ background: colors.panel, borderColor: 'var(--color-line)' }}
+      aria-label="Learning memory"
+      role="region"
+    >
+      <div className="flex items-start gap-3">
+        <span
+          className="flex size-8 shrink-0 items-center justify-center rounded-lg border"
+          style={{ borderColor: 'var(--color-line-strong)', color: colors.bronzeHot }}
+        >
+          <IconBrain size={16} stroke={1.6} />
+        </span>
+        <div>
+          <h3 className="text-xs font-semibold" style={{ fontFamily: 'var(--font-display)' }}>
+            Learning memory
+          </h3>
+          <p className="mt-0.5 text-[10.5px] leading-relaxed" style={{ color: colors.quartzDim }}>
+            Local Markdown rules and context shared with agents. Learned changes always wait for approval.
+          </p>
+        </div>
+        <span className="ml-auto rounded-full border px-2 py-1 text-[9.5px]" style={{ borderColor: 'var(--color-line-strong)', color: colors.quartzDim }}>
+          {entries.length} in scope
+        </span>
+      </div>
+
+      <div className="mt-3 flex gap-1 border-t pt-3" style={{ borderColor: 'var(--color-line)' }} role="tablist" aria-label="Memory scope">
+        {SCOPES.map((item) => (
+          <button
+            key={item}
+            type="button"
+            role="tab"
+            aria-selected={scope === item}
+            onClick={() => setScope(item)}
+            className="min-h-7 flex-1 rounded-md border px-1.5 text-[9.5px] capitalize"
+            style={{
+              background: scope === item ? colors.card : 'transparent',
+              borderColor: scope === item ? 'rgba(203,162,90,0.45)' : 'var(--color-line)',
+              color: scope === item ? colors.bronzeHot : colors.quartzDim
+            }}
+          >
+            {item}
+          </button>
+        ))}
+      </div>
+
+      {scope !== 'global' && (
+        <div className="mt-2 flex gap-2">
+          <input
+            aria-label={`${scope} reference`}
+            value={scopeRef}
+            onChange={(event) => setScopeRef(event.target.value)}
+            onBlur={() => void useMemoryStore.getState().refresh()}
+            placeholder={scope === 'project' ? 'Project root' : `${scope} id`}
+            className="min-h-8 min-w-0 flex-1 rounded-md border bg-transparent px-2 text-[10px] outline-none focus:border-[#CBA25A]"
+            style={{ borderColor: 'var(--color-line-strong)', color: colors.quartz }}
+          />
+        </div>
+      )}
+
+      <label className="mt-2 flex min-h-8 items-center gap-2 rounded-md border px-2" style={{ borderColor: 'var(--color-line-strong)' }}>
+        <IconSearch size={12} stroke={1.5} style={{ color: colors.quartzDim }} />
+        <input
+          type="search"
+          aria-label="Search memory"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Search titles and notes"
+          className="min-w-0 flex-1 bg-transparent text-[10.5px] outline-none"
+          style={{ color: colors.quartz }}
+        />
+      </label>
+
+      <form onSubmit={submitRule} className="mt-3 rounded-lg border p-2.5" style={{ borderColor: 'var(--color-line)' }}>
+        <p className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.08em]" style={{ color: colors.bronzeHot }}>
+          <IconPlus size={11} /> Add rule
+        </p>
+        <input
+          aria-label="Rule title"
+          value={title}
+          onChange={(event) => setTitle(event.target.value)}
+          maxLength={240}
+          placeholder="One-line preference"
+          className="mt-2 min-h-8 w-full rounded-md border bg-transparent px-2 text-[10.5px] outline-none focus:border-[#CBA25A]"
+          style={{ borderColor: 'var(--color-line-strong)', color: colors.quartz }}
+        />
+        <textarea
+          aria-label="Rule details"
+          value={body}
+          onChange={(event) => setBody(event.target.value)}
+          rows={2}
+          placeholder="Why it matters and how to apply it"
+          className="mt-2 w-full resize-y rounded-md border bg-transparent px-2 py-1.5 text-[10px] leading-relaxed outline-none focus:border-[#CBA25A]"
+          style={{ borderColor: 'var(--color-line-strong)', color: colors.quartz }}
+        />
+        <button
+          type="submit"
+          disabled={!title.trim() || busy === 'add'}
+          className="mt-2 flex min-h-7 items-center gap-1.5 rounded-md px-2.5 text-[10px] font-semibold disabled:opacity-40"
+          style={{ background: colors.bronze, color: colors.page }}
+        >
+          <IconPlus size={11} /> Save rule
+        </button>
+      </form>
+
+      <div className="mt-3 space-y-2" aria-live="polite">
+        {loading && visibleEntries.length === 0 && <p className="text-[10px]" style={{ color: colors.quartzDim }}>Loading memory…</p>}
+        {!loading && visibleEntries.length === 0 && (
+          <p className="rounded-lg border border-dashed px-3 py-4 text-center text-[10px]" style={{ borderColor: 'var(--color-line)', color: colors.quartzDim }}>
+            {query.trim() ? 'No matching memory.' : 'No memory saved in this scope yet.'}
+          </p>
+        )}
+        {visibleEntries.map((entry) => <EntryCard key={entry.id} entry={entry} />)}
+      </div>
+
+      <div className="mt-4 border-t pt-3" style={{ borderColor: 'var(--color-line)' }}>
+        <div className="flex items-center justify-between">
+          <h4 className="text-[10px] font-semibold uppercase tracking-[0.1em]" style={{ color: colors.bronzeHot }}>
+            Pending proposals
+          </h4>
+          <span className="text-[9.5px]" style={{ color: colors.quartzDim }}>{pending.length}</span>
+        </div>
+        {pending.length === 0 ? (
+          <p className="mt-2 text-[10px]" style={{ color: colors.quartzDim }}>No learned changes are waiting.</p>
+        ) : (
+          <div className="mt-2 space-y-2">
+            {pending.map((proposal) => (
+              <article key={proposal.id} className="rounded-lg border p-2.5" style={{ background: colors.card, borderColor: 'rgba(203,162,90,0.35)' }}>
+                <p className="text-[11px] font-semibold">{proposal.entry.title}</p>
+                {proposal.entry.body && <p className="mt-1 text-[10px] leading-relaxed" style={{ color: colors.quartzDim }}>{proposal.entry.body}</p>}
+                <ul className="mt-2 space-y-1 border-l pl-2 text-[9.5px] leading-relaxed" style={{ borderColor: 'var(--color-line-strong)', color: colors.quartzDim }}>
+                  {proposal.evidence.map((line, index) => <li key={`${proposal.id}-${index}`}>{line}</li>)}
+                </ul>
+                <div className="mt-2 flex gap-1.5">
+                  <button
+                    type="button"
+                    aria-label={`Approve ${proposal.entry.title}`}
+                    disabled={busy === `proposal:${proposal.id}`}
+                    onClick={() => void resolveProposal(proposal.id, true)}
+                    className="flex min-h-7 items-center gap-1 rounded-md px-2 text-[9.5px] font-semibold disabled:opacity-40"
+                    style={{ background: colors.bronze, color: colors.page }}
+                  >
+                    <IconCheck size={11} /> Approve
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={`Reject ${proposal.entry.title}`}
+                    disabled={busy === `proposal:${proposal.id}`}
+                    onClick={() => void resolveProposal(proposal.id, false)}
+                    className="flex min-h-7 items-center gap-1 rounded-md border px-2 text-[9.5px] disabled:opacity-40"
+                    style={{ borderColor: 'var(--color-line-strong)', color: colors.quartzDim }}
+                  >
+                    <IconX size={11} /> Reject
+                  </button>
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {error && <p role="alert" className="mt-3 text-[10px] leading-relaxed" style={{ color: colors.error }}>{error}</p>}
+    </section>
+  )
+}

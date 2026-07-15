@@ -614,3 +614,7 @@ app.whenReady().then(() =>
     }
   })
 )
+
+// w8/memory-core — append-only learning-memory registration
+import { registerMemoryIpc } from './memory'
+app.whenReady().then(() => registerMemoryIpc())

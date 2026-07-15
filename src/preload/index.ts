@@ -375,7 +375,7 @@ const notifyApi: MorzNotifyApi = {
 }
 
 api.notify = notifyApi
-contextBridge.exposeInMainWorld('morz', api)
+// window.morz exposure is deferred to the w8/memory-core EOF block.
 // end w6/errors
 // w6/assistant — APPEND-ONLY: optional assistant proposal bridge
 import {
@@ -443,3 +443,46 @@ if (process.env.MORZ_E2E === '1') {
 }
 
 contextBridge.exposeInMainWorld('morzPulse', pulseBridge)
+
+// w8/memory-core — append-only learning-memory bridge
+import {
+  MemoryApi as MemoryChannels,
+  type MemoryEntry,
+  type MemoryProposal,
+  type MemoryScope,
+  type MorzMemoryApi
+} from '../shared/memory'
+
+type MemoryE2eApi = MorzMemoryApi & {
+  testPropose?(proposal: MemoryProposal): Promise<MemoryProposal>
+  testRender?(opts: { projectRoot?: string; spaceId?: string; agentId?: string }): Promise<string>
+}
+
+const memoryApi: MemoryE2eApi = {
+  list: (scope?: MemoryScope, scopeRef?: string): Promise<MemoryEntry[]> =>
+    ipcRenderer.invoke(MemoryChannels.list, scope, scopeRef),
+  get: (id: string): Promise<MemoryEntry | null> => ipcRenderer.invoke(MemoryChannels.get, id),
+  save: (entry: MemoryEntry): Promise<MemoryEntry> => ipcRenderer.invoke(MemoryChannels.save, entry),
+  remove: (id: string): Promise<void> => ipcRenderer.invoke(MemoryChannels.remove, id),
+  setEnabled: (id: string, enabled: boolean): Promise<MemoryEntry> =>
+    ipcRenderer.invoke(MemoryChannels.setEnabled, { id, enabled }),
+  search: (query: string, limit?: number): Promise<MemoryEntry[]> =>
+    ipcRenderer.invoke(MemoryChannels.search, query, limit),
+  proposals: (): Promise<MemoryProposal[]> => ipcRenderer.invoke(MemoryChannels.proposals),
+  resolveProposal: (id: string, approved: boolean): Promise<MemoryProposal> =>
+    ipcRenderer.invoke(MemoryChannels.resolveProposal, { id, approved }),
+  onChanged: (callback) => {
+    const listener = (): void => callback()
+    ipcRenderer.on(MemoryChannels.changed, listener)
+    return () => ipcRenderer.off(MemoryChannels.changed, listener)
+  }
+}
+
+if (process.env.MORZ_E2E === '1') {
+  memoryApi.testPropose = (proposal) => ipcRenderer.invoke('memory:e2e-propose', proposal)
+  memoryApi.testRender = (opts) => ipcRenderer.invoke('memory:e2e-render', opts)
+}
+
+const apiWithMemory = api as MorzApi & { memory: MorzMemoryApi }
+apiWithMemory.memory = memoryApi
+contextBridge.exposeInMainWorld('morz', apiWithMemory)
