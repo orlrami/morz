@@ -39,7 +39,7 @@ export function OrchestratorPanel(): JSX.Element {
       style={{ background: colors.panel, borderColor: 'var(--color-line)' }}
       aria-label="Orchestrator"
     >
-      {mode === 'manual' ? <ManualNotice /> : <LiveBlackboard showPlanner={mode === 'orchestrated'} />}
+      {mode === 'manual' ? <ManualNotice /> : <LiveBlackboard showPlanner />}{/* w8/routing */}
     </aside>
   )
 }

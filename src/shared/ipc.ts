@@ -743,3 +743,69 @@ export interface PulseBridge {
   /** Present only when MORZ_E2E=1. */
   testNextFire?(time: string, now: number): Promise<number>
 }
+
+// w8/routing — append-only routing, local-model, and settings contract.
+export type RoutingTarget = 'agy' | 'codex' | 'claude' | 'local'
+
+export interface RoutingRuleMatch {
+  keywords: string[]
+  regex: string[]
+}
+
+export interface RoutingRule {
+  id: string
+  label: string
+  match: RoutingRuleMatch
+  target: RoutingTarget
+  reason: string
+  enabled: boolean
+}
+
+export type LocalModelProvider = 'ollama' | 'lm-studio'
+
+export interface LocalModelStatus {
+  provider: LocalModelProvider
+  baseUrl: string
+  healthy: boolean
+  models: string[]
+  checkedAt: number
+  detail?: string
+}
+
+export interface RouteOptions {
+  spaceRoot?: string
+  spacePrivate?: boolean
+}
+
+export interface RouteDecision {
+  target: RoutingTarget
+  reason: string
+  rule: RoutingRule
+  warning?: string
+  localModel?: LocalModelStatus
+  /** Environment for a Claude-Code-compatible local endpoint. Never applied globally. */
+  claudeEnv?: Record<'ANTHROPIC_BASE_URL' | 'ANTHROPIC_MODEL', string>
+}
+
+export interface RoutingSnapshot {
+  rules: RoutingRule[]
+  localModels: LocalModelStatus[]
+  spacePrivate: boolean
+}
+
+export const RoutingApi = {
+  snapshot: 'routing:snapshot',
+  saveRules: 'routing:save-rules',
+  setSpacePrivate: 'routing:set-space-private',
+  refreshLocalModels: 'routing:refresh-local-models',
+  route: 'routing:route'
+} as const
+
+export interface RoutingBridge {
+  snapshot(spaceRoot?: string): Promise<RoutingSnapshot>
+  saveRules(rules: RoutingRule[]): Promise<RoutingRule[]>
+  setSpacePrivate(spaceRoot: string, value: boolean): Promise<boolean>
+  refreshLocalModels(): Promise<LocalModelStatus[]>
+  route(taskText: string, options?: RouteOptions): Promise<RouteDecision>
+}
+// end w8/routing

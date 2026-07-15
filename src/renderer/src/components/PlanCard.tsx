@@ -1,9 +1,22 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
 import { IconCheck, IconTrash, IconUserMinus } from '@tabler/icons-react'
 import type { SpawnPlan } from '@shared/spawn-plan'
-import type { StoredPlanAmendment, StoredSpawnPlan } from '@shared/ipc'
+import type { RouteDecision, RoutingTarget, StoredPlanAmendment, StoredSpawnPlan } from '@shared/ipc'
 import { colors } from '@/lib/tokens'
+import { useModeStore } from '@/store/modeStore'
+import { useRoutingStore } from '@/store/routingStore'
+
+const ROUTE_LABEL: Record<RoutingTarget, string> = {
+  agy: 'Antigravity',
+  codex: 'Codex',
+  claude: 'Claude',
+  local: 'a local model'
+}
+
+function routeCli(target: RoutingTarget): 'agy' | 'codex' | 'claude' {
+  return target === 'local' ? 'claude' : target
+}
 
 interface PlanCardProps {
   record: StoredSpawnPlan
@@ -21,9 +34,61 @@ export function PlanCard({
   onDiscard
 }: PlanCardProps): JSX.Element {
   const [draft, setDraft] = useState(record.plan)
+  const [suggestions, setSuggestions] = useState<Map<number, RouteDecision>>(new Map())
+  const [autoNotice, setAutoNotice] = useState<string[]>([])
+  const autoAppliedHash = useRef('')
+  const onUpdateRef = useRef(onUpdate)
+  const mode = useModeStore((state) => state.mode)
+  const routeTask = useRoutingStore((state) => state.routeTask)
   const hasUnsavedEdits = JSON.stringify(draft.agents) !== JSON.stringify(record.plan.agents)
 
   useEffect(() => setDraft(record.plan), [record.plan])
+  useEffect(() => {
+    onUpdateRef.current = onUpdate
+  }, [onUpdate])
+
+  // w8/routing — rules-only suggestions; no model/classifier call occurs here.
+  useEffect(() => {
+    if (mode === 'manual' || record.state !== 'PROPOSED') {
+      setSuggestions(new Map())
+      return
+    }
+    let cancelled = false
+    void Promise.all(
+      record.plan.agents.map((agent) =>
+        routeTask(`${agent.role}\n${agent.promptSeed}`, { spaceRoot: record.plan.spaceRoot })
+      )
+    ).then((decisions) => {
+      if (cancelled) return
+      const next = new Map<number, RouteDecision>()
+      decisions.forEach((decision, index) => {
+        const agent = record.plan.agents[index]
+        if (!decision || !agent) return
+        const compatibleLocal = decision.target === 'local' && agent.cli === 'claude'
+        if (!compatibleLocal && routeCli(decision.target) !== agent.cli) next.set(index, decision)
+      })
+      setSuggestions(next)
+
+      if (mode === 'orchestrated' && next.size > 0 && autoAppliedHash.current !== record.plan.planHash) {
+        autoAppliedHash.current = record.plan.planHash
+        const agents = record.plan.agents.map((agent, index) => {
+          const suggestion = next.get(index)
+          return suggestion ? { ...agent, cli: routeCli(suggestion.target) } : agent
+        })
+        setAutoNotice(
+          [...next].map(([index, decision]) =>
+            `Auto-routed ${record.plan.agents[index].role} to ${ROUTE_LABEL[decision.target]}`
+          )
+        )
+        void onUpdateRef.current({ ...record.plan, agents }, record.plan.planHash).catch(() => {
+          autoAppliedHash.current = ''
+        })
+      }
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [mode, record.plan, record.state, routeTask])
 
   const savePrompt = (index: number): void => {
     const promptSeed = draft.agents[index]?.promptSeed.trim()
@@ -40,6 +105,23 @@ export function PlanCard({
       { ...draft, agents: draft.agents.filter((_, i) => i !== index) },
       record.plan.planHash
     )
+  }
+
+  const applySuggestion = (index: number): void => {
+    const suggestion = suggestions.get(index)
+    if (!suggestion) return
+    const agents = draft.agents.map((agent, i) =>
+      i === index ? { ...agent, cli: routeCli(suggestion.target) } : agent
+    )
+    void onUpdate({ ...draft, agents }, record.plan.planHash)
+  }
+
+  const keepPlannedRoute = (index: number): void => {
+    setSuggestions((current) => {
+      const next = new Map(current)
+      next.delete(index)
+      return next
+    })
   }
 
   return (
@@ -74,6 +156,16 @@ export function PlanCard({
       </code>
 
       <div className="mt-2 space-y-1.5">
+        {autoNotice.map((notice) => (
+          <p
+            key={notice}
+            data-testid="routing-auto-notice"
+            className="rounded-md border px-2 py-1 text-[9px]"
+            style={{ borderColor: `${colors.working}55`, color: colors.working, background: `${colors.working}0d` }}
+          >
+            {notice}
+          </p>
+        ))}
         {draft.agents.map((agent, index) => (
           <div
             key={agent.agentId}
@@ -107,6 +199,34 @@ export function PlanCard({
             <code className="mt-0.5 block truncate text-[9px]" style={{ color: colors.quartzDim }} title={agent.branch}>
               {agent.branch}
             </code>
+            {mode === 'assisted' && suggestions.has(index) && (
+              <div
+                className="mt-1.5 flex items-center gap-1 rounded-md border px-2 py-1"
+                style={{ borderColor: `${colors.bronze}66`, background: `${colors.bronze}0d` }}
+              >
+                <span className="min-w-0 flex-1 truncate text-[9px]" style={{ color: colors.bronzeHot }}>
+                  Route &apos;{agent.role}&apos; to {ROUTE_LABEL[suggestions.get(index)!.target]}?
+                </span>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => applySuggestion(index)}
+                  className="rounded px-1.5 py-0.5 text-[8.5px] font-bold disabled:opacity-40"
+                  style={{ background: colors.bronze, color: colors.page }}
+                >
+                  Apply
+                </button>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => keepPlannedRoute(index)}
+                  className="rounded px-1 py-0.5 text-[8.5px] disabled:opacity-40"
+                  style={{ color: colors.quartzDim }}
+                >
+                  Keep
+                </button>
+              </div>
+            )}
             <textarea
               aria-label={`Prompt for ${agent.role}`}
               value={agent.promptSeed}

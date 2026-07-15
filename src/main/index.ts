@@ -618,3 +618,21 @@ app.whenReady().then(() =>
 // w8/memory-core — append-only learning-memory registration
 import { registerMemoryIpc } from './memory'
 app.whenReady().then(() => registerMemoryIpc())
+// w8/routing — append-only routing registration and consult registry seam.
+import { configureConsultAdapters } from './bus/tool-handlers'
+import { getAdapter, installE2eConsultStub } from './adapters/registry'
+import { registerRoutingIpc } from './routing/rules'
+
+installE2eConsultStub()
+configureConsultAdapters(
+  (brain) => getAdapter(brain),
+  (brain) => notify({
+    id: `adapter:consult:${brain}`,
+    level: 'error',
+    source: 'adapter',
+    title: `${brain} consult failed`,
+    detail: 'The one-shot consult failed or timed out. Check the target brain configuration.'
+  })
+)
+app.whenReady().then(() => registerRoutingIpc())
+// end w8/routing

@@ -3,7 +3,7 @@
  *   dist/morz-mcp.cjs (shim, spawned as a child with env pointing at a test
  *   pipe) ⇄ src/main/bus/pipe-server.ts + tool-handlers.ts (bundled fresh).
  *
- * Checks: MCP initialize handshake, tools/list = 5 tools, tool-call round
+ * Checks: MCP initialize handshake, tools/list = 6 tools, tool-call round
  * trips (post/claim/complete/open_file), Main-side identity stamping, wake
  * push surfacing as an MCP notification, and the squatting-process case
  * (wrong token → disconnected, calls fail cleanly).
@@ -157,7 +157,7 @@ try {
   shim.notify('notifications/initialized')
 
   const list = await shim.request('tools/list')
-  check('tools/list has 5 tools', list.result?.tools?.length === 5, JSON.stringify(list.result?.tools?.map((t) => t.name)))
+  check('tools/list has 6 tools', list.result?.tools?.length === 6, JSON.stringify(list.result?.tools?.map((t) => t.name)))
 
   const call = (name, args) => shim.request('tools/call', { name, arguments: args })
 
