@@ -39,10 +39,11 @@
   --color-line: rgba(238, 230, 217, 0.08);
   --color-line-strong: rgba(238, 230, 217, 0.14);
 
-  /* type — preset b3Z4dPIdAO: Geist headings/UI, Noto Sans body, mono terminal */
-  --font-display: "Geist Variable", "Segoe UI", system-ui, sans-serif;
-  --font-body: "Noto Sans Variable", "Segoe UI", system-ui, sans-serif;
-  --font-mono: "JetBrains Mono Variable", "Cascadia Code", ui-monospace, monospace;
+  /* w7/design-brand fonts */
+  --font-display: "Hanken Grotesk", "Segoe UI", system-ui, sans-serif;
+  --font-body: "Hanken Grotesk", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Code", ui-monospace, monospace;
+  --font-wordmark: "Quicksand", "Segoe UI", system-ui, sans-serif;
 
   /* radius — rounded shell, crisp data */
   --radius-shell: 16px;
