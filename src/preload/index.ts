@@ -605,3 +605,22 @@ const updaterBridge: UpdaterBridge = {
 }
 
 contextBridge.exposeInMainWorld('morzUpdater', updaterBridge)
+
+// w11/connections — append-only CLI detection and usage bridge.
+import {
+  ConnectionsApi as ConnectionsChannels,
+  type CliConnection,
+  type MorzConnectionsApi
+} from '../shared/connections'
+
+const connectionsBridge: MorzConnectionsApi = {
+  list: (): Promise<CliConnection[]> => ipcRenderer.invoke(ConnectionsChannels.list),
+  refresh: (): Promise<CliConnection[]> => ipcRenderer.invoke(ConnectionsChannels.refresh),
+  onChanged: (callback) => {
+    const listener = (_event: unknown, connections: CliConnection[]): void => callback(connections)
+    ipcRenderer.on(ConnectionsChannels.changed, listener)
+    return () => ipcRenderer.off(ConnectionsChannels.changed, listener)
+  }
+}
+
+contextBridge.exposeInMainWorld('morzConnections', connectionsBridge)

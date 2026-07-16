@@ -659,3 +659,7 @@ app.whenReady().then(() => {
   registerUpdater()
   tray?.setToolTip(`Morz ${app.getVersion()} — terminals keep running here`)
 })
+
+// w11/connections — append-only CLI detection and usage registration.
+import { registerConnectionsIpc } from './services/connections'
+app.whenReady().then(() => registerConnectionsIpc())

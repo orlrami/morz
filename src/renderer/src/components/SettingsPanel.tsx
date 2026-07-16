@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
-import { IconGauge, IconPalette, IconAdjustments, IconUpload } from '@tabler/icons-react'
+import { IconGauge, IconPalette, IconAdjustments, IconPlugConnected, IconUpload } from '@tabler/icons-react'
 import { colors } from '@/lib/tokens'
 import { springs } from '@/lib/springs'
 import { themes, useThemeStore } from '@/lib/themes'
@@ -11,11 +11,14 @@ import { MemorySettings } from './MemorySettings'
 import { RoutingSettings } from './RoutingSettings' // w8/routing
 import { VoiceSettings } from './VoiceSettings'
 import { UpdateSettings } from './UpdateSettings'
+import { ConnectionsSettings } from './ConnectionsSettings' // w11/connections
+import { useConnectionsStore } from '@/store/connectionsStore'
 
-export type SettingsTab = 'limits' | 'appearance' | 'control'
+export type SettingsTab = 'limits' | 'connections' | 'appearance' | 'control'
 
 const TABS: { id: SettingsTab; label: string; icon: typeof IconGauge }[] = [
   { id: 'limits', label: 'Limits & usage', icon: IconGauge },
+  { id: 'connections', label: 'Connections', icon: IconPlugConnected },
   { id: 'appearance', label: 'Appearance', icon: IconPalette },
   { id: 'control', label: 'Control', icon: IconAdjustments }
 ]
@@ -24,6 +27,10 @@ const TABS: { id: SettingsTab; label: string; icon: typeof IconGauge }[] = [
 export function SettingsPanel({ initialTab = 'limits' }: { initialTab?: SettingsTab }): JSX.Element {
   const [tab, setTab] = useState<SettingsTab>(initialTab)
   const { themeId, setTheme } = useThemeStore()
+  const { connections, loading: connectionsLoading, start: startConnections } = useConnectionsStore()
+  const usageConnections = connections.filter((connection) => connection.usage !== null)
+
+  useEffect(() => startConnections(), [startConnections])
 
   return (
     <section className="flex min-w-0 flex-1" style={{ background: colors.page }} aria-label="Settings">
@@ -71,21 +78,70 @@ export function SettingsPanel({ initialTab = 'limits' }: { initialTab?: Settings
             <p className="mt-1 text-xs leading-relaxed" style={{ color: colors.quartzDim }}>
               Live session and run totals appear in the status bar when adapters report them.
             </p>
-            <div
-              className="mt-4 rounded-xl border border-dashed p-4"
-              style={{ background: colors.panel, borderColor: 'var(--color-line-strong)' }}
-              role="status"
-            >
-              <p className="text-xs font-semibold" style={{ fontFamily: 'var(--font-display)' }}>
-                Per-CLI usage is not available yet
-              </p>
-              <p className="mt-1 text-[10.5px] leading-relaxed" style={{ color: colors.quartzDim }}>
-                Rolling membership-window tracking arrives with live lanes. Morz will show unknown usage as a dash,
-                never as an invented percentage.
-              </p>
-            </div>
+            {usageConnections.length > 0 ? (
+              <div className="mt-4 space-y-2.5">
+                {usageConnections.map((connection) => {
+                  const usedPct = connection.usage?.usedPct ?? null
+                  const clampedPct = usedPct === null ? null : Math.max(0, Math.min(100, usedPct))
+                  const reset = connection.usage?.resetsAt
+                    ? new Date(connection.usage.resetsAt).toLocaleString()
+                    : null
+                  return (
+                    <article
+                      key={connection.id}
+                      className="rounded-xl border p-3"
+                      style={{ background: colors.panel, borderColor: 'var(--color-line)' }}
+                      data-testid={`usage-${connection.id}`}
+                    >
+                      <div className="flex items-center justify-between gap-3 text-xs">
+                        <span className="font-semibold" style={{ fontFamily: 'var(--font-display)' }}>
+                          {connection.label}
+                        </span>
+                        <span className="font-mono text-[10px]" style={{ color: colors.quartzDim }}>
+                          {clampedPct === null ? 'Usage percentage unavailable' : `${clampedPct}% used`}
+                        </span>
+                      </div>
+                      {clampedPct !== null && (
+                        <div
+                          className="mt-2 h-1.5 overflow-hidden rounded-full"
+                          style={{ background: 'rgba(0,0,0,0.24)' }}
+                          role="progressbar"
+                          aria-label={`${connection.label} usage`}
+                          aria-valuemin={0}
+                          aria-valuemax={100}
+                          aria-valuenow={clampedPct}
+                        >
+                          <div
+                            className="h-full rounded-full"
+                            style={{ width: `${clampedPct}%`, background: colors.bronze }}
+                          />
+                        </div>
+                      )}
+                      <p className="mt-2 text-[9.5px]" style={{ color: colors.quartzDim }}>
+                        {reset ? `Resets ${reset}` : 'Reset time not reported'}
+                      </p>
+                    </article>
+                  )
+                })}
+              </div>
+            ) : (
+              <div
+                className="mt-4 rounded-xl border border-dashed p-4"
+                style={{ background: colors.panel, borderColor: 'var(--color-line-strong)' }}
+                role="status"
+              >
+                <p className="text-xs font-semibold" style={{ fontFamily: 'var(--font-display)' }}>
+                  {connectionsLoading ? 'Checking CLI usage…' : 'No CLI usage data is available'}
+                </p>
+                <p className="mt-1 text-[10.5px] leading-relaxed" style={{ color: colors.quartzDim }}>
+                  Morz shows a rolling usage bar only when an installed CLI exposes a real percentage locally.
+                </p>
+              </div>
+            )}
           </div>
         )}
+
+        {tab === 'connections' && <ConnectionsSettings />}
 
         {tab === 'appearance' && (
           <div className="max-w-[560px]">
