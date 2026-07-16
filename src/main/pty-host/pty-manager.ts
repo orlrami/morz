@@ -88,6 +88,7 @@ interface Pane {
   scrollback: string[] // ANSI-stripped ring buffer
   scrollbackChars: number
   shell: string
+  argv: string[] // w11/lanes-runs — exact spawn arguments, never environment values
   cwd: string
   pid: number
   tui: boolean // w4/finish
@@ -100,6 +101,8 @@ export interface PaneSpawnedInfo {
   paneId: string
   pid: number
   shell: string
+  argv: string[]
+  foreground?: string
   cwd: string
   sessionGuid: string
 }
@@ -159,6 +162,7 @@ export class PtyManager {
       scrollback: [],
       scrollbackChars: 0,
       shell: file,
+      argv: [...args],
       cwd,
       pid: pty.pid,
       // w4/finish: direct TUI spawns are known before node-pty reports a title.
@@ -186,13 +190,7 @@ export class PtyManager {
       this.hooks.onExit(opts.paneId, exitCode, signal)
     })
     this.panes.set(opts.paneId, pane)
-    this.hooks.onSpawned({
-      paneId: opts.paneId,
-      pid: pty.pid,
-      shell: file,
-      cwd,
-      sessionGuid: SESSION_GUID
-    })
+    this.hooks.onSpawned(this.spawnedInfo(pane)) // w11/lanes-runs
     // w5/dispatch: ConPTY reports pid 0 until its datapipe connects (node-pty
     // updates the getter on 'ready_datapipe') — re-sample so the journal,
     // killTree and the dispatcher's taskkill fallback get the real pid.
@@ -203,13 +201,35 @@ export class PtyManager {
         if (pid > 0) {
           clearInterval(resample)
           pane.pid = pid
-          this.hooks.onSpawned({ paneId: opts.paneId, pid, shell: file, cwd, sessionGuid: SESSION_GUID })
+          this.hooks.onSpawned(this.spawnedInfo(pane)) // w11/lanes-runs
         }
       }, 50)
       setTimeout(() => clearInterval(resample), 10_000)
     }
     this.hooks.onTui(opts.paneId, pane.tui) // w4/finish
     return { ok: true }
+  }
+
+  // w11/lanes-runs — journal only non-secret process identity. `pty.process`
+  // is best-effort: Unix backends may report the foreground child while
+  // Windows ConPTY commonly reports the configured shell/terminal name.
+  private spawnedInfo(pane: Pane): PaneSpawnedInfo {
+    let foreground: string | undefined
+    try {
+      const processName = pane.pty.process
+      if (typeof processName === 'string' && processName.trim()) foreground = processName.trim()
+    } catch {
+      // Dying PTYs can reject process-title access; shell + argv stay authoritative.
+    }
+    return {
+      paneId: pane.paneId,
+      pid: pane.pid,
+      shell: pane.shell,
+      argv: [...pane.argv],
+      foreground,
+      cwd: pane.cwd,
+      sessionGuid: SESSION_GUID
+    }
   }
 
   // w4/finish: transition-only sampling; no process tree or polling loop.

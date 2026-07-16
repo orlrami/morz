@@ -605,3 +605,17 @@ const updaterBridge: UpdaterBridge = {
 }
 
 contextBridge.exposeInMainWorld('morzUpdater', updaterBridge)
+
+// w11/lanes-runs — APPEND-ONLY live PTY process-identity bridge.
+import {
+  PaneInfoApi as PaneInfoChannels,
+  type PaneInfo,
+  type PaneInfoBridge
+} from '../shared/ipc'
+
+const paneInfoBridge: PaneInfoBridge = {
+  list: (): Promise<PaneInfo[]> => ipcRenderer.invoke(PaneInfoChannels.list)
+}
+
+contextBridge.exposeInMainWorld('morzPaneInfo', paneInfoBridge)
+// end w11/lanes-runs
