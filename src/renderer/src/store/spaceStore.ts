@@ -6,7 +6,7 @@
  */
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import type { GitStatus, MorzApi } from '@shared/ipc'
+import type { DialogBridge, GitStatus, MorzApi } from '@shared/ipc'
 
 export type SpaceCli = 'claude' | 'codex' | 'agy' | 'opencode'
 
@@ -51,6 +51,13 @@ const FIRST_BOOT_ROOT = 'C:\\Projects\\morz'
 export function getMorz(): MorzApi | undefined {
   const m = (window as unknown as { morz?: Partial<MorzApi> }).morz
   return m && typeof m.git?.status === 'function' ? (m as MorzApi) : undefined
+}
+
+/** Open the native folder picker and add its selection to the shared space store. */
+export async function pickAndAddSpace(): Promise<Space | null> {
+  const dialog = (window as unknown as { morzDialog?: DialogBridge }).morzDialog
+  const root = await dialog?.pickFolder()
+  return root ? useSpaceStore.getState().addSpace(root) : null
 }
 
 function cleanRoot(root: string): string {
