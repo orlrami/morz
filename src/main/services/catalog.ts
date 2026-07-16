@@ -11,6 +11,11 @@ import {
   type CatalogSourceState,
   type CatalogSourceStatus
 } from '../../shared/ipc'
+import {
+  CURATED_MCP_ALLOWLIST,
+  MCP_RECOMMENDATION_DENYLIST,
+  RECOMMENDED_MCP_LIMIT
+} from './catalog-curated'
 import { notify, registerNotifyAction } from './notify-center'
 
 function sourceUrl(envName: string, fallback: string): string {
@@ -34,6 +39,7 @@ const REGISTRY_CONTINUE_DELAY_MS = 250
 const MAX_GITHUB_FETCHES = 12
 const OFFLINE_RETRY_MS = 5 * 60 * 1_000
 const ERROR_RETRY_MS = 15 * 60 * 1_000
+const CATALOG_REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1_000
 
 class HttpError extends Error {
   constructor(readonly status: number, readonly hostname: string) {
@@ -81,6 +87,7 @@ let registryContinuationTimer: ReturnType<typeof setTimeout> | null = null
 let registrySyncActive = false
 const registrySeenCursors = new Set<string>()
 let ipcRegistered = false
+let catalogRefreshTimer: ReturnType<typeof setInterval> | null = null
 
 function asRecord(value: unknown): JsonRecord | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -894,9 +901,62 @@ async function fetchGithubStars(repo: string): Promise<number | null> {
   }
 }
 
+interface RecommendationCandidate {
+  id: string
+  name: string
+  stars: number | null
+  official: number
+}
+
+function normalizedIdentifier(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+}
+
+function candidateMatches(candidate: RecommendationCandidate, identifier: string): boolean {
+  const needle = normalizedIdentifier(identifier)
+  if (!needle) return false
+  const haystack = normalizedIdentifier(`${candidate.id.replace(/^mcp:/, '')} ${candidate.name}`)
+  return ` ${haystack} `.includes(` ${needle} `)
+}
+
+function curateMcpRecommendations(): void {
+  const db = openCatalogDb()
+  const candidates = db.prepare(
+    `SELECT id, name, stars, official
+     FROM catalog_items
+     WHERE kind = 'mcp' AND install_spec IS NOT NULL
+     ORDER BY COALESCE(stars, 0) DESC, official DESC, name COLLATE NOCASE`
+  ).all() as RecommendationCandidate[]
+  const allowed = candidates.filter((candidate) =>
+    !MCP_RECOMMENDATION_DENYLIST.some((identifier) => candidateMatches(candidate, identifier))
+  )
+  const recommended = new Set<string>()
+
+  for (const group of CURATED_MCP_ALLOWLIST) {
+    const match = allowed.find((candidate) =>
+      !recommended.has(candidate.id) && group.identifiers.some((identifier) => candidateMatches(candidate, identifier))
+    )
+    if (match) recommended.add(match.id)
+    if (recommended.size === RECOMMENDED_MCP_LIMIT) break
+  }
+  for (const candidate of allowed) {
+    if (recommended.size === RECOMMENDED_MCP_LIMIT) break
+    recommended.add(candidate.id)
+  }
+
+  const markRecommended = db.prepare('UPDATE catalog_items SET recommended = 1 WHERE id = ?')
+  db.transaction(() => {
+    db.prepare("UPDATE catalog_items SET recommended = 0 WHERE kind = 'mcp'").run()
+    for (const id of recommended) markRecommended.run(id)
+  })()
+}
+
 async function enrichGithubStars(): Promise<void> {
   const state = sourceRow('github')
-  if (state?.next_retry && state.next_retry > Date.now()) return
+  if (state?.next_retry && state.next_retry > Date.now()) {
+    curateMcpRecommendations()
+    return
+  }
   markSourceAttempt('github')
   const rows = openCatalogDb()
     .prepare(
@@ -935,19 +995,7 @@ async function enrichGithubStars(): Promise<void> {
   }
   if (!failed) markSourceSuccess('github')
 
-  const db = openCatalogDb()
-  db.transaction(() => {
-    db.prepare("UPDATE catalog_items SET recommended = 0 WHERE kind = 'mcp'").run()
-    db.prepare(
-      `UPDATE catalog_items SET recommended = 1
-       WHERE id IN (
-         SELECT id FROM catalog_items
-         WHERE kind = 'mcp' AND install_spec IS NOT NULL
-         ORDER BY COALESCE(stars, 0) DESC, official DESC, name
-         LIMIT 24
-       )`
-    ).run()
-  })()
+  curateMcpRecommendations()
 }
 
 function sanitizedQuery(value: CatalogQuery | undefined): Required<CatalogQuery> {
@@ -1056,10 +1104,36 @@ export function refreshCatalog(query?: CatalogQuery): Promise<CatalogSnapshot> {
   return syncPromise
 }
 
+function emitCatalogUpdated(): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (!window.isDestroyed()) window.webContents.send(CatalogApi.updated)
+  }
+}
+
+function refreshCatalogInBackground(): void {
+  void refreshCatalog()
+    .then(() => emitCatalogUpdated())
+    .catch((error) => console.error('[morz] background catalog refresh failed:', errorMessage(error)))
+}
+
+function registerCatalogAutoRefresh(): void {
+  if (catalogRefreshTimer) return
+  catalogRefreshTimer = setInterval(refreshCatalogInBackground, CATALOG_REFRESH_INTERVAL_MS)
+  catalogRefreshTimer.unref?.()
+  app.on('browser-window-focus', refreshCatalogInBackground)
+  app.once('before-quit', () => {
+    app.removeListener('browser-window-focus', refreshCatalogInBackground)
+    if (catalogRefreshTimer) clearInterval(catalogRefreshTimer)
+    catalogRefreshTimer = null
+  })
+}
+
 export function registerCatalogIpc(): void {
   if (ipcRegistered) return
   ipcRegistered = true
   openCatalogDb()
+  curateMcpRecommendations()
+  registerCatalogAutoRefresh()
   ipcMain.handle(CatalogApi.query, (_event, query?: CatalogQuery) => queryCatalog(query))
   ipcMain.handle(CatalogApi.refresh, (_event, query?: CatalogQuery) => refreshCatalog(query))
   registerNotifyAction('retry-sync', async (noticeId) => {
@@ -1071,8 +1145,6 @@ export function registerCatalogIpc(): void {
     }
     if (requestedSource === 'github') await enrichGithubStars()
     else await refreshCatalog()
-    for (const window of BrowserWindow.getAllWindows()) {
-      if (!window.isDestroyed()) window.webContents.send(CatalogApi.updated)
-    }
+    emitCatalogUpdated()
   })
 }
