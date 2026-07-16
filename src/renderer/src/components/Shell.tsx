@@ -12,7 +12,8 @@ import {
   IconSquareRoundedPlus,
   IconRobot,
   IconColumns,
-  IconX
+  IconX,
+  IconHistory
 } from '@tabler/icons-react'
 import { TitleBar } from './TitleBar'
 import { MorzSignal } from './Brand'
@@ -29,6 +30,7 @@ import { BrowserPanel } from './BrowserPanel'
 import { RemotePanel } from './RemotePanel'
 import { SettingsPanel, type SettingsTab } from './SettingsPanel'
 import { WorkshopPanel } from './WorkshopPanel'
+import { SessionsPanel } from './SessionsPanel'
 // w6/organizer-ui
 import { OrganizerPanel } from './OrganizerPanel'
 import { ToastHost } from './Toast'
@@ -56,9 +58,10 @@ import {
   type SplitNode
 } from '@/store/layoutStore'
 import { getMorz, selectActiveSpaceRoot, useSpaceStore } from '@/store/spaceStore'
+import { useSessionsStore } from '@/store/sessionsStore'
 import type { SessionSnapshot } from '@shared/ipc'
 
-type CenterView = 'terminals' | 'commit' | 'review' | 'dag' | 'browser' | 'remote' | 'organizer' | 'settings' | 'workshop'
+type CenterView = 'terminals' | 'commit' | 'review' | 'dag' | 'browser' | 'remote' | 'organizer' | 'sessions' | 'settings' | 'workshop'
 
 const VIEWS: { id: CenterView; label: string; icon: typeof IconTerminal2 }[] = [
   { id: 'terminals', label: 'Terminals', icon: IconTerminal2 },
@@ -67,7 +70,9 @@ const VIEWS: { id: CenterView; label: string; icon: typeof IconTerminal2 }[] = [
   { id: 'dag', label: 'Waves', icon: IconTopologyStar3 },
   { id: 'browser', label: 'Browser', icon: IconWorld },
   { id: 'remote', label: 'Remote', icon: IconDeviceMobile },
-  { id: 'organizer', label: 'Organizer', icon: IconFolders }
+  { id: 'organizer', label: 'Organizer', icon: IconFolders },
+  // w11/sessions — one center-view entry; SpacesSidebar remains untouched.
+  { id: 'sessions', label: 'Sessions', icon: IconHistory }
 ]
 
 /* Dev-only: allow ?view=commit&explorer=1 so surfaces can be screenshot-verified. */
@@ -178,7 +183,38 @@ export function Shell(): JSX.Element {
   const lanes = useLaneStore((s) => s.lanes)
   const spacesReady = useSpaceStore((state) => state.ready)
   const spaceRoot = useSpaceStore(selectActiveSpaceRoot)
+  const activeSpace = useSpaceStore((state) =>
+    state.spaces.find((space) => space.id === state.activeSpaceId)
+  )
+  const spaceBranch = useSpaceStore((state) =>
+    spaceRoot ? state.gitByRoot[spaceRoot]?.branch ?? null : null
+  )
   const activeLanes = lanes.filter((lane) => sameRoot(lane.cwd, spaceRoot))
+  const sessionAgents = useMemo(
+    () => [
+      ...new Set([
+        ...(activeSpace?.agents.map((agent) => agent.cli) ?? []),
+        ...(activeLanes.length > 0 ? ['claude'] : [])
+      ])
+    ],
+    [activeLanes.length, activeSpace?.agents]
+  )
+  const sessionAgentsKey = sessionAgents.join('|')
+
+  /* w11/sessions — a space with an open pane owns exactly one live work record. */
+  useEffect(() => {
+    const store = useSessionsStore.getState()
+    if (!spacesReady || !spaceRoot) {
+      if (spacesReady) void store.endCurrent()
+      return
+    }
+    if (!hydrated || panes.length === 0) return
+    void store.activate({
+      spaceRoot,
+      title: spaceBranch || activeSpace?.name || 'Project session',
+      agentsUsed: sessionAgents
+    })
+  }, [activeSpace?.name, hydrated, panes.length, sessionAgentsKey, spaceBranch, spaceRoot, spacesReady])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
@@ -467,7 +503,11 @@ export function Shell(): JSX.Element {
               <IconFolders size={15} stroke={1.5} />
             </button>
 
-            <nav className="ml-1 flex items-center gap-0.5 py-1.5" role="tablist" aria-label="Center view">
+            <nav
+              className="ml-1 flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto py-1.5 [&::-webkit-scrollbar]:hidden"
+              role="tablist"
+              aria-label="Center view"
+            >
               {VIEWS.map((v) => {
                 const active = view === v.id
                 const Icon = v.icon
@@ -477,7 +517,7 @@ export function Shell(): JSX.Element {
                     role="tab"
                     aria-selected={active}
                     onClick={() => setView(v.id)}
-                    className="relative flex cursor-pointer items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] font-medium"
+                    className="relative flex shrink-0 cursor-pointer items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] font-medium"
                     style={{ color: active ? colors.quartz : colors.quartzDim, fontFamily: 'var(--font-display)' }}
                   >
                     {active && (
@@ -567,6 +607,8 @@ export function Shell(): JSX.Element {
           {view === 'browser' && <BrowserPanel />}
           {view === 'remote' && <RemotePanel />}
           {view === 'organizer' && <OrganizerPanel />}
+          {/* w11/sessions */}
+          {view === 'sessions' && <SessionsPanel />}
           {view === 'settings' && (
             <SettingsPanel key={`${settingsTab}-${settingsRevision}`} initialTab={settingsTab} />
           )}

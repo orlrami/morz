@@ -659,3 +659,8 @@ app.whenReady().then(() => {
   registerUpdater()
   tray?.setToolTip(`Morz ${app.getVersion()} — terminals keep running here`)
 })
+
+// w11/sessions — append-only per-project work-session history registration.
+import { registerSessionsIpc } from './services/sessions'
+app.whenReady().then(() => registerSessionsIpc())
+// end w11/sessions

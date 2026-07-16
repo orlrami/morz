@@ -950,3 +950,39 @@ export interface UpdaterBridge {
   check(): Promise<UpdaterSnapshot>
   onChanged(callback: (snapshot: UpdaterSnapshot) => void): () => void
 }
+
+// w11/sessions — append-only per-project work-session history contract.
+export type SessionHistorySource = 'morz' | 'claude'
+
+export interface SessionHistoryRecord {
+  id: string
+  spaceRoot: string
+  startedAt: string
+  endedAt: string | null
+  title: string
+  agentsUsed: string[]
+  summary?: string
+  source: SessionHistorySource
+}
+
+export interface SessionHistoryStartInput {
+  spaceRoot: string
+  title?: string
+  agentsUsed?: string[]
+  summary?: string
+}
+
+export const SessionHistoryApi = {
+  start: 'sessions:start',
+  end: 'sessions:end',
+  list: 'sessions:list',
+  current: 'sessions:current'
+} as const
+
+export interface SessionHistoryBridge {
+  start(input: SessionHistoryStartInput): Promise<SessionHistoryRecord>
+  end(sessionId?: string): Promise<SessionHistoryRecord | null>
+  list(spaceRoot: string): Promise<SessionHistoryRecord[]>
+  current(spaceRoot: string): Promise<SessionHistoryRecord | null>
+}
+// end w11/sessions
