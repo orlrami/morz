@@ -13,6 +13,7 @@ import { ApprovalChip } from './ApprovalChip'
 import { AmendmentCard, PlanCard } from './PlanCard'
 import { RunsPanel } from './RunsPanel'
 import { VoiceInput } from './VoiceInput'
+import { MorzSignal } from './Brand'
 
 /*
  * Orchestrator side panel = the live blackboard (0.0.2, w4/handoff).
@@ -66,11 +67,8 @@ function ManualNotice(): JSX.Element {
 function Header({ subtitle }: { subtitle: string }): JSX.Element {
   return (
     <div className="flex items-center gap-2 border-b px-3.5 py-2.5" style={{ borderColor: 'var(--color-line)' }}>
-      <span
-        className="size-4 rounded-[5px]"
-        style={{ background: `linear-gradient(135deg, ${colors.bronzeHot}, #9a7226)` }}
-        aria-hidden
-      />
+      {/* w10/identity — carry the canonical Signal into the system header. */}
+      <MorzSignal className="h-4 w-[22px]" goldPoint style={{ color: colors.quartz }} />
       <span className="text-[13px] font-bold" style={{ fontFamily: 'var(--font-display)' }}>
         Orchestrator
       </span>

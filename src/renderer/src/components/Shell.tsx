@@ -15,6 +15,7 @@ import {
   IconX
 } from '@tabler/icons-react'
 import { TitleBar } from './TitleBar'
+import { MorzSignal } from './Brand'
 import { SpacesSidebar } from './SpacesSidebar'
 import { AgentPillBar } from './AgentPillBar'
 import { OrchestratorPanel } from './OrchestratorPanel'
@@ -164,6 +165,7 @@ export function Shell(): JSX.Element {
   const initial = initialFromUrl()
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [explorerOpen, setExplorerOpen] = useState(initial.explorer)
+  const [orchestratorOpen, setOrchestratorOpen] = useState(true) // w10/identity
   const [view, setView] = useState<CenterView>(initial.view)
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('limits')
   const [settingsRevision, setSettingsRevision] = useState(0)
@@ -504,6 +506,17 @@ export function Shell(): JSX.Element {
             >
               <IconSquareRoundedPlus size={15} stroke={1.5} />
             </button>
+            {/* w10/identity — the orchestrator is a Morz system, not a generic robot. */}
+            <button
+              onClick={() => setOrchestratorOpen((open) => !open)}
+              className="flex cursor-pointer items-center rounded-md p-1.5 transition-colors hover:bg-[#37332B]"
+              title={`${orchestratorOpen ? 'Hide' : 'Show'} orchestrator`}
+              aria-label="Toggle orchestrator"
+              aria-pressed={orchestratorOpen}
+              style={{ color: orchestratorOpen ? colors.quartz : colors.quartzDim }}
+            >
+              <MorzSignal className="h-[15px] w-[21px]" goldPoint />
+            </button>
             <button
               onClick={() => setView('settings')}
               className="mr-2 flex cursor-pointer items-center rounded-md p-1.5 transition-colors hover:bg-[#37332B]"
@@ -560,7 +573,7 @@ export function Shell(): JSX.Element {
           {view === 'workshop' && <WorkshopPanel />}
         </main>
 
-        <OrchestratorPanel />
+        {orchestratorOpen && <OrchestratorPanel />}{/* w10/identity */}
 
         <FileExplorer open={explorerOpen} onClose={() => setExplorerOpen(false)} />
       </div>
