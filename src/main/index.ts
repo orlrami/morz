@@ -301,6 +301,11 @@ function registerPtyIpc(): void {
 
 let tray: Tray | null = null
 
+// w10/identity — one packaged-safe source for the window and tray brand icon.
+function appIconPath(): string {
+  return join(app.getAppPath(), 'resources', 'icon.png')
+}
+
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
     width: 1320,
@@ -308,6 +313,7 @@ function createWindow(): BrowserWindow {
     minWidth: 940,
     minHeight: 600,
     show: false,
+    icon: appIconPath(),
     backgroundColor: '#26241E', // graphite base — matches the design tokens
     titleBarStyle: 'hidden',
     titleBarOverlay: { color: '#2E2B24', symbolColor: '#EEE6D9', height: 38 },
@@ -353,16 +359,14 @@ function openOrFocusWindow(): void {
   }
 }
 
-function bronzeTrayIcon(): Electron.NativeImage {
-  // 16x16 bronze square (BGRA) — placeholder until real brand assets land
-  const size = 16
-  const buf = Buffer.alloc(size * size * 4)
-  for (let i = 0; i < size * size; i++) buf.writeUInt32LE(0xffb08d57, i * 4) // A R G B → LE bytes B,G,R,A
-  return nativeImage.createFromBitmap(buf, { width: size, height: size })
+function brandTrayIcon(): Electron.NativeImage {
+  // w10/identity — Windows' notification area is 16px; other platforms prefer 32px.
+  const size = process.platform === 'win32' ? 16 : 32
+  return nativeImage.createFromPath(appIconPath()).resize({ width: size, height: size })
 }
 
 function createTray(): void {
-  tray = new Tray(bronzeTrayIcon())
+  tray = new Tray(brandTrayIcon())
   tray.setToolTip('Morz — terminals keep running here')
   tray.setContextMenu(
     Menu.buildFromTemplate([
@@ -486,6 +490,7 @@ function startBus(): void {
 /* ── app lifecycle ───────────────────────────────────────────── */
 
 app.whenReady().then(() => {
+  Menu.setApplicationMenu(null) // w10/identity — app shortcuts are renderer key listeners.
   sweepOrphans()
   startBus()
   registerPtyIpc()
