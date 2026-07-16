@@ -56,7 +56,17 @@ Brand tokens/fonts (Hanken Grotesk + Quicksand)/Signal logo/real icons adopted; 
 
 **Integration:** Shell palette kept polish's action system with spaces' one-lane-per-SPACE gate; AgentPillBar took polish's real-data version.
 
-**STATE: 0.0.1→0.0.4 ALL SHIPPED. Morz is daily-drive ready — next: owner dogfoods (codes in Morz); fixes flow from real usage. Parked: remote app, signing, SaaS.**
+**STATE: 0.0.1→0.0.4 ALL SHIPPED.**
+
+### Wave 10 (dogfood round 1, 3 Sol agents) — merged. E2E 97 passed + 6 live-gated.
+From owner's first look at the running app:
+- **Space tabs**: titlebar mock tabs (morz-core/api-service) → real space tabs (switch/add/close), driven by spaceStore.
+- **Sidebar**: live per-space state (branch/dirty/lanes/dispatched agents) + honest empty states; **mock.ts DELETED** (zero importers left).
+- **Identity**: dev-launch brand taskbar icon; orchestrator toggle + panel header now carry the Morz Signal glyph; default Electron menu removed (Ctrl+K/B still app-level).
+
+**Installed & running as a real app:** `npm run build:win` → signed NSIS `release/morz-0.0.4-setup.exe` → installed to %LOCALAPPDATA%\Programs\Morz with Start-Menu + Desktop `Morz.lnk`. Owner now launches without a command.
+
+**MODE CHANGE: owner is dogfooding — coding Morz *with* Morz, and will NOT report every bug.** Waves become owner-driven from real usage, not roadmap-driven. Integration cadence: after each wave I rebuild+reinstall the signed exe so what the owner sees is always the packaged product. Parked: remote app, code signing cert, SaaS.
 
 ## Previous target: **0.0.2 — "The Bus + Additions"** ([spec](../roadmap/0.0.2.md)) — COMPLETE
 
