@@ -10,7 +10,7 @@ import {
   IconWorld
 } from '@tabler/icons-react'
 import { colors } from '@/lib/tokens'
-import { cliTint } from '@/lib/mock'
+import { cliTint } from '@/lib/cli'
 import { springs } from '@/lib/springs'
 import { emit } from '@/lib/app-events'
 import { useBrowserStore } from '@/store/browserStore'

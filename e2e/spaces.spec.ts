@@ -165,7 +165,10 @@ test.describe.serial('real space management (w9/spaces)', () => {
     await morz.page.reload()
     const migrated = morz.page.locator('[data-space-name="Legacy custom space"]')
     await expect(migrated).toHaveAttribute('data-active', 'true')
-    await expect(migrated).toContainText('valid-agent')
+    await expect(migrated).not.toContainText('valid-agent')
     await expect(migrated).not.toContainText('stale-agent')
+    await expect(
+      morz.page.getByRole('complementary', { name: 'Spaces sidebar' })
+    ).toContainText('No agents running here yet')
   })
 })
