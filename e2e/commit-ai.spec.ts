@@ -162,6 +162,15 @@ test('shows the engine connection hint without blocking staging', async () => {
   const { app, page } = await launchMorz()
   try {
     await openCommitPage(page, root)
+    // report-engine now ships integrated + defaults to claude-cli (configured),
+    // so the old MORZ_E2E_COMMIT_AI_NO_REPORT flag no longer forces the hint.
+    // Force an unconfigured engine (key-based provider, no key) → configured=false.
+    await page.evaluate(async () => {
+      const report = (
+        window as unknown as { morz?: { report?: { setProvider(p: string): Promise<unknown> } } }
+      ).morz?.report
+      if (report) await report.setProvider('openai')
+    })
     await page.getByRole('button', { name: /fix: polish launch copy/ }).click()
     await expect(page.getByTestId('commit-ai-summary')).toContainText(
       'Connect an AI report engine in Settings'
