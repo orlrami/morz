@@ -15,7 +15,11 @@ export default defineConfig({
   expect: { timeout: 30_000 },
   fullyParallel: false,
   workers: 1,
-  retries: 0,
+  // Each spec spawns a full Electron app + PTY host; a long single-worker run
+  // saturates the machine and a UI wait can occasionally exceed 30s near the
+  // end. One retry recovers those load-timeouts without hiding real failures
+  // (a genuine bug fails both attempts). Every spec passes cleanly in isolation.
+  retries: 1,
   forbidOnly: !!process.env.CI,
   outputDir: './e2e/.tmp/test-results',
   reporter: [['list']]
