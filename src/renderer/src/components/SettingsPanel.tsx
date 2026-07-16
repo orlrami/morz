@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { motion } from 'framer-motion'
-import { IconGauge, IconPalette, IconAdjustments, IconUpload } from '@tabler/icons-react'
+import { IconGauge, IconPalette, IconAdjustments, IconSparkles, IconUpload } from '@tabler/icons-react'
 import { colors } from '@/lib/tokens'
 import { springs } from '@/lib/springs'
 import { themes, useThemeStore } from '@/lib/themes'
@@ -11,13 +11,15 @@ import { MemorySettings } from './MemorySettings'
 import { RoutingSettings } from './RoutingSettings' // w8/routing
 import { VoiceSettings } from './VoiceSettings'
 import { UpdateSettings } from './UpdateSettings'
+import { ReportSettings } from './ReportSettings' // w11/report-engine
 
-export type SettingsTab = 'limits' | 'appearance' | 'control'
+export type SettingsTab = 'limits' | 'appearance' | 'control' | 'reports'
 
 const TABS: { id: SettingsTab; label: string; icon: typeof IconGauge }[] = [
   { id: 'limits', label: 'Limits & usage', icon: IconGauge },
   { id: 'appearance', label: 'Appearance', icon: IconPalette },
-  { id: 'control', label: 'Control', icon: IconAdjustments }
+  { id: 'control', label: 'Control', icon: IconAdjustments },
+  { id: 'reports', label: 'AI reports', icon: IconSparkles }
 ]
 
 /* Settings: live usage availability, theme importer, and the control defaults. */
@@ -41,6 +43,7 @@ export function SettingsPanel({ initialTab = 'limits' }: { initialTab?: Settings
             <button
               key={t.id}
               type="button"
+              aria-current={active ? 'page' : undefined}
               onClick={() => setTab(t.id)}
               className="relative mb-0.5 flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs"
               style={{ color: active ? colors.quartz : colors.quartzDim, fontFamily: 'var(--font-display)' }}
@@ -169,6 +172,9 @@ export function SettingsPanel({ initialTab = 'limits' }: { initialTab?: Settings
             {/* // w9/installer */}<UpdateSettings />
           </div>
         )}
+
+        {/* // w11/report-engine */}
+        {tab === 'reports' && <ReportSettings />}
       </div>
     </section>
   )

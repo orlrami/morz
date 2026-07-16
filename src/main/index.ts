@@ -659,3 +659,7 @@ app.whenReady().then(() => {
   registerUpdater()
   tray?.setToolTip(`Morz ${app.getVersion()} — terminals keep running here`)
 })
+
+// w11/report-engine — append-only configurable AI report registration.
+import { registerReportIpc } from './services/report-engine'
+app.whenReady().then(() => registerReportIpc())
