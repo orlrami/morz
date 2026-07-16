@@ -715,3 +715,16 @@ if (process.env.MORZ_E2E === '1') {
   contextBridge.exposeInMainWorld('morzCommitAiReportStub', e2eReportBridge)
 }
 // end w11/commit-ai
+// w11/lanes-runs — APPEND-ONLY live PTY process-identity bridge.
+import {
+  PaneInfoApi as PaneInfoChannels,
+  type PaneInfo,
+  type PaneInfoBridge
+} from '../shared/ipc'
+
+const paneInfoBridge: PaneInfoBridge = {
+  list: (): Promise<PaneInfo[]> => ipcRenderer.invoke(PaneInfoChannels.list)
+}
+
+contextBridge.exposeInMainWorld('morzPaneInfo', paneInfoBridge)
+// end w11/lanes-runs

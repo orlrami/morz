@@ -2,6 +2,8 @@ import { create } from 'zustand'
 import type { MorzRunApi, RunSummary } from '@shared/ipc'
 import type { RunStatus } from '@shared/spawn-plan'
 
+const LIVE_RUN_STATES = new Set<RunSummary['state']>(['dispatching', 'running', 'merging'])
+
 interface RunsState {
   available: boolean
   loading: boolean
@@ -77,7 +79,13 @@ export async function hydrateRuns(): Promise<void> {
       ? selected
       : runs[0]?.runId ?? null
     useRunsStore.setState({ runs, selectedRunId, loading: false })
-    if (selectedRunId) await loadStatus(selectedRunId)
+    // w11/lanes-runs — pill-bar truth includes every live run, not only the
+    // Runs panel's selected row. Keep the selected historical run hydrated too.
+    const statusIds = new Set(
+      runs.filter((run) => LIVE_RUN_STATES.has(run.state)).map((run) => run.runId)
+    )
+    if (selectedRunId) statusIds.add(selectedRunId)
+    await Promise.all([...statusIds].map((runId) => loadStatus(runId)))
   } catch (error) {
     useRunsStore.setState({
       loading: false,
@@ -85,6 +93,8 @@ export async function hydrateRuns(): Promise<void> {
     })
   }
 }
+
+let liveSubscription: { refs: number; unsubscribe: () => void } | null = null
 
 /** Subscribe before hydrating so a dispatch cannot slip between the two. */
 export function subscribeRuns(): () => void {
@@ -94,11 +104,27 @@ export function subscribeRuns(): () => void {
     return () => undefined
   }
 
-  const unsubscribe = api.onRunChanged((status) => {
-    const known = useRunsStore.getState().runs.some((run) => run.runId === status.runId)
-    useRunsStore.getState().ingest(status)
-    if (!known) void hydrateRuns()
-  })
-  void hydrateRuns()
-  return unsubscribe
+  // w11/lanes-runs — AgentPillBar, RunsPanel, sidebar, and status bar share one
+  // listener. Ref-counting prevents duplicate events without letting one
+  // component's cleanup silently unsubscribe the others.
+  if (!liveSubscription) {
+    const unsubscribe = api.onRunChanged((status) => {
+      const known = useRunsStore.getState().runs.some((run) => run.runId === status.runId)
+      useRunsStore.getState().ingest(status)
+      if (!known) void hydrateRuns()
+    })
+    liveSubscription = { refs: 0, unsubscribe }
+    void hydrateRuns()
+  }
+  liveSubscription.refs++
+  let released = false
+  return () => {
+    if (released || !liveSubscription) return
+    released = true
+    liveSubscription.refs--
+    if (liveSubscription.refs === 0) {
+      liveSubscription.unsubscribe()
+      liveSubscription = null
+    }
+  }
 }

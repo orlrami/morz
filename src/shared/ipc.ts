@@ -986,3 +986,20 @@ export interface CommitAiBridge {
   branchDiffVsBase(root: string): Promise<CommitBranchDiff>
 }
 // end w11/commit-ai
+// w11/lanes-runs — APPEND-ONLY live PTY process-identity contract.
+export interface PaneInfo {
+  paneId: string
+  shell: string
+  argv: string[]
+  /** Best-effort foreground process title; absent when the PTY backend cannot report it. */
+  foreground?: string
+}
+
+export const PaneInfoApi = {
+  list: 'pty:paneInfo'
+} as const
+
+export interface PaneInfoBridge {
+  list(): Promise<PaneInfo[]>
+}
+// end w11/lanes-runs

@@ -18,7 +18,7 @@ import {
 } from 'electron'
 import { join, basename } from 'path'
 import { spawnSync } from 'child_process'
-import { PtyApi, type TerminalSpawnOpts } from '../shared/ipc'
+import { PaneInfoApi, PtyApi, type PaneInfo, type TerminalSpawnOpts } from '../shared/ipc'
 
 /*
  * Test isolation hook: Electron resolves appData via the Windows shell API, so
@@ -111,6 +111,8 @@ interface SpawnJournal {
   paneId: string
   pid: number
   shell: string
+  argv?: string[] // w11/lanes-runs — absent on journal rows from older builds
+  foreground?: string
   cwd: string
   sessionGuid: string
 }
@@ -279,6 +281,31 @@ function sweepOrphans(): void {
 function registerPtyIpc(): void {
   ipcMain.handle(PtyApi.spawn, (_e, opts: TerminalSpawnOpts) => hostRequest('spawn', opts))
   ipcMain.handle(PtyApi.list, () => hostRequest<string[]>('list'))
+  // w11/lanes-runs — intersect the durable spawn journal with the host's live
+  // pane set. This fails closed: malformed/stale rows never reach the renderer.
+  ipcMain.handle(PaneInfoApi.list, async (): Promise<PaneInfo[]> => {
+    const paneIds = await hostRequest<string[]>('list')
+    const live = new Set(paneIds)
+    const latest = new Map<string, PaneInfo>()
+    for (const row of journalEntries('pty-spawn')) {
+      const info = row.payload as SpawnJournal | null
+      if (!info || !live.has(info.paneId) || typeof info.shell !== 'string') continue
+      latest.set(info.paneId, {
+        paneId: info.paneId,
+        shell: info.shell,
+        argv: Array.isArray(info.argv)
+          ? info.argv.filter((value): value is string => typeof value === 'string')
+          : [],
+        ...(typeof info.foreground === 'string' && info.foreground.trim()
+          ? { foreground: info.foreground.trim() }
+          : {})
+      })
+    }
+    return paneIds.flatMap((paneId) => {
+      const info = latest.get(paneId)
+      return info ? [info] : []
+    })
+  })
   ipcMain.on(PtyApi.resize, (_e, p: { paneId: string; cols: number; rows: number }) => {
     hostRequest('resize', p).catch(() => {})
   })
