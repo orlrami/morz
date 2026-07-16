@@ -485,7 +485,7 @@ if (process.env.MORZ_E2E === '1') {
 
 const apiWithMemory = api as MorzApi & { memory: MorzMemoryApi }
 apiWithMemory.memory = memoryApi
-contextBridge.exposeInMainWorld('morz', apiWithMemory)
+// window.morz exposure is deferred to the w11/report-engine EOF block.
 // w8/routing — append-only routing/settings bridge.
 import {
   RoutingApi as RoutingChannels,
@@ -624,3 +624,25 @@ const connectionsBridge: MorzConnectionsApi = {
 }
 
 contextBridge.exposeInMainWorld('morzConnections', connectionsBridge)
+// w11/report-engine — append-only AI report bridge; this is the single window.morz exposure.
+import {
+  ReportApi as ReportChannels,
+  type MorzReportApi,
+  type ReportProvider,
+  type ReportRequest
+} from '../shared/report'
+
+const reportBridge: MorzReportApi = {
+  config: () => ipcRenderer.invoke(ReportChannels.config),
+  setProvider: (provider: ReportProvider, model?: string) =>
+    ipcRenderer.invoke(ReportChannels.setProvider, { provider, model }),
+  setKey: (provider: ReportProvider, key: string) =>
+    ipcRenderer.invoke(ReportChannels.setKey, { provider, key }),
+  clearKey: (provider: ReportProvider) => ipcRenderer.invoke(ReportChannels.clearKey, provider),
+  test: () => ipcRenderer.invoke(ReportChannels.test),
+  summarize: (request: ReportRequest) => ipcRenderer.invoke(ReportChannels.summarize, request)
+}
+
+const apiWithReport = apiWithMemory as typeof apiWithMemory & { report: MorzReportApi }
+apiWithReport.report = reportBridge
+contextBridge.exposeInMainWorld('morz', apiWithReport)

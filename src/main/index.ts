@@ -663,3 +663,6 @@ app.whenReady().then(() => {
 // w11/connections — append-only CLI detection and usage registration.
 import { registerConnectionsIpc } from './services/connections'
 app.whenReady().then(() => registerConnectionsIpc())
+// w11/report-engine — append-only configurable AI report registration.
+import { registerReportIpc } from './services/report-engine'
+app.whenReady().then(() => registerReportIpc())
