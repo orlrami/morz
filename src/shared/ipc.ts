@@ -950,3 +950,39 @@ export interface UpdaterBridge {
   check(): Promise<UpdaterSnapshot>
   onChanged(callback: (snapshot: UpdaterSnapshot) => void): () => void
 }
+
+// w11/commit-ai — append-only commit intelligence contract.
+export interface CommitHistoryEntry extends CommitLogEntry {
+  diff: string
+}
+
+export interface CommitFileHistory {
+  path: string
+  firstSeenCommit: string | null
+  firstSeenDate: string | null
+  firstSeenSubject: string | null
+  branch: string | null
+  commits: CommitLogEntry[]
+}
+
+export interface CommitBranchDiff {
+  branch: string | null
+  baseBranch: string | null
+  diff: string
+  commits: CommitLogEntry[]
+}
+
+export const CommitAiApi = {
+  commitLog: 'commit:history-log',
+  commitDiff: 'commit:history-diff',
+  fileHistory: 'commit:file-history',
+  branchDiffVsBase: 'commit:branch-diff-vs-base'
+} as const
+
+export interface CommitAiBridge {
+  commitLog(root: string): Promise<CommitHistoryEntry[]>
+  commitDiff(root: string, sha: string): Promise<string>
+  fileHistory(root: string, path: string): Promise<CommitFileHistory>
+  branchDiffVsBase(root: string): Promise<CommitBranchDiff>
+}
+// end w11/commit-ai

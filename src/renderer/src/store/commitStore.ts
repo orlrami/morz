@@ -1,12 +1,30 @@
 import { create } from 'zustand'
-import type { CommitBridge, CommitFileDiff, CommitLogEntry, GitFile } from '@shared/ipc'
+import type {
+  CommitAiBridge,
+  CommitBridge,
+  CommitFileDiff,
+  CommitHistoryEntry,
+  GitFile
+} from '@shared/ipc'
+import type { MorzReportApi, ReportKind } from '@shared/report'
+
+const REPORT_ENGINE_HINT = 'Connect an AI report engine in Settings to explain commits, files, and branches.'
+const MAX_REPORT_CONTEXT_BYTES = 384 * 1024
+
+interface CommitSummary {
+  title: string
+  text: string
+  status: 'loading' | 'ready' | 'hint' | 'error'
+}
 
 interface CommitState {
   root: string
   files: GitFile[]
   selectedPath: string | null
   diff: CommitFileDiff | null
-  log: CommitLogEntry[]
+  log: CommitHistoryEntry[]
+  selectedCommitSha: string | null
+  summary: CommitSummary | null
   message: string
   loading: boolean
   busy: string | null
@@ -20,6 +38,9 @@ interface CommitState {
   discardFile(root: string, path: string, confirmed: boolean): Promise<void>
   createCommit(root: string): Promise<void>
   suggestMessage(root: string): Promise<void>
+  summarizeCommit(root: string, entry: CommitHistoryEntry): Promise<void>
+  summarizeFile(root: string, path: string): Promise<void>
+  summarizeBranch(root: string): Promise<void>
 }
 
 function bridge(): CommitBridge {
@@ -28,12 +49,58 @@ function bridge(): CommitBridge {
   return api
 }
 
+function commitAiBridge(): CommitAiBridge | undefined {
+  return (window as unknown as { morzCommitAi?: CommitAiBridge }).morzCommitAi
+}
+
+function reportBridge(): MorzReportApi | undefined {
+  const bridges = window as unknown as {
+    morz?: { report?: MorzReportApi }
+    /** Deterministic consumer-contract stub, exposed only under MORZ_E2E. */
+    morzCommitAiReportStub?: MorzReportApi
+    morzCommitAiReportDisabled?: boolean
+  }
+  if (bridges.morzCommitAiReportDisabled) return undefined
+  return bridges.morzCommitAiReportStub ?? bridges.morz?.report
+}
+
+function boundedReportContext(value: string): string {
+  const encoded = new TextEncoder().encode(value)
+  if (encoded.byteLength <= MAX_REPORT_CONTEXT_BYTES) return value
+  const prefix = new TextDecoder().decode(encoded.slice(0, MAX_REPORT_CONTEXT_BYTES))
+  return `${prefix}\n... [report context truncated at 384 KB]`
+}
+
+async function requestReport(kind: ReportKind, context: string, cwd: string): Promise<CommitSummary> {
+  const report = reportBridge()
+  if (!report) return { title: '', text: REPORT_ENGINE_HINT, status: 'hint' }
+  try {
+    const config = await report.config()
+    if (!config.configured) return { title: '', text: REPORT_ENGINE_HINT, status: 'hint' }
+    const result = await report.summarize({ kind, context: boundedReportContext(context), cwd })
+    return {
+      title: '',
+      text: result.text || (result.ok ? 'The report engine returned an empty summary.' : 'Report failed.'),
+      status: result.ok ? 'ready' : 'error'
+    }
+  } catch (error) {
+    return { title: '', text: errorMessage(error), status: 'error' }
+  }
+}
+
+function formatLog(entries: Array<{ shortSha: string; date: string; subject: string }>): string {
+  return entries.length
+    ? entries.map((entry) => `${entry.shortSha} ${entry.date} ${entry.subject}`).join('\n')
+    : '(no commits found)'
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
 let refreshGeneration = 0
 let operationGeneration = 0
+let summaryGeneration = 0
 
 export const useCommitStore = create<CommitState>((set, get) => ({
   root: '',
@@ -41,6 +108,8 @@ export const useCommitStore = create<CommitState>((set, get) => ({
   selectedPath: null,
   diff: null,
   log: [],
+  selectedCommitSha: null,
+  summary: null,
   message: '',
   loading: false,
   busy: null,
@@ -51,24 +120,34 @@ export const useCommitStore = create<CommitState>((set, get) => ({
     const rootChanged = get().root !== root
     if (rootChanged) operationGeneration += 1
     if (!root) {
-      set({ root, files: [], selectedPath: null, diff: null, log: [], message: '', loading: false, busy: null, error: null })
+      summaryGeneration += 1
+      set({ root, files: [], selectedPath: null, diff: null, log: [], selectedCommitSha: null, summary: null, message: '', loading: false, busy: null, error: null })
       return
     }
     set({
       root,
       loading: true,
       error: null,
-      ...(rootChanged ? { files: [], selectedPath: null, diff: null, log: [], message: '', busy: null } : {})
+      ...(rootChanged ? { files: [], selectedPath: null, diff: null, log: [], selectedCommitSha: null, summary: null, message: '', busy: null } : {})
     })
     try {
-      const [status, log] = await Promise.all([window.morz.git.status(root), bridge().log(root)])
+      const [status, entries] = await Promise.all([
+        window.morz.git.status(root),
+        bridge().log(root).catch(() => [])
+      ])
       if (generation !== refreshGeneration) return
       const previous = get().root === root ? get().selectedPath : null
       const selectedPath =
         previous && status.files.some((file) => file.path === previous)
           ? previous
           : (status.files[0]?.path ?? null)
-      set({ root, files: status.files, log, selectedPath, loading: false })
+      set({
+        root,
+        files: status.files,
+        log: entries.map((entry) => ({ ...entry, diff: '' })),
+        selectedPath,
+        loading: false
+      })
       if (selectedPath) await get().selectFile(root, selectedPath)
       else set({ diff: null })
     } catch (error) {
@@ -77,7 +156,8 @@ export const useCommitStore = create<CommitState>((set, get) => ({
   },
   selectFile: async (root, path) => {
     if (get().root !== root) return
-    set({ selectedPath: path, error: null })
+    summaryGeneration += 1
+    set({ selectedPath: path, selectedCommitSha: null, diff: null, summary: null, error: null })
     try {
       const diff = await bridge().fileDiff(root, path)
       if (get().root === root && get().selectedPath === path) set({ diff })
@@ -168,6 +248,99 @@ export const useCommitStore = create<CommitState>((set, get) => ({
       if (operation === operationGeneration && get().root === root) set({ error: errorMessage(error) })
     } finally {
       if (operation === operationGeneration && get().root === root) set({ busy: null })
+    }
+  },
+  summarizeCommit: async (root, entry) => {
+    if (get().root !== root) return
+    const generation = ++summaryGeneration
+    const title = `Commit ${entry.shortSha}`
+    set({ selectedCommitSha: entry.sha, summary: { title, text: '', status: 'loading' } })
+    let commitPatch = entry.diff
+    if (!commitPatch) {
+      try {
+        commitPatch = (await commitAiBridge()?.commitDiff(root, entry.sha)) ?? '(diff unavailable)'
+      } catch {
+        commitPatch = '(diff unavailable: output exceeded the history limit)'
+      }
+    }
+    if (generation !== summaryGeneration || get().root !== root) return
+    const result = await requestReport(
+      'commit',
+      [`Commit: ${entry.sha}`, `Author: ${entry.author}`, `Date: ${entry.date}`, `Message: ${entry.subject}`, '', 'Diff:', commitPatch || '(no textual diff)'].join('\n'),
+      root
+    )
+    if (generation === summaryGeneration && get().root === root) set({ summary: { ...result, title } })
+  },
+  summarizeFile: async (root, path) => {
+    if (get().root !== root) return
+    const historyBridge = commitAiBridge()
+    const generation = ++summaryGeneration
+    const title = `File ${path}`
+    set({ selectedCommitSha: null, summary: { title, text: '', status: 'loading' } })
+    if (!historyBridge) {
+      if (generation === summaryGeneration) set({ summary: { title, text: 'Commit history is unavailable in this build.', status: 'error' } })
+      return
+    }
+    try {
+      const [history, requestedDiff] = await Promise.all([
+        historyBridge.fileHistory(root, path),
+        bridge().fileDiff(root, path).catch(() => null)
+      ])
+      if (generation !== summaryGeneration || get().root !== root) return
+      const selectedDiff = requestedDiff?.path === path ? requestedDiff : null
+      const result = await requestReport(
+        'file',
+        [
+          `File: ${history.path}`,
+          `Branch: ${history.branch ?? '(detached HEAD)'}`,
+          `Added in commit: ${history.firstSeenCommit ?? '(not committed yet)'}`,
+          `Added date: ${history.firstSeenDate ?? '(not committed yet)'}`,
+          `Added by change: ${history.firstSeenSubject ?? '(not committed yet)'}`,
+          '',
+          'File log:',
+          formatLog(history.commits),
+          '',
+          'Current staged/unstaged change (binary patches are included when available):',
+          selectedDiff ? [selectedDiff.staged, selectedDiff.unstaged].filter(Boolean).join('\n') || '(no diff)' : '(no diff)'
+        ].join('\n'),
+        root
+      )
+      if (generation === summaryGeneration && get().root === root) set({ summary: { ...result, title } })
+    } catch (error) {
+      if (generation === summaryGeneration && get().root === root) set({ summary: { title, text: errorMessage(error), status: 'error' } })
+    }
+  },
+  summarizeBranch: async (root) => {
+    if (get().root !== root) return
+    const historyBridge = commitAiBridge()
+    const generation = ++summaryGeneration
+    const pendingTitle = 'Branch summary'
+    set({ selectedCommitSha: null, summary: { title: pendingTitle, text: '', status: 'loading' } })
+    if (!historyBridge) {
+      if (generation === summaryGeneration) set({ summary: { title: pendingTitle, text: 'Branch history is unavailable in this build.', status: 'error' } })
+      return
+    }
+    try {
+      const branch = await historyBridge.branchDiffVsBase(root)
+      if (generation !== summaryGeneration || get().root !== root) return
+      const title = `Branch ${branch.branch ?? '(detached HEAD)'}`
+      const result = await requestReport(
+        'branch',
+        [
+          `Branch: ${branch.branch ?? '(detached HEAD)'}`,
+          `Base branch: ${branch.baseBranch ?? '(base not found)'}`,
+          '',
+          'Branch commits:',
+          formatLog(branch.commits),
+          '',
+          'Diff vs base:',
+          branch.diff || '(no diff vs base)'
+        ].join('\n'),
+        root
+      )
+      if (generation === summaryGeneration && get().root === root) set({ summary: { ...result, title } })
+    } catch (error) {
+      if (generation === summaryGeneration && get().root === root) set({ summary: { title: pendingTitle, text: errorMessage(error), status: 'error' } })
     }
   }
 }))

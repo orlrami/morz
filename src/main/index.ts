@@ -659,3 +659,8 @@ app.whenReady().then(() => {
   registerUpdater()
   tray?.setToolTip(`Morz ${app.getVersion()} — terminals keep running here`)
 })
+
+// w11/commit-ai — append-only read-only commit intelligence registration.
+import { registerCommitAiIpc } from './services/commit-service'
+app.whenReady().then(() => registerCommitAiIpc(ipcMain))
+// end w11/commit-ai

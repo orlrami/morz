@@ -2,6 +2,7 @@ import { useEffect, useMemo } from 'react'
 import {
   IconAlertCircle,
   IconFileDiff,
+  IconGitBranch,
   IconGitCommit,
   IconLoader2,
   IconMinus,
@@ -78,6 +79,8 @@ export function CommitPanel(): JSX.Element {
     selectedPath,
     diff,
     log,
+    selectedCommitSha,
+    summary,
     message,
     loading,
     busy,
@@ -90,7 +93,10 @@ export function CommitPanel(): JSX.Element {
     stageHunk,
     discardFile,
     createCommit,
-    suggestMessage
+    suggestMessage,
+    summarizeCommit,
+    summarizeFile,
+    summarizeBranch
   } = useCommitStore()
 
   useEffect(() => {
@@ -103,6 +109,7 @@ export function CommitPanel(): JSX.Element {
   const interactive = !!root && loadedRoot === root && !loading
   const effectiveBusy = interactive ? busy : 'space-root'
   const working = !interactive || busy !== null
+  const summaryBusy = summary?.status === 'loading'
 
   const confirmDiscard = (path: string): void => {
     if (!interactive) return
@@ -196,18 +203,47 @@ export function CommitPanel(): JSX.Element {
         </div>
 
         <div className="min-h-0 flex-1 border-t" style={{ borderColor: 'var(--color-line)' }}>
-          <div className="px-3 pb-1 pt-2 text-[9.5px] font-semibold uppercase tracking-[0.12em]" style={{ color: colors.quartzDim }}>
-            Recent commits
+          <div className="flex items-center px-3 pb-1 pt-2 text-[9.5px] font-semibold uppercase tracking-[0.12em]" style={{ color: colors.quartzDim }}>
+            <span>Recent commits</span>
+            <button
+              type="button"
+              onClick={() => void summarizeBranch(root)}
+              disabled={!interactive || summaryBusy}
+              className="ml-auto flex cursor-pointer items-center gap-1 rounded px-1.5 py-1 normal-case tracking-normal disabled:cursor-not-allowed disabled:opacity-40"
+              style={{ color: colors.bronzeHot }}
+              aria-label="Summarize branch"
+              title="Explain this branch compared with its base"
+            >
+              {summaryBusy && summary?.title.startsWith('Branch') ? (
+                <IconLoader2 className="animate-spin" size={11} />
+              ) : (
+                <IconGitBranch size={11} stroke={1.7} />
+              )}
+              Branch summary
+            </button>
           </div>
           <ol className="max-h-full overflow-y-auto px-2 pb-2">
             {log.map((entry) => (
-              <li key={entry.sha} className="flex gap-2 rounded-md px-1.5 py-1 text-[10px]">
-                <span className="shrink-0 font-mono" style={{ color: colors.bronzeHot }}>
-                  {entry.shortSha}
-                </span>
-                <span className="truncate" style={{ color: colors.quartzDim }} title={entry.subject}>
-                  {entry.subject}
-                </span>
+              <li key={entry.sha}>
+                <button
+                  type="button"
+                  onClick={() => void summarizeCommit(root, entry)}
+                  disabled={!interactive || summaryBusy}
+                  className="mb-0.5 flex w-full cursor-pointer items-center gap-2 rounded-md border px-1.5 py-1 text-left text-[10px] disabled:cursor-not-allowed disabled:opacity-55"
+                  style={{
+                    borderColor: selectedCommitSha === entry.sha ? 'rgba(203,162,90,0.42)' : 'transparent',
+                    background: selectedCommitSha === entry.sha ? colors.card : 'transparent'
+                  }}
+                  aria-label={`Explain commit ${entry.shortSha}: ${entry.subject}`}
+                  title={`${entry.author} · ${new Date(entry.date).toLocaleString()}`}
+                >
+                  <span className="shrink-0 font-mono" style={{ color: colors.bronzeHot }}>
+                    {entry.shortSha}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate" style={{ color: colors.quartzDim }}>
+                    {entry.subject}
+                  </span>
+                </button>
               </li>
             ))}
           </ol>
@@ -223,11 +259,28 @@ export function CommitPanel(): JSX.Element {
           <span className="min-w-0 truncate font-mono text-[10.5px]">
             {selectedPath ?? 'Select a changed file'}
           </span>
+          {selectedPath && (
+            <button
+              type="button"
+              onClick={() => void summarizeFile(root, selectedPath)}
+              disabled={!interactive || summaryBusy}
+              className="ml-auto flex cursor-pointer items-center gap-1.5 rounded-md border px-2 py-1 text-[10px] disabled:cursor-not-allowed disabled:opacity-40"
+              style={{ borderColor: 'var(--color-line-strong)', color: colors.bronzeHot }}
+              title="Include this file's Git history and current diff"
+            >
+              {summaryBusy && summary?.title === `File ${selectedPath}` ? (
+                <IconLoader2 className="animate-spin" size={11} />
+              ) : (
+                <IconSparkles size={11} stroke={1.7} />
+              )}
+              Explain this change
+            </button>
+          )}
           <button
             type="button"
             onClick={() => void refresh(root)}
             disabled={loading || working}
-            className="ml-auto cursor-pointer rounded-md p-1 disabled:opacity-40"
+            className={`${selectedPath ? '' : 'ml-auto'} cursor-pointer rounded-md p-1 disabled:opacity-40`}
             aria-label="Refresh commit status"
             title="Refresh"
           >
@@ -247,6 +300,7 @@ export function CommitPanel(): JSX.Element {
         )}
 
         <div className="min-h-0 flex-1 overflow-auto p-3 font-mono text-[11px] leading-[1.55]">
+          {summary && <CommitSummaryCard summary={summary} />}
           {!diff && !loading && (
             <div className="flex h-full items-center justify-center text-xs" style={{ color: colors.quartzDim }}>
               No changed file selected
@@ -269,6 +323,30 @@ export function CommitPanel(): JSX.Element {
             </>
           )}
         </div>
+      </div>
+    </section>
+  )
+}
+
+function CommitSummaryCard({ summary }: { summary: NonNullable<ReturnType<typeof useCommitStore.getState>['summary']> }): JSX.Element {
+  const tone = summary.status === 'error' ? colors.error : summary.status === 'hint' ? colors.warning : colors.bronzeHot
+  return (
+    <section
+      data-testid="commit-ai-summary"
+      aria-live="polite"
+      className="mb-4 rounded-lg border p-3 font-sans"
+      style={{ borderColor: `${tone}55`, background: colors.panel }}
+    >
+      <div className="flex items-center gap-2 text-[9.5px] font-semibold uppercase tracking-[0.12em]" style={{ color: tone }}>
+        {summary.status === 'loading' ? (
+          <IconLoader2 className="animate-spin" size={12} />
+        ) : (
+          <IconSparkles size={12} stroke={1.7} />
+        )}
+        {summary.title}
+      </div>
+      <div className="mt-2 whitespace-pre-wrap text-[11px] leading-relaxed" style={{ color: colors.quartz }}>
+        {summary.status === 'loading' ? 'Reading Git context and asking the report engine…' : summary.text}
       </div>
     </section>
   )
