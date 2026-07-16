@@ -14,6 +14,27 @@ import { closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete'
 import { languages } from '@codemirror/language-data'
 import { tags as t } from '@lezer/highlight'
 
+export interface CodeSelection {
+  text: string
+  fromLine: number
+  toLine: number
+}
+
+/** Snapshot the primary non-empty selection with an inclusive 1-based line range. */
+export function readCodeSelection(view: EditorView): CodeSelection | null {
+  const range = view.state.selection.main
+  if (range.empty) return null
+
+  // `to` is exclusive. When it lands at the start of the next line, that
+  // line has no selected characters and must not be included in the label.
+  const lastSelectedPosition = Math.max(range.from, range.to - 1)
+  return {
+    text: view.state.sliceDoc(range.from, range.to),
+    fromLine: view.state.doc.lineAt(range.from).number,
+    toLine: view.state.doc.lineAt(lastSelectedPosition).number
+  }
+}
+
 /* ── Slate theme (all values ride tokens.css vars) ───────────── */
 
 export const slateTheme = EditorView.theme(
