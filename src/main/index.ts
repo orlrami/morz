@@ -666,3 +666,7 @@ app.whenReady().then(() => registerConnectionsIpc())
 // w11/report-engine — append-only configurable AI report registration.
 import { registerReportIpc } from './services/report-engine'
 app.whenReady().then(() => registerReportIpc())
+// w11/commit-ai — append-only read-only commit intelligence registration.
+import { registerCommitAiIpc } from './services/commit-service'
+app.whenReady().then(() => registerCommitAiIpc(ipcMain))
+// end w11/commit-ai

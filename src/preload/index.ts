@@ -646,3 +646,72 @@ const reportBridge: MorzReportApi = {
 const apiWithReport = apiWithMemory as typeof apiWithMemory & { report: MorzReportApi }
 apiWithReport.report = reportBridge
 contextBridge.exposeInMainWorld('morz', apiWithReport)
+// w11/commit-ai — append-only read-only commit intelligence bridge.
+import {
+  CommitAiApi as CommitAiChannels,
+  type CommitAiBridge,
+  type CommitBranchDiff,
+  type CommitFileHistory,
+  type CommitHistoryEntry
+} from '../shared/ipc'
+
+const commitAiBridge: CommitAiBridge = {
+  commitLog: (root: string): Promise<CommitHistoryEntry[]> =>
+    ipcRenderer.invoke(CommitAiChannels.commitLog, root),
+  commitDiff: (root: string, sha: string): Promise<string> =>
+    ipcRenderer.invoke(CommitAiChannels.commitDiff, root, sha),
+  fileHistory: (root: string, path: string): Promise<CommitFileHistory> =>
+    ipcRenderer.invoke(CommitAiChannels.fileHistory, root, path),
+  branchDiffVsBase: (root: string): Promise<CommitBranchDiff> =>
+    ipcRenderer.invoke(CommitAiChannels.branchDiffVsBase, root)
+}
+
+contextBridge.exposeInMainWorld('morzCommitAi', commitAiBridge)
+
+if (process.env.MORZ_E2E_COMMIT_AI_NO_REPORT === '1') {
+  contextBridge.exposeInMainWorld('morzCommitAiReportDisabled', true)
+}
+
+// The report-engine worktree owns window.morz.report. This isolated E2E seam
+// exercises the consumer contract without duplicating production engine logic.
+if (process.env.MORZ_E2E === '1') {
+  const e2eReportConfig = {
+    provider: 'claude-cli' as const,
+    model: 'morz-e2e',
+    hasKey: false,
+    configured: true
+  }
+  const e2eReportBridge: import('../shared/report').MorzReportApi = {
+    config: async () => e2eReportConfig,
+    setProvider: async () => e2eReportConfig,
+    setKey: async () => e2eReportConfig,
+    clearKey: async () => e2eReportConfig,
+    test: async () => ({ ok: true, text: 'MORZ_E2E report test', provider: 'claude-cli' }),
+    summarize: async (request) => {
+      const expectedContext: Record<typeof request.kind, string[]> = {
+        commit: ['Message: fix: polish launch copy', 'polished copy'],
+        file: request.context.includes('File: launch.png')
+          ? [
+              'File: launch.png',
+              'Added by change: feat: add launch artwork',
+              'GIT binary patch',
+              '[report context truncated at 384 KB]'
+            ]
+          : ['File: story.txt', 'working change'],
+        branch: ['Branch: feature/commit-story', 'launch.png'],
+        diff: [],
+        review: []
+      }
+      const complete = expectedContext[request.kind].every((marker) => request.context.includes(marker))
+      return {
+        ok: complete,
+        text: complete
+          ? `MORZ_E2E report summary (${request.kind}): deterministic consumer context.`
+          : `MORZ_E2E report context missing (${request.kind}).`,
+        provider: 'claude-cli'
+      }
+    }
+  }
+  contextBridge.exposeInMainWorld('morzCommitAiReportStub', e2eReportBridge)
+}
+// end w11/commit-ai

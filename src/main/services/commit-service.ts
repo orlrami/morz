@@ -3,7 +3,14 @@ import type { IpcMain } from 'electron'
 import { realpath } from 'fs/promises'
 import { homedir } from 'os'
 import { isAbsolute, relative, resolve } from 'path'
-import { CommitApi, type CommitLogEntry } from '../../shared/ipc'
+import {
+  CommitAiApi,
+  CommitApi,
+  type CommitBranchDiff,
+  type CommitFileHistory,
+  type CommitHistoryEntry,
+  type CommitLogEntry
+} from '../../shared/ipc'
 
 const MAX_GIT_OUTPUT = 8 * 1024 * 1024
 const MAX_AI_DIFF = 256 * 1024
@@ -13,19 +20,23 @@ interface GitResult {
   code: number
   stdout: string
   stderr: string
+  stdoutTruncated: boolean
 }
 
 function gitRaw(
   cwd: string,
   args: string[],
   input?: string,
-  acceptedCodes: number[] = [0]
+  acceptedCodes: number[] = [0],
+  truncateStdoutAt?: number
 ): Promise<GitResult> {
   return new Promise((resolveResult, reject) => {
     const child = spawn('git', args, { cwd, windowsHide: true, shell: false })
     const stdout: Buffer[] = []
     const stderr: Buffer[] = []
     let outputBytes = 0
+    let stdoutBytes = 0
+    let stdoutTruncated = false
     let settled = false
 
     const fail = (error: Error): void => {
@@ -43,7 +54,16 @@ function gitRaw(
       target.push(chunk)
     }
 
-    child.stdout.on('data', collect(stdout))
+    child.stdout.on('data', (chunk: Buffer) => {
+      if (truncateStdoutAt === undefined) {
+        collect(stdout)(chunk)
+        return
+      }
+      const remaining = Math.max(0, truncateStdoutAt - stdoutBytes)
+      if (remaining > 0) stdout.push(chunk.subarray(0, remaining))
+      stdoutBytes += chunk.length
+      if (stdoutBytes > truncateStdoutAt) stdoutTruncated = true
+    })
     child.stderr.on('data', collect(stderr))
     child.on('error', fail)
     child.on('close', (code) => {
@@ -52,7 +72,8 @@ function gitRaw(
       const result = {
         code: code ?? -1,
         stdout: Buffer.concat(stdout).toString('utf8'),
-        stderr: Buffer.concat(stderr).toString('utf8')
+        stderr: Buffer.concat(stderr).toString('utf8'),
+        stdoutTruncated
       }
       if (acceptedCodes.includes(result.code)) resolveResult(result)
       else reject(new Error(result.stderr.trim() || `Git exited with code ${result.code}`))
@@ -205,18 +226,8 @@ async function createCommit(rootInput: string, messageInput: string): Promise<{ 
   return { sha }
 }
 
-async function commitLog(rootInput: string): Promise<CommitLogEntry[]> {
-  const root = await repositoryRoot(rootInput)
-  const hasHead = await gitRaw(root, ['rev-parse', '--verify', 'HEAD'], undefined, [0, 1, 128])
-  if (hasHead.code !== 0) return []
-  const result = await gitRaw(root, [
-    '--no-pager',
-    'log',
-    '-n',
-    '20',
-    '--pretty=format:%H%x00%h%x00%an%x00%aI%x00%s%x1e'
-  ])
-  return result.stdout
+function parseCommitLog(output: string): CommitLogEntry[] {
+  return output
     .split('\x1e')
     .map((record) => record.replace(/^\r?\n/, ''))
     .filter(Boolean)
@@ -224,6 +235,185 @@ async function commitLog(rootInput: string): Promise<CommitLogEntry[]> {
       const [sha = '', shortSha = '', author = '', date = '', subject = ''] = record.split('\x00')
       return { sha, shortSha, author, date, subject }
     })
+}
+
+async function commitLogMetadata(root: string, args: string[] = []): Promise<CommitLogEntry[]> {
+  const result = await gitRaw(root, [
+    '--no-pager',
+    '--literal-pathspecs',
+    'log',
+    '--pretty=format:%H%x00%h%x00%an%x00%aI%x00%s%x1e',
+    ...args
+  ])
+  return parseCommitLog(result.stdout)
+}
+
+async function commitDiff(root: string, sha: string): Promise<string> {
+  if (!/^[a-f0-9]{40}$/.test(sha)) throw new Error('Invalid commit id')
+  const result = await gitRaw(
+    root,
+    [
+      '--no-pager',
+      'show',
+      '--format=',
+      '--no-ext-diff',
+      '--no-textconv',
+      '--binary',
+      sha
+    ],
+    undefined,
+    [0],
+    MAX_AI_DIFF
+  )
+  return result.stdoutTruncated
+    ? `${result.stdout}\n... [diff truncated at 256 KB]`
+    : result.stdout
+}
+
+async function commitLog(rootInput: string): Promise<CommitLogEntry[]> {
+  const root = await repositoryRoot(rootInput)
+  const hasHead = await gitRaw(root, ['rev-parse', '--verify', 'HEAD'], undefined, [0, 1, 128])
+  if (hasHead.code !== 0) return []
+  return commitLogMetadata(root, ['-n', '20'])
+}
+
+async function commitLogWithDiffs(rootInput: string): Promise<CommitHistoryEntry[]> {
+  const root = await repositoryRoot(rootInput)
+  const hasHead = await gitRaw(root, ['rev-parse', '--verify', 'HEAD'], undefined, [0, 1, 128])
+  if (hasHead.code !== 0) return []
+  const entries = await commitLogMetadata(root, ['-n', '20'])
+  const history: CommitHistoryEntry[] = []
+  for (const entry of entries) {
+    try {
+      history.push({ ...entry, diff: await commitDiff(root, entry.sha) })
+    } catch {
+      history.push({ ...entry, diff: '[diff unavailable: output exceeded the history limit]' })
+    }
+  }
+  return history
+}
+
+async function commitDiffForRoot(rootInput: string, sha: string): Promise<string> {
+  const root = await repositoryRoot(rootInput)
+  return commitDiff(root, sha)
+}
+
+async function currentBranch(root: string): Promise<string | null> {
+  const result = await gitRaw(
+    root,
+    ['symbolic-ref', '--quiet', '--short', 'HEAD'],
+    undefined,
+    [0, 1, 128]
+  )
+  return result.code === 0 ? result.stdout.trim() || null : null
+}
+
+async function fileHistory(rootInput: string, pathInput: string): Promise<CommitFileHistory> {
+  const root = await repositoryRoot(rootInput)
+  const path = repositoryPath(root, pathInput)
+  const hasHead = await gitRaw(root, ['rev-parse', '--verify', 'HEAD'], undefined, [0, 1, 128])
+  if (hasHead.code !== 0) {
+    return {
+      path,
+      firstSeenCommit: null,
+      firstSeenDate: null,
+      firstSeenSubject: null,
+      branch: await currentBranch(root),
+      commits: []
+    }
+  }
+  const commits = await commitLogMetadata(root, [
+    '-n',
+    '20',
+    '--follow',
+    '--',
+    path
+  ])
+  const added = await gitRaw(root, [
+    '--no-pager',
+    '--literal-pathspecs',
+    'log',
+    '--follow',
+    '--diff-filter=A',
+    '--pretty=format:%H%x00%aI%x00%s%x1e',
+    '--',
+    path
+  ])
+  const firstRecord = added.stdout
+    .split('\x1e')
+    .map((record) => record.replace(/^\r?\n/, ''))
+    .filter(Boolean)
+    .at(-1)
+  const [firstSeenCommit = null, firstSeenDate = null, firstSeenSubject = null] = firstRecord
+    ? firstRecord.split('\x00')
+    : []
+  return {
+    path,
+    firstSeenCommit,
+    firstSeenDate,
+    firstSeenSubject,
+    branch: await currentBranch(root),
+    commits
+  }
+}
+
+async function existingRef(root: string, ref: string): Promise<boolean> {
+  const result = await gitRaw(root, ['show-ref', '--verify', '--quiet', ref], undefined, [0, 1])
+  return result.code === 0
+}
+
+async function baseBranch(root: string, branch: string | null): Promise<string | null> {
+  const remoteHead = await gitRaw(
+    root,
+    ['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'],
+    undefined,
+    [0, 1, 128]
+  )
+  const candidates = [
+    remoteHead.code === 0 ? remoteHead.stdout.trim() : '',
+    'main',
+    'master',
+    'origin/main',
+    'origin/master'
+  ].filter((candidate, index, values) => candidate && candidate !== branch && values.indexOf(candidate) === index)
+  for (const candidate of candidates) {
+    const ref = candidate.startsWith('origin/')
+      ? `refs/remotes/${candidate}`
+      : `refs/heads/${candidate}`
+    if (await existingRef(root, ref)) return candidate
+  }
+  return null
+}
+
+async function branchDiffVsBase(rootInput: string): Promise<CommitBranchDiff> {
+  const root = await repositoryRoot(rootInput)
+  const hasHead = await gitRaw(root, ['rev-parse', '--verify', 'HEAD'], undefined, [0, 1, 128])
+  const branch = await currentBranch(root)
+  if (hasHead.code !== 0) return { branch, baseBranch: null, diff: '', commits: [] }
+  const base = await baseBranch(root, branch)
+  if (!base) return { branch, baseBranch: null, diff: '', commits: [] }
+  const mergeBase = (await gitRaw(root, ['merge-base', 'HEAD', base])).stdout.trim()
+  const [diffResult, commits] = await Promise.all([
+    gitRaw(
+      root,
+      [
+        '--no-pager',
+        'diff',
+        '--no-ext-diff',
+        '--no-textconv',
+        '--binary',
+        `${mergeBase}..HEAD`
+      ],
+      undefined,
+      [0],
+      MAX_AI_DIFF
+    ),
+    commitLogMetadata(root, ['-n', '50', `${mergeBase}..HEAD`])
+  ])
+  const diff = diffResult.stdoutTruncated
+    ? `${diffResult.stdout}\n... [diff truncated at 256 KB]`
+    : diffResult.stdout
+  return { branch, baseBranch: base, diff, commits }
 }
 
 function runClaudePrint(prompt: string): Promise<string> {
@@ -335,4 +525,16 @@ export function registerCommitIpc(ipcMain: IpcMain): void {
   )
   ipcMain.handle(CommitApi.log, (_event, root: string) => commitLog(root))
   ipcMain.handle(CommitApi.suggestMessage, (_event, root: string) => suggestMessage(root))
+}
+
+// w11/commit-ai — additive read-only history handlers.
+export function registerCommitAiIpc(ipcMain: IpcMain): void {
+  ipcMain.handle(CommitAiApi.commitLog, (_event, root: string) => commitLogWithDiffs(root))
+  ipcMain.handle(CommitAiApi.commitDiff, (_event, root: string, sha: string) =>
+    commitDiffForRoot(root, sha)
+  )
+  ipcMain.handle(CommitAiApi.fileHistory, (_event, root: string, path: string) =>
+    fileHistory(root, path)
+  )
+  ipcMain.handle(CommitAiApi.branchDiffVsBase, (_event, root: string) => branchDiffVsBase(root))
 }
