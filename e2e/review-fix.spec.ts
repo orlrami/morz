@@ -108,6 +108,10 @@ test.describe.serial('demo-able cross-model review', () => {
     // deterministic E2E hook instead of injecting a global.
     process.env.MORZ_E2E_REPORT_STUB = 'Fix the inverted retry guard first; it disables every valid retry.'
     morz = await launchMorz()
+    // launchMorz snapshots process.env into the app; unset immediately so this
+    // stub never leaks into later specs in the single shared worker (which
+    // would make the report engine look "configured" everywhere).
+    delete process.env.MORZ_E2E_REPORT_STUB
     await seedSpace(morz, root, 'planted-bug')
 
     await expect(morz.page.getByLabel('Review run')).toContainText('feature/planted-bug')
