@@ -697,3 +697,7 @@ app.whenReady().then(() => registerReportIpc())
 import { registerCommitAiIpc } from './services/commit-service'
 app.whenReady().then(() => registerCommitAiIpc(ipcMain))
 // end w11/commit-ai
+// w11/sessions — append-only per-project work-session history registration.
+import { registerSessionsIpc } from './services/sessions'
+app.whenReady().then(() => registerSessionsIpc())
+// end w11/sessions

@@ -728,3 +728,24 @@ const paneInfoBridge: PaneInfoBridge = {
 
 contextBridge.exposeInMainWorld('morzPaneInfo', paneInfoBridge)
 // end w11/lanes-runs
+// w11/sessions — append-only per-project work-session history bridge.
+import {
+  SessionHistoryApi as SessionHistoryChannels,
+  type SessionHistoryBridge,
+  type SessionHistoryRecord,
+  type SessionHistoryStartInput
+} from '../shared/ipc'
+
+const sessionsBridge: SessionHistoryBridge = {
+  start: (input: SessionHistoryStartInput): Promise<SessionHistoryRecord> =>
+    ipcRenderer.invoke(SessionHistoryChannels.start, input),
+  end: (sessionId?: string): Promise<SessionHistoryRecord | null> =>
+    ipcRenderer.invoke(SessionHistoryChannels.end, sessionId),
+  list: (spaceRoot: string): Promise<SessionHistoryRecord[]> =>
+    ipcRenderer.invoke(SessionHistoryChannels.list, spaceRoot),
+  current: (spaceRoot: string): Promise<SessionHistoryRecord | null> =>
+    ipcRenderer.invoke(SessionHistoryChannels.current, spaceRoot)
+}
+
+contextBridge.exposeInMainWorld('morzSessions', sessionsBridge)
+// end w11/sessions
