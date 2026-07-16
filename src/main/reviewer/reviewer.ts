@@ -25,11 +25,30 @@ const ALLOWED_FINDING_KEYS = new Set([
 const SEVERITIES = new Set<ReviewSeverity>(['critical', 'high', 'medium', 'low', 'info'])
 const SAFE_REF = /^(?!-)[A-Za-z0-9][A-Za-z0-9._/-]*(?:\^)?$/
 const MAX_OUTPUT_BYTES = 2 * 1024 * 1024
+const MAX_FINDINGS = 20
+const PROCESS_TIMEOUT_MS = 120_000
+const AUTO_BASE_REF = 'MORZ_BASE'
+const SEVERITY_PRIORITY: Record<ReviewSeverity, number> = {
+  critical: 0,
+  high: 1,
+  medium: 2,
+  low: 3,
+  info: 4
+}
+
+// w11/review-fix: renderer-only metadata may trail the shared w5 contract.
+interface ReviewResultMeta {
+  emptyDiff: boolean
+  findingsTruncated: boolean
+  totalFindings: number
+}
 
 interface CliResult {
   stdout: string
   stderr: string
 }
+
+class BrainUnavailableError extends Error {}
 
 let reviewDb: Database.Database | null = null
 
@@ -84,10 +103,16 @@ function runProcess(command: string, args: string[], cwd: string): Promise<CliRe
     let stderr = ''
     let outputBytes = 0
     let settled = false
+    // w11/review-fix: a disconnected/auth-blocked CLI must release the UI.
+    const timeout = setTimeout(
+      () => fail(new Error(`[reviewer] ${command} timed out after 120 seconds`)),
+      PROCESS_TIMEOUT_MS
+    )
 
     const fail = (error: Error): void => {
       if (settled) return
       settled = true
+      clearTimeout(timeout)
       if (!child.killed) child.kill()
       reject(error)
     }
@@ -107,6 +132,7 @@ function runProcess(command: string, args: string[], cwd: string): Promise<CliRe
     child.once('close', (code) => {
       if (settled) return
       settled = true
+      clearTimeout(timeout)
       if (code !== 0) {
         reject(new Error(`[reviewer] ${command} exited ${code}: ${stderr.trim().slice(0, 1000)}`))
         return
@@ -156,30 +182,71 @@ function claudeMessage(stdout: string): string {
 }
 
 async function invokeBrain(reviewer: ReviewAuthor, prompt: string, cwd: string): Promise<string> {
+  // w11/review-fix: deterministic brain for the packaged Electron E2E proof.
+  if (process.env.MORZ_E2E === '1') {
+    const mode = process.env.MORZ_E2E_REVIEW_MODE
+    if (mode === 'missing-codex' && reviewer === 'codex') {
+      throw new BrainUnavailableError('Codex CLI is not installed')
+    }
+    if (mode === 'finding') {
+      return JSON.stringify(
+        Array.from({ length: 24 }, (_, index) => ({
+          severity:
+            index === 23 ? 'critical' : index === 0 ? 'high' : index < 6 ? 'medium' : 'low',
+          file: 'retry.ts',
+          line: 1,
+          title:
+            index === 0
+              ? 'Inverted retry comparison disables valid retries'
+              : `Related retry-path concern ${index + 1}`,
+          evidence:
+            index === 0
+              ? 'The changed predicate uses attempts > max, so normal attempts never retry.'
+              : 'Stubbed supporting evidence for the bounded review presentation.',
+          suggestedFix: index === 0 ? 'Restore attempts < max.' : undefined
+        }))
+      )
+    }
+  }
+
   if (reviewer === 'codex') {
+    try {
+      const output = await runProcess(
+        'codex',
+        [
+          'exec',
+          '--json',
+          '--ephemeral',
+          '--ignore-user-config',
+          '--ignore-rules',
+          '--sandbox',
+          'read-only',
+          '--skip-git-repo-check',
+          prompt
+        ],
+        cwd
+      )
+      return codexMessage(output.stdout)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        throw new BrainUnavailableError('Codex CLI is not installed')
+      }
+      throw error
+    }
+  }
+  try {
     const output = await runProcess(
-      'codex',
-      [
-        'exec',
-        '--json',
-        '--ephemeral',
-        '--ignore-user-config',
-        '--ignore-rules',
-        '--sandbox',
-        'read-only',
-        '--skip-git-repo-check',
-        prompt
-      ],
+      'claude',
+      ['-p', '--output-format', 'json', '--permission-mode', 'dontAsk', prompt],
       cwd
     )
-    return codexMessage(output.stdout)
+    return claudeMessage(output.stdout)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      throw new BrainUnavailableError('Claude CLI is not installed')
+    }
+    throw error
   }
-  const output = await runProcess(
-    'claude',
-    ['-p', '--output-format', 'json', '--permission-mode', 'dontAsk', prompt],
-    cwd
-  )
-  return claudeMessage(output.stdout)
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -261,26 +328,92 @@ export async function reviewDiff(input: {
   diff: string
   author: ReviewAuthor
   cwd: string
-}): Promise<{ reviewer: ReviewAuthor; sameModelReview: boolean; findings: ReviewFinding[] }> {
-  if (!input.diff.trim()) return { reviewer: input.author === 'claude' ? 'codex' : 'claude', sameModelReview: false, findings: [] }
+}): Promise<{
+  reviewer: ReviewAuthor
+  sameModelReview: boolean
+  findings: ReviewFinding[]
+  findingsTruncated: boolean
+  totalFindings: number
+}> {
+  if (!input.diff.trim()) {
+    return {
+      reviewer: input.author === 'claude' ? 'codex' : 'claude',
+      sameModelReview: false,
+      findings: [],
+      findingsTruncated: false,
+      totalFindings: 0
+    }
+  }
   const preferred: ReviewAuthor = input.author === 'claude' ? 'codex' : 'claude'
   try {
-    const findings = await reviewWithBrain({ ...input, reviewer: preferred })
-    return { reviewer: preferred, sameModelReview: false, findings }
-  } catch (preferredError) {
-    try {
-      const findings = await reviewWithBrain({ ...input, reviewer: input.author })
-      return { reviewer: input.author, sameModelReview: true, findings }
-    } catch (fallbackError) {
-      const primary = preferredError instanceof Error ? preferredError.message : String(preferredError)
-      const fallback = fallbackError instanceof Error ? fallbackError.message : String(fallbackError)
-      throw new Error(`[reviewer] cross-model review failed (${primary}); same-model fallback failed (${fallback})`)
+    const allFindings = await reviewWithBrain({ ...input, reviewer: preferred })
+    const prioritizedFindings = allFindings
+      .map((finding, index) => ({ finding, index }))
+      .sort(
+        (left, right) =>
+          SEVERITY_PRIORITY[left.finding.severity] - SEVERITY_PRIORITY[right.finding.severity] ||
+          left.index - right.index
+      )
+      .map(({ finding }) => finding)
+    return {
+      reviewer: preferred,
+      sameModelReview: false,
+      // w11/review-fix: keep large reviews actionable without losing the total.
+      findings: prioritizedFindings.slice(0, MAX_FINDINGS),
+      findingsTruncated: allFindings.length > MAX_FINDINGS,
+      totalFindings: allFindings.length
     }
+  } catch (error) {
+    const label = preferred === 'codex' ? 'Codex' : 'Claude'
+    const reason = error instanceof Error ? error.message.replace(/^\[reviewer\]\s*/, '') : String(error)
+    if (!(error instanceof BrainUnavailableError)) {
+      throw new Error(`[reviewer] Cross-model review with ${label} failed: ${reason}`)
+    }
+    // w11/review-fix: never disguise a missing non-author brain as cross-model review.
+    throw new Error(
+      `[reviewer] ${label} CLI is required for cross-model review. ` +
+        `Connect ${label} in Settings or install the ${label} CLI, then try again. (${reason})`
+    )
   }
 }
 
+async function refExists(cwd: string, ref: string): Promise<boolean> {
+  try {
+    await runProcess('git', ['rev-parse', '--verify', `${ref}^{commit}`], cwd)
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function automaticBase(input: ReviewRunInput): Promise<string | null> {
+  try {
+    const { stdout } = await runProcess(
+      'git',
+      ['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'],
+      input.cwd
+    )
+    const remoteBase = stdout.trim()
+    if (SAFE_REF.test(remoteBase) && (await refExists(input.cwd, remoteBase))) return remoteBase
+  } catch {
+    // A local-only repository normally has no origin/HEAD; probe conventional bases next.
+  }
+  for (const candidate of ['main', 'master']) {
+    if (await refExists(input.cwd, candidate)) return candidate
+  }
+  return (await refExists(input.cwd, `${input.headRef}^`)) ? `${input.headRef}^` : null
+}
+
 async function gitDiff(input: ReviewRunInput): Promise<string> {
-  const range = `${input.baseRef}..${input.headRef}`
+  let baseRef = input.baseRef
+  let separator = '..'
+  if (baseRef === AUTO_BASE_REF) {
+    const detected = await automaticBase(input)
+    if (!detected || detected === input.headRef) return ''
+    baseRef = detected
+    separator = '...'
+  }
+  const range = `${baseRef}${separator}${input.headRef}`
   const { stdout } = await runProcess(
     'git',
     ['diff', '--no-ext-diff', '--unified=80', range, '--'],
@@ -315,16 +448,21 @@ function broadcast(result: ReviewRunResult): void {
   }
 }
 
-export async function runReview(rawInput: ReviewRunInput): Promise<ReviewRunResult> {
+export async function runReview(
+  rawInput: ReviewRunInput
+): Promise<ReviewRunResult & ReviewResultMeta> {
   const input = assertRunInput(rawInput)
   const diff = await gitDiff(input)
   const reviewed = await reviewDiff({ diff, author: input.author, cwd: input.cwd })
-  const result: ReviewRunResult = {
+  const result: ReviewRunResult & ReviewResultMeta = {
     ...input,
     id: randomUUID(),
     reviewer: reviewed.reviewer,
     sameModelReview: reviewed.sameModelReview,
     findings: reviewed.findings,
+    emptyDiff: !diff.trim(),
+    findingsTruncated: reviewed.findingsTruncated,
+    totalFindings: reviewed.totalFindings,
     createdAt: new Date().toISOString()
   }
   persist(result)
