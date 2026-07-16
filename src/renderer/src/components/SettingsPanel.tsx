@@ -42,7 +42,11 @@ export function SettingsPanel({ initialTab = 'limits' }: { initialTab?: Settings
   useEffect(() => startConnections(), [startConnections])
 
   return (
-    <section className="flex min-w-0 flex-1" style={{ background: colors.page }} aria-label="Settings">
+    <section
+      className="flex min-h-0 min-w-0 flex-1 overflow-hidden"
+      style={{ background: colors.page }}
+      aria-label="Settings"
+    >
       <nav
         className="w-[200px] shrink-0 border-r p-3"
         style={{ borderColor: 'var(--color-line)' }}
@@ -79,9 +83,9 @@ export function SettingsPanel({ initialTab = 'limits' }: { initialTab?: Settings
         })}
       </nav>
 
-      <div className="min-w-0 flex-1 overflow-y-auto p-5">
+      <div className="min-h-0 min-w-0 flex-1 overflow-y-auto p-5">
         {tab === 'limits' && (
-          <div className="max-w-[560px]">
+          <div className="mx-auto w-full max-w-[560px]">
             <h2 className="text-sm font-bold" style={{ fontFamily: 'var(--font-display)' }}>
               Limits &amp; usage
             </h2>
@@ -154,7 +158,7 @@ export function SettingsPanel({ initialTab = 'limits' }: { initialTab?: Settings
         {tab === 'connections' && <ConnectionsSettings />}
 
         {tab === 'appearance' && (
-          <div className="max-w-[560px]">
+          <div className="mx-auto w-full max-w-[560px]">
             <h2 className="text-sm font-bold" style={{ fontFamily: 'var(--font-display)' }}>
               Appearance
             </h2>
@@ -167,7 +171,10 @@ export function SettingsPanel({ initialTab = 'limits' }: { initialTab?: Settings
                 return (
                   <button
                     key={t.id}
-                    onClick={() => setTheme(t.id)}
+                    type="button"
+                    onClick={() => {
+                      if (!active) setTheme(t.id)
+                    }}
                     className="cursor-pointer rounded-xl border p-3 text-left transition-transform hover:scale-[1.02]"
                     style={{
                       background: colors.panel,
@@ -200,7 +207,7 @@ export function SettingsPanel({ initialTab = 'limits' }: { initialTab?: Settings
         )}
 
         {tab === 'control' && (
-          <div className="max-w-[560px]">
+          <div className="mx-auto w-full max-w-[560px]">
             <h2 className="text-sm font-bold" style={{ fontFamily: 'var(--font-display)' }}>
               Control
             </h2>

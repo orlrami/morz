@@ -4,8 +4,8 @@ import { Shell } from './components/Shell'
 import { useThemeStore } from './lib/themes'
 
 export default function App(): JSX.Element {
-  /* key remount on theme change so inline token colors re-read */
-  const version = useThemeStore((s) => s.version)
+  /* w11/settings-ux: rerender inline tokens without remounting Shell's view state. */
+  useThemeStore((s) => s.version)
 
   /* dev-only: ?theme=slate for screenshot verification */
   useEffect(() => {
@@ -13,5 +13,5 @@ export default function App(): JSX.Element {
     if (id) useThemeStore.getState().setTheme(id)
   }, [])
 
-  return <Shell key={version} />
+  return <Shell />
 }
