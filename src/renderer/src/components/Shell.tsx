@@ -454,7 +454,7 @@ export function Shell(): JSX.Element {
       <div className="relative flex min-h-0 flex-1">
         <SpacesSidebar />
 
-        <main className="flex min-w-0 flex-1 flex-col">
+        <main className="flex min-h-0 min-w-0 flex-1 flex-col">
           <div className="flex items-center border-b" style={{ borderColor: 'var(--color-line)', background: colors.page }}>
             {/* explorer toggle + view switcher share the strip above the panes */}
             <button
@@ -568,7 +568,10 @@ export function Shell(): JSX.Element {
           {view === 'remote' && <RemotePanel />}
           {view === 'organizer' && <OrganizerPanel />}
           {view === 'settings' && (
-            <SettingsPanel key={`${settingsTab}-${settingsRevision}`} initialTab={settingsTab} />
+            <SettingsPanel
+              key={settingsRevision} // w11/settings-ux: reset only for an explicit settings open
+              initialTab={settingsTab}
+            />
           )}
           {view === 'workshop' && <WorkshopPanel />}
         </main>
