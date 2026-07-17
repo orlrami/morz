@@ -36,13 +36,15 @@ export function PlanCard({
   const [draft, setDraft] = useState(record.plan)
   const [suggestions, setSuggestions] = useState<Map<number, RouteDecision>>(new Map())
   const [autoNotice, setAutoNotice] = useState<string[]>([])
-  const autoAppliedHash = useRef('')
+  const [autoRouteError, setAutoRouteError] = useState('')
+  const autoAttemptedHashes = useRef(new Set<string>())
   const onUpdateRef = useRef(onUpdate)
   const mode = useModeStore((state) => state.mode)
   const routeTask = useRoutingStore((state) => state.routeTask)
   const hasUnsavedEdits = JSON.stringify(draft.agents) !== JSON.stringify(record.plan.agents)
 
   useEffect(() => setDraft(record.plan), [record.plan])
+  useEffect(() => setAutoRouteError(''), [record.plan.planHash])
   useEffect(() => {
     onUpdateRef.current = onUpdate
   }, [onUpdate])
@@ -69,8 +71,13 @@ export function PlanCard({
       })
       setSuggestions(next)
 
-      if (mode === 'orchestrated' && next.size > 0 && autoAppliedHash.current !== record.plan.planHash) {
-        autoAppliedHash.current = record.plan.planHash
+      if (
+        mode === 'orchestrated' &&
+        next.size > 0 &&
+        !autoAttemptedHashes.current.has(record.plan.planHash)
+      ) {
+        autoAttemptedHashes.current.add(record.plan.planHash)
+        setAutoRouteError('')
         const agents = record.plan.agents.map((agent, index) => {
           const suggestion = next.get(index)
           return suggestion ? { ...agent, cli: routeCli(suggestion.target) } : agent
@@ -80,8 +87,9 @@ export function PlanCard({
             `Auto-routed ${record.plan.agents[index].role} to ${ROUTE_LABEL[decision.target]}`
           )
         )
-        void onUpdateRef.current({ ...record.plan, agents }, record.plan.planHash).catch(() => {
-          autoAppliedHash.current = ''
+        void onUpdateRef.current({ ...record.plan, agents }, record.plan.planHash).catch((reason: unknown) => {
+          setAutoNotice([])
+          setAutoRouteError(reason instanceof Error ? reason.message : String(reason))
         })
       }
     })
@@ -166,6 +174,16 @@ export function PlanCard({
             {notice}
           </p>
         ))}
+        {autoRouteError && (
+          <p
+            role="alert"
+            data-testid="routing-auto-error"
+            className="rounded-md border px-2 py-1 text-[9px] leading-snug"
+            style={{ borderColor: `${colors.error}55`, color: colors.error, background: `${colors.error}0d` }}
+          >
+            Auto-route update failed: {autoRouteError}
+          </p>
+        )}
         {draft.agents.map((agent, index) => (
           <div
             key={agent.agentId}
