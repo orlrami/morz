@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { IconClipboardList, IconFlask, IconHandStop, IconSparkles } from '@tabler/icons-react'
 import type { Message, Part, Task, TaskState } from '@shared/bus'
@@ -212,12 +212,20 @@ function getPlanner(): PlannerBridge | undefined {
 function PlannerFlow(): JSX.Element {
   const spaceRoot = useSpaceStore(selectActiveSpaceRoot)
   const [goal, setGoal] = useState('')
+  const goalComposerRef = useRef<HTMLTextAreaElement>(null)
   const [record, setRecord] = useState<StoredSpawnPlan | null>(null)
   const [amendments, setAmendments] = useState<StoredPlanAmendment[]>([])
   const [amendmentRequest, setAmendmentRequest] = useState('')
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState('')
   const [error, setError] = useState('')
+
+  useLayoutEffect(() => {
+    const composer = goalComposerRef.current
+    if (!composer) return
+    composer.style.height = 'auto'
+    composer.style.height = `${composer.scrollHeight}px`
+  }, [goal])
 
   useEffect(() => {
     const planner = getPlanner()
@@ -306,16 +314,24 @@ function PlannerFlow(): JSX.Element {
           event.preventDefault()
           createPlan()
         }}
-        className="flex gap-1.5"
+        className="flex items-end gap-1.5"
       >
-        {/* // w8/voice */}<div className="flex min-w-0 flex-1 gap-1">
-          <input
+        {/* // w8/voice */}<div className="flex min-w-0 flex-1 items-end gap-1">
+          <textarea
+            ref={goalComposerRef}
             aria-label="Goal"
             value={goal}
             onChange={(event) => setGoal(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+                event.preventDefault()
+                if (!busy) createPlan()
+              }
+            }}
+            rows={1}
             maxLength={4_000}
             placeholder="What should the team finish?"
-            className="min-w-0 flex-1 rounded-md border bg-black/10 px-2 py-1.5 text-[10.5px] outline-none focus:ring-1"
+            className="max-h-32 min-w-0 flex-1 resize-none overflow-y-auto rounded-md border bg-black/10 px-2 py-1.5 text-[10.5px] leading-relaxed outline-none focus:ring-1"
             style={{
               borderColor: 'var(--color-line-strong)',
               color: colors.quartz,
