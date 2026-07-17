@@ -17,7 +17,7 @@ import {
   type UtilityProcess
 } from 'electron'
 import { join, basename } from 'path'
-import { spawnSync } from 'child_process'
+import { spawnSync, execFile } from 'child_process'
 import { PaneInfoApi, PtyApi, type PaneInfo, type TerminalSpawnOpts } from '../shared/ipc'
 
 /*
@@ -278,6 +278,73 @@ function sweepOrphans(): void {
 
 /* ── control-plane IPC ───────────────────────────────────────── */
 
+/* ── w12/agent-detect — live foreground-CLI detection ─────────────
+ * ConPTY reports the SHELL name (pwsh), never the `claude`/`codex`/`agy` the
+ * user typed inside it, so the spawn-journal `foreground` is not enough. Walk
+ * each pane's shell-PID process tree for a running CLI. One process snapshot
+ * per poll window is shared across every pane (the renderer polls each pane
+ * every 1s; the snapshot is cached ~2.5s so PowerShell is spawned sparingly).
+ * Windows-only: on Unix pty.process already reports the foreground child. */
+const CLI_IMAGE_RE = /^(claude|codex|agy|opencode|antigravity)(\.(exe|cmd|bat|ps1))?$/i
+interface ProcRow {
+  pid: number
+  name: string
+}
+let procSnapshot: { at: number; byParent: Map<number, ProcRow[]> } | null = null
+
+async function processTreeByParent(): Promise<Map<number, ProcRow[]>> {
+  const now = Date.now()
+  if (procSnapshot && now - procSnapshot.at < 2_500) return procSnapshot.byParent
+  const byParent = new Map<number, ProcRow[]>()
+  if (process.platform === 'win32') {
+    try {
+      const stdout = await new Promise<string>((resolve, reject) => {
+        execFile(
+          'powershell',
+          [
+            '-NoProfile',
+            '-NonInteractive',
+            '-Command',
+            'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name | ConvertTo-Json -Compress'
+          ],
+          { windowsHide: true, timeout: 8_000, maxBuffer: 24 * 1024 * 1024 },
+          (err, out) => (err ? reject(err) : resolve(out))
+        )
+      })
+      const parsed = JSON.parse(stdout) as
+        | { ProcessId: number; ParentProcessId: number; Name: string }[]
+        | { ProcessId: number; ParentProcessId: number; Name: string }
+      for (const r of Array.isArray(parsed) ? parsed : [parsed]) {
+        if (typeof r?.ProcessId !== 'number' || typeof r?.ParentProcessId !== 'number') continue
+        const arr = byParent.get(r.ParentProcessId) ?? []
+        arr.push({ pid: r.ProcessId, name: String(r.Name ?? '') })
+        byParent.set(r.ParentProcessId, arr)
+      }
+    } catch {
+      // Snapshot unavailable (offline/timeout) — detection just doesn't augment
+      // this cycle; lanes + dispatched runs still show via their own stores.
+    }
+  }
+  procSnapshot = { at: now, byParent }
+  return byParent
+}
+
+/** First CLI image found under `shellPid` (breadth-first over descendants). */
+function descendantCliImage(shellPid: number, byParent: Map<number, ProcRow[]>): string | undefined {
+  const seen = new Set<number>()
+  const queue = [shellPid]
+  while (queue.length > 0) {
+    const pid = queue.shift()!
+    if (seen.has(pid)) continue
+    seen.add(pid)
+    for (const child of byParent.get(pid) ?? []) {
+      if (CLI_IMAGE_RE.test(child.name)) return child.name
+      queue.push(child.pid)
+    }
+  }
+  return undefined
+}
+
 function registerPtyIpc(): void {
   ipcMain.handle(PtyApi.spawn, (_e, opts: TerminalSpawnOpts) => hostRequest('spawn', opts))
   ipcMain.handle(PtyApi.list, () => hostRequest<string[]>('list'))
@@ -286,10 +353,12 @@ function registerPtyIpc(): void {
   ipcMain.handle(PaneInfoApi.list, async (): Promise<PaneInfo[]> => {
     const paneIds = await hostRequest<string[]>('list')
     const live = new Set(paneIds)
+    const shellPidByPane = new Map<string, number>()
     const latest = new Map<string, PaneInfo>()
     for (const row of journalEntries('pty-spawn')) {
       const info = row.payload as SpawnJournal | null
       if (!info || !live.has(info.paneId) || typeof info.shell !== 'string') continue
+      if (typeof info.pid === 'number') shellPidByPane.set(info.paneId, info.pid)
       latest.set(info.paneId, {
         paneId: info.paneId,
         shell: info.shell,
@@ -300,6 +369,17 @@ function registerPtyIpc(): void {
           ? { foreground: info.foreground.trim() }
           : {})
       })
+    }
+    // w12/agent-detect — live scan: a CLI launched by hand inside a shell pane
+    // becomes a descendant of the shell PID. Overrides the stale spawn-time
+    // foreground so `claude` typed into pwsh is detected as an agent.
+    const byParent = await processTreeByParent()
+    if (byParent.size > 0) {
+      for (const [paneId, shellPid] of shellPidByPane) {
+        const image = descendantCliImage(shellPid, byParent)
+        const info = latest.get(paneId)
+        if (image && info) latest.set(paneId, { ...info, foreground: image })
+      }
     }
     return paneIds.flatMap((paneId) => {
       const info = latest.get(paneId)
