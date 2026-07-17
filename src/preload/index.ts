@@ -777,3 +777,18 @@ if (process.env.MORZ_E2E_SESSIONS_RESUME_STUB === '1') {
   contextBridge.exposeInMainWorld('morzSessionsResumeTest', sessionsResumeTestBridge)
 }
 // end w12/sessions-resume
+
+// w12/orch-engine — append-only isolated planner engine bridge.
+import {
+  PlannerEngineApi as PlannerEngineChannels,
+  type PlannerEngine,
+  type PlannerEngineBridge
+} from '../shared/ipc'
+
+const plannerEngineBridge: PlannerEngineBridge = {
+  get: (): Promise<PlannerEngine> => ipcRenderer.invoke(PlannerEngineChannels.get),
+  set: (engine): Promise<PlannerEngine> => ipcRenderer.invoke(PlannerEngineChannels.set, engine)
+}
+
+contextBridge.exposeInMainWorld('morzPlannerEngine', plannerEngineBridge)
+// end w12/orch-engine

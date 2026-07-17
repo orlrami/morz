@@ -785,3 +785,8 @@ app.whenReady().then(() => registerSessionsIpc())
 import { registerSessionsResumeIpc } from './services/sessions'
 app.whenReady().then(() => registerSessionsResumeIpc())
 // end w12/sessions-resume
+
+// w12/orch-engine — append-only persisted planner engine registration.
+import { registerPlannerEngineIpc } from './orchestrator/planner'
+app.whenReady().then(() => registerPlannerEngineIpc())
+// end w12/orch-engine

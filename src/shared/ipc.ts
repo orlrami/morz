@@ -1079,3 +1079,21 @@ export interface SessionResumeTestBridge {
   starts(): Promise<SessionLaneStart[]>
 }
 // end w12/sessions-resume
+
+// w12/orch-engine — append-only planner engine selection contract.
+export type PlannerEngine = 'claude' | 'codex' | 'local'
+
+export const PlannerEngineApi = {
+  get: 'planner-engine:get',
+  set: 'planner-engine:set'
+} as const
+
+export interface PlannerEngineBridge {
+  get(): Promise<PlannerEngine>
+  set(engine: PlannerEngine): Promise<PlannerEngine>
+}
+
+export interface StoredSpawnPlan {
+  notice?: string
+}
+// end w12/orch-engine
