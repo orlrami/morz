@@ -4,6 +4,7 @@ import type {
   CommitBridge,
   CommitFileDiff,
   CommitHistoryEntry,
+  CommitLogEntry,
   GitFile
 } from '@shared/ipc'
 import type { MorzReportApi, ReportKind } from '@shared/report'
@@ -24,6 +25,7 @@ interface CommitState {
   diff: CommitFileDiff | null
   log: CommitHistoryEntry[]
   selectedCommitSha: string | null
+  lastCommitSha: string | null
   summary: CommitSummary | null
   message: string
   loading: boolean
@@ -36,7 +38,7 @@ interface CommitState {
   unstageFile(root: string, path: string): Promise<void>
   stageHunk(root: string, patch: string): Promise<void>
   discardFile(root: string, path: string, confirmed: boolean): Promise<void>
-  createCommit(root: string): Promise<void>
+  createCommit(root: string): Promise<string | null>
   suggestMessage(root: string): Promise<void>
   summarizeCommit(root: string, entry: CommitHistoryEntry): Promise<void>
   summarizeFile(root: string, path: string): Promise<void>
@@ -51,6 +53,28 @@ function bridge(): CommitBridge {
 
 function commitAiBridge(): CommitAiBridge | undefined {
   return (window as unknown as { morzCommitAi?: CommitAiBridge }).morzCommitAi
+}
+
+async function loadCommitLog(root: string): Promise<CommitLogEntry[]> {
+  let primaryError: unknown
+  try {
+    const entries = await bridge().log(root)
+    if (entries.length > 0) return entries
+  } catch (error) {
+    primaryError = error
+  }
+
+  const historyBridge = commitAiBridge()
+  if (historyBridge) {
+    try {
+      return await historyBridge.commitLog(root)
+    } catch (error) {
+      if (primaryError === undefined) primaryError = error
+    }
+  }
+
+  if (primaryError !== undefined) throw primaryError
+  return []
 }
 
 function reportBridge(): MorzReportApi | undefined {
@@ -109,31 +133,32 @@ export const useCommitStore = create<CommitState>((set, get) => ({
   diff: null,
   log: [],
   selectedCommitSha: null,
+  lastCommitSha: null,
   summary: null,
   message: '',
   loading: false,
   busy: null,
   error: null,
-  setMessage: (message) => set({ message }),
+  setMessage: (message) => set({ message, lastCommitSha: null }),
   refresh: async (root) => {
     const generation = ++refreshGeneration
     const rootChanged = get().root !== root
     if (rootChanged) operationGeneration += 1
     if (!root) {
       summaryGeneration += 1
-      set({ root, files: [], selectedPath: null, diff: null, log: [], selectedCommitSha: null, summary: null, message: '', loading: false, busy: null, error: null })
+      set({ root, files: [], selectedPath: null, diff: null, log: [], selectedCommitSha: null, lastCommitSha: null, summary: null, message: '', loading: false, busy: null, error: null })
       return
     }
     set({
       root,
       loading: true,
       error: null,
-      ...(rootChanged ? { files: [], selectedPath: null, diff: null, log: [], selectedCommitSha: null, summary: null, message: '', busy: null } : {})
+      ...(rootChanged ? { files: [], selectedPath: null, diff: null, log: [], selectedCommitSha: null, lastCommitSha: null, summary: null, message: '', busy: null } : {})
     })
     try {
       const [status, entries] = await Promise.all([
         window.morz.git.status(root),
-        bridge().log(root).catch(() => [])
+        loadCommitLog(root)
       ])
       if (generation !== refreshGeneration) return
       const previous = get().root === root ? get().selectedPath : null
@@ -222,17 +247,38 @@ export const useCommitStore = create<CommitState>((set, get) => ({
     }
   },
   createCommit: async (root) => {
-    if (get().root !== root) return
+    if (get().root !== root) return null
     const operation = ++operationGeneration
     const message = get().message
-    set({ busy: 'commit', error: null })
+    let createdSha: string | null = null
+    set({ busy: 'commit', error: null, lastCommitSha: null })
     try {
-      await bridge().commit(root, message)
-      if (operation !== operationGeneration || get().root !== root) return
+      const result = await bridge().commit(root, message)
+      createdSha = result.sha
+      if (operation !== operationGeneration || get().root !== root) return null
       set({ message: '' })
       await get().refresh(root)
+      if (operation !== operationGeneration || get().root !== root) return null
+      if (!get().log.some((entry) => entry.sha === createdSha)) {
+        const entries = await loadCommitLog(root)
+        if (operation !== operationGeneration || get().root !== root) return null
+        set({ log: entries.map((entry) => ({ ...entry, diff: '' })) })
+      }
+      if (!get().log.some((entry) => entry.sha === createdSha)) {
+        throw new Error(`Commit ${createdSha.slice(0, 7)} was created, but Git history did not return it`)
+      }
+      set({ lastCommitSha: createdSha })
+      return createdSha
     } catch (error) {
-      if (operation === operationGeneration && get().root === root) set({ error: errorMessage(error) })
+      if (operation === operationGeneration && get().root === root) {
+        set({
+          error: createdSha
+            ? `Committed ${createdSha.slice(0, 7)}, but history refresh failed: ${errorMessage(error)}`
+            : errorMessage(error),
+          lastCommitSha: createdSha
+        })
+      }
+      return createdSha
     } finally {
       if (operation === operationGeneration && get().root === root) set({ busy: null })
     }

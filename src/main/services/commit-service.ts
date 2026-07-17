@@ -391,7 +391,14 @@ async function branchDiffVsBase(rootInput: string): Promise<CommitBranchDiff> {
   const branch = await currentBranch(root)
   if (hasHead.code !== 0) return { branch, baseBranch: null, diff: '', commits: [] }
   const base = await baseBranch(root, branch)
-  if (!base) return { branch, baseBranch: null, diff: '', commits: [] }
+  if (!base) {
+    return {
+      branch,
+      baseBranch: null,
+      diff: '',
+      commits: await commitLogMetadata(root, ['-n', '50'])
+    }
+  }
   const mergeBase = (await gitRaw(root, ['merge-base', 'HEAD', base])).stdout.trim()
   const [diffResult, commits] = await Promise.all([
     gitRaw(
