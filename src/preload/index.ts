@@ -749,3 +749,31 @@ const sessionsBridge: SessionHistoryBridge = {
 
 contextBridge.exposeInMainWorld('morzSessions', sessionsBridge)
 // end w11/sessions
+// w12/sessions-resume — append-only model, pin, and native resume bridge.
+import {
+  SessionResumeApi as SessionResumeChannels,
+  type SessionLaneStart,
+  type SessionLaneStartInput,
+  type SessionResumeBridge,
+  type SessionResumeInfo,
+  type SessionResumeTestBridge
+} from '../shared/ipc'
+
+const sessionsResumeBridge: SessionResumeBridge = {
+  pin: (id: string, pinned: boolean): Promise<void> =>
+    ipcRenderer.invoke(SessionResumeChannels.pin, id, pinned),
+  resumeInfo: (id: string): Promise<SessionResumeInfo | null> =>
+    ipcRenderer.invoke(SessionResumeChannels.resumeInfo, id),
+  startLane: (input: SessionLaneStartInput): Promise<{ agentId: string }> =>
+    ipcRenderer.invoke(SessionResumeChannels.startLane, input)
+}
+
+contextBridge.exposeInMainWorld('morzSessionsResume', sessionsResumeBridge)
+
+if (process.env.MORZ_E2E_SESSIONS_RESUME_STUB === '1') {
+  const sessionsResumeTestBridge: SessionResumeTestBridge = {
+    starts: (): Promise<SessionLaneStart[]> => ipcRenderer.invoke(SessionResumeChannels.testStarts)
+  }
+  contextBridge.exposeInMainWorld('morzSessionsResumeTest', sessionsResumeTestBridge)
+}
+// end w12/sessions-resume

@@ -6,9 +6,14 @@ import { isAbsolute, join, normalize } from 'path'
 import { randomUUID } from 'crypto'
 import {
   SessionHistoryApi,
+  SessionResumeApi,
+  type SessionLaneStart,
+  type SessionLaneStartInput,
   type SessionHistoryRecord,
-  type SessionHistoryStartInput
+  type SessionHistoryStartInput,
+  type SessionResumeInfo
 } from '../../shared/ipc'
+import { getAdapter } from '../adapters/registry'
 
 interface SessionRow {
   id: string
@@ -25,10 +30,17 @@ const MAX_TITLE_LENGTH = 160
 const MAX_SUMMARY_LENGTH = 2000
 const MAX_AGENTS = 16
 const MAX_AGENT_LENGTH = 48
+const MAX_SESSION_RECORD_ID_LENGTH = 256
+const MAX_NATIVE_SESSION_ID_LENGTH = 160
+const MAX_MODEL_LENGTH = 128
 const EXTERNAL_LIMIT = 8
 const CLAUDE_HEADER_BYTES = 256 * 1024
+const SAFE_AGENT_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
+const SAFE_NATIVE_SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/
 
 let db: Database.Database | null = null
+const resumeByRecordId = new Map<string, SessionResumeInfo>()
+const e2eLaneStarts: SessionLaneStart[] = []
 
 function openDb(): Database.Database {
   if (db) return db
@@ -51,6 +63,10 @@ function openDb(): Database.Database {
       ON session_history (space_key, started_at DESC);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_session_history_one_live
       ON session_history ((1)) WHERE ended_at IS NULL;
+    CREATE TABLE IF NOT EXISTS session_pins (
+      session_id TEXT PRIMARY KEY,
+      pinned    INTEGER NOT NULL CHECK (pinned IN (0, 1))
+    );
   `)
   return db
 }
@@ -76,6 +92,31 @@ function cleanText(value: unknown, fallback: string, maxLength: number): string 
   if (typeof value !== 'string') return fallback
   const clean = value.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim()
   return clean.slice(0, maxLength) || fallback
+}
+
+function checkedRecordId(value: unknown): string {
+  if (
+    typeof value !== 'string' ||
+    value.length === 0 ||
+    value.length > MAX_SESSION_RECORD_ID_LENGTH ||
+    value.includes('\0')
+  ) {
+    throw new Error('Invalid session record id')
+  }
+  return value
+}
+
+function checkedAgentId(value: unknown): string {
+  if (typeof value !== 'string' || !SAFE_AGENT_ID.test(value)) {
+    throw new Error('Invalid lane agent id')
+  }
+  return value
+}
+
+function cleanNativeSessionId(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const clean = cleanText(value, '', MAX_NATIVE_SESSION_ID_LENGTH)
+  return SAFE_NATIVE_SESSION_ID.test(clean) ? clean : null
 }
 
 function cleanAgents(value: unknown): string[] {
@@ -107,7 +148,8 @@ function fromRow(row: SessionRow): SessionHistoryRecord {
     title: row.title,
     agentsUsed: parseAgents(row.agents_json),
     summary: row.summary ?? undefined,
-    source: 'morz'
+    source: 'morz',
+    pinned: false
   }
 }
 
@@ -192,12 +234,20 @@ function claudeProjectSlug(spaceRoot: string): string {
   return spaceRoot.replace(/[^A-Za-z0-9]/g, '-')
 }
 
-function readClaudeHeader(path: string): { sessionId?: string; timestamp?: string; gitBranch?: string } {
+interface ClaudeHeader {
+  sessionId?: string
+  timestamp?: string
+  gitBranch?: string
+  model?: string
+  agent?: string
+}
+
+function readClaudeHeader(path: string): ClaudeHeader {
   const fd = openSync(path, 'r')
   try {
     const buffer = Buffer.alloc(CLAUDE_HEADER_BYTES)
     const bytes = readSync(fd, buffer, 0, buffer.length, 0)
-    const metadata: { sessionId?: string; timestamp?: string; gitBranch?: string } = {}
+    const metadata: ClaudeHeader = {}
     for (const line of buffer.toString('utf8', 0, bytes).split(/\r?\n/)) {
       if (!line.trim()) continue
       try {
@@ -205,10 +255,20 @@ function readClaudeHeader(path: string): { sessionId?: string; timestamp?: strin
         if (!metadata.sessionId && typeof value.sessionId === 'string') metadata.sessionId = value.sessionId
         if (!metadata.timestamp && typeof value.timestamp === 'string') metadata.timestamp = value.timestamp
         if (!metadata.gitBranch && typeof value.gitBranch === 'string') metadata.gitBranch = value.gitBranch
+        if (!metadata.agent && typeof value.agentId === 'string') {
+          metadata.agent = cleanText(value.agentId, '', MAX_AGENT_LENGTH) || undefined
+        }
+        if (!metadata.model && typeof value.model === 'string') {
+          metadata.model = cleanText(value.model, '', MAX_MODEL_LENGTH) || undefined
+        }
+        const message = value.message as Record<string, unknown> | undefined
+        if (!metadata.model && message && typeof message.model === 'string') {
+          metadata.model = cleanText(message.model, '', MAX_MODEL_LENGTH) || undefined
+        }
       } catch {
         // A partial final line or malformed event does not hide the other sessions.
       }
-      if (metadata.sessionId && metadata.timestamp && metadata.gitBranch) break
+      if (metadata.sessionId && metadata.timestamp && metadata.gitBranch && metadata.model) break
     }
     return metadata
   } finally {
@@ -216,8 +276,21 @@ function readClaudeHeader(path: string): { sessionId?: string; timestamp?: strin
   }
 }
 
+function claudeConfigRoot(): string {
+  const configured = process.env.CLAUDE_CONFIG_DIR
+  if (
+    configured &&
+    configured.length <= MAX_ROOT_LENGTH &&
+    !configured.includes('\0') &&
+    isAbsolute(configured)
+  ) {
+    return normalize(configured)
+  }
+  return join(homedir(), '.claude')
+}
+
 function claudeSessions(spaceRoot: string): SessionHistoryRecord[] {
-  const projectDir = join(homedir(), '.claude', 'projects', claudeProjectSlug(spaceRoot))
+  const projectDir = join(claudeConfigRoot(), 'projects', claudeProjectSlug(spaceRoot))
   if (!existsSync(projectDir)) return []
   try {
     return readdirSync(projectDir, { withFileTypes: true })
@@ -230,18 +303,28 @@ function claudeSessions(spaceRoot: string): SessionHistoryRecord[] {
       .slice(0, EXTERNAL_LIMIT)
       .map(({ path, name, stat }) => {
         const metadata = readClaudeHeader(path)
+        const nativeSessionId = cleanNativeSessionId(
+          metadata.sessionId ?? name.replace(/\.jsonl$/i, '')
+        )
+        if (!nativeSessionId) return null
         const parsedStart = metadata.timestamp ? Date.parse(metadata.timestamp) : Number.NaN
         const startedAt = Number.isFinite(parsedStart) ? parsedStart : stat.birthtimeMs || stat.mtimeMs
+        const id = `claude:${nativeSessionId}`
+        resumeByRecordId.set(id, { cli: 'claude', sessionId: nativeSessionId, cwd: spaceRoot })
         return {
-          id: `claude:${metadata.sessionId ?? name.replace(/\.jsonl$/i, '')}`,
+          id,
           spaceRoot,
           startedAt: new Date(startedAt).toISOString(),
           endedAt: new Date(stat.mtimeMs).toISOString(),
           title: cleanText(metadata.gitBranch, 'Claude session', MAX_TITLE_LENGTH),
           agentsUsed: ['claude'],
-          source: 'claude' as const
+          source: 'claude' as const,
+          model: metadata.model,
+          agent: metadata.agent ?? 'claude',
+          pinned: false
         }
       })
+      .filter((record): record is NonNullable<typeof record> => record !== null)
   } catch (error) {
     console.warn('[morz] Claude session scan skipped:', error instanceof Error ? error.message : 'unknown error')
     return []
@@ -255,12 +338,58 @@ export function listSessions(spaceRoot: string): SessionHistoryRecord[] {
       .prepare('SELECT * FROM session_history WHERE space_key = ? ORDER BY started_at DESC LIMIT 100')
       .all(rootKey(root)) as SessionRow[]
   ).map(fromRow)
-  return [...local, ...claudeSessions(root)].sort((left, right) => {
+  const pinned = new Set(
+    (openDb().prepare('SELECT session_id FROM session_pins WHERE pinned = 1').all() as Array<{ session_id: string }>).map(
+      (row) => row.session_id
+    )
+  )
+  return [...local, ...claudeSessions(root)].map((record) => ({
+    ...record,
+    pinned: pinned.has(record.id)
+  })).sort((left, right) => {
+    if (left.pinned !== right.pinned) return left.pinned ? -1 : 1
     const leftLive = left.source === 'morz' && left.endedAt === null
     const rightLive = right.source === 'morz' && right.endedAt === null
     if (leftLive !== rightLive) return leftLive ? -1 : 1
     return Date.parse(right.startedAt) - Date.parse(left.startedAt)
   })
+}
+
+export function pinSession(id: string, pinned: boolean): void {
+  const recordId = checkedRecordId(id)
+  if (typeof pinned !== 'boolean') throw new Error('Pinned must be a boolean')
+  const database = openDb()
+  const local = database.prepare('SELECT 1 FROM session_history WHERE id = ?').get(recordId)
+  if (!local && !resumeByRecordId.has(recordId)) throw new Error('Session record not found')
+  if (pinned) {
+    database
+      .prepare(
+        `INSERT INTO session_pins (session_id, pinned) VALUES (?, 1)
+         ON CONFLICT(session_id) DO UPDATE SET pinned = 1`
+      )
+      .run(recordId)
+  } else {
+    database.prepare('DELETE FROM session_pins WHERE session_id = ?').run(recordId)
+  }
+}
+
+export function resumeInfo(id: string): SessionResumeInfo | null {
+  const info = resumeByRecordId.get(checkedRecordId(id))
+  return info ? { ...info } : null
+}
+
+function startResumedLane(input: SessionLaneStartInput): { agentId: string } {
+  if (!input || typeof input !== 'object') throw new Error('Resume lane input is required')
+  const id = checkedRecordId(input.id)
+  const agentId = checkedAgentId(input.agentId)
+  const info = resumeInfo(id)
+  if (!info) throw new Error('Session is not available to resume')
+  const start: SessionLaneStart = { ...info, agentId }
+  if (process.env.MORZ_E2E_SESSIONS_RESUME_STUB === '1') {
+    e2eLaneStarts.push(start)
+    return { agentId }
+  }
+  return getAdapter(info.cli).start({ agentId, cwd: info.cwd, resume: info.sessionId })
 }
 
 function ipcFailure(operation: string, error: unknown): never {
@@ -305,4 +434,32 @@ export function registerSessionsIpc(): void {
       console.error('[morz] session history shutdown failed:', error)
     }
   })
+}
+
+export function registerSessionsResumeIpc(): void {
+  openDb()
+  ipcMain.handle(SessionResumeApi.pin, (_event, id: string, pinned: boolean) => {
+    try {
+      pinSession(id, pinned)
+    } catch (error) {
+      return ipcFailure('pin', error)
+    }
+  })
+  ipcMain.handle(SessionResumeApi.resumeInfo, (_event, id: string) => {
+    try {
+      return resumeInfo(id)
+    } catch (error) {
+      return ipcFailure('read resume info', error)
+    }
+  })
+  ipcMain.handle(SessionResumeApi.startLane, (_event, input: SessionLaneStartInput) => {
+    try {
+      return startResumedLane(input)
+    } catch (error) {
+      return ipcFailure('resume', error)
+    }
+  })
+  if (process.env.MORZ_E2E_SESSIONS_RESUME_STUB === '1') {
+    ipcMain.handle(SessionResumeApi.testStarts, () => e2eLaneStarts.map((entry) => ({ ...entry })))
+  }
 }
