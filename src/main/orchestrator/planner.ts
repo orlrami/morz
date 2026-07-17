@@ -1,12 +1,17 @@
 import { randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
-import { isAbsolute, join } from 'node:path'
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, isAbsolute, join } from 'node:path'
+import Database from 'better-sqlite3'
 import type {
   PlanAmendmentAction,
+  PlannerEngine,
   StoredPlanAmendment,
   StoredSpawnPlan
 } from '../../shared/ipc'
-import { PlannerApi } from '../../shared/ipc'
+import { PlannerApi, PlannerEngineApi } from '../../shared/ipc'
+import type { AgentAdapter } from '../adapters/types'
 import type { PlannedAgent, SpawnPlan } from '../../shared/spawn-plan'
 import { hashSpawnPlan, PlanStore } from './plan-store'
 
@@ -14,6 +19,9 @@ const MAX_GOAL_CHARS = 4_000
 const MAX_PROMPT_CHARS = 12_000
 const MAX_STREAM_BYTES = 2 * 1024 * 1024
 const CLAUDE_TIMEOUT_MS = 120_000
+const ADAPTER_TIMEOUT_MS = 120_000
+const LOCAL_ADAPTER_TIMEOUT_MS = 300_000
+const LOCAL_BOOT_MS = 5_000
 const HASH_PATTERN = /^[a-f0-9]{64}$/
 const AGENT_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/
 const SAFE_BRANCH_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._/-]{0,199}$/
@@ -30,8 +38,15 @@ export interface DispatchPort {
 
 export interface PlannerDependencies {
   runClaude?: (prompt: string) => Promise<string>
+  runEngine?: (engine: PlannerEngine, prompt: string, spaceRoot: string) => Promise<string>
   createId?: () => string
   now?: () => string
+}
+
+export interface PlannerResult {
+  plan: SpawnPlan
+  engine: PlannerEngine
+  notice?: string
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -307,27 +322,225 @@ async function runClaudePlanner(prompt: string): Promise<string> {
   })
 }
 
-export async function planGoal(
+function stripTerminalControls(value: string): string {
+  // eslint-disable-next-line no-control-regex
+  return value.replace(/\x1b(?:\[[0-9;:?<=>]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[@-Z\\-_])/g, '')
+}
+
+/** Agy's adapter contract is raw PTY output. Recover a complete rendered JSON
+ * snapshot, then require it to pass the same strict SpawnPlan validator. */
+export function extractLocalSpawnPlanBlock(response: string): unknown {
+  const text = stripTerminalControls(response)
+  const opening = '```json'
+  const start = text.lastIndexOf(opening)
+  if (start !== -1) {
+    const closing = text.indexOf('```', start + opening.length)
+    if (closing !== -1) {
+      try {
+        return extractSpawnPlanBlock(text.slice(start, closing + 3))
+      } catch {
+        // Agy commonly renders Markdown fences away; fall through to snapshots.
+      }
+    }
+  }
+
+  const snapshots = text.slice(-200_000)
+  for (let candidateStart = 0; candidateStart < snapshots.length; candidateStart += 1) {
+    if (snapshots[candidateStart] !== '{') continue
+    let depth = 0
+    let inString = false
+    let escaped = false
+    let normalized = ''
+    for (let index = candidateStart; index < snapshots.length; index += 1) {
+      const char = snapshots[index]
+      if (inString && (char === '\r' || char === '\n')) {
+        if (char === '\r' && snapshots[index + 1] === '\n') index += 1
+        while (index + 1 < snapshots.length && /[\t ]/.test(snapshots[index + 1])) index += 1
+        if (!normalized.endsWith(' ')) normalized += ' '
+        continue
+      }
+      normalized += char
+      if (inString) {
+        if (escaped) escaped = false
+        else if (char === '\\') escaped = true
+        else if (char === '"') inString = false
+        continue
+      }
+      if (char === '"') inString = true
+      else if (char === '{') depth += 1
+      else if (char === '}') {
+        depth -= 1
+        if (depth !== 0) continue
+        try {
+          const value = JSON.parse(normalized) as unknown
+          if (validateSpawnPlan(value).value) return value
+        } catch {
+          // Redraw fragments are expected; keep scanning later snapshots.
+        }
+        break
+      }
+    }
+  }
+  throw new Error('Local planner response did not contain a valid SpawnPlan JSON object')
+}
+
+function stopAdapterLane(adapter: AgentAdapter, agentId: string): void {
+  try {
+    adapter.stop(agentId)
+  } catch {
+    // The adapter may already have torn itself down after an exit event.
+  }
+}
+
+async function runAdapterPlanner(engine: Exclude<PlannerEngine, 'claude'>, prompt: string, cwd: string): Promise<string> {
+  const cli = engine === 'local' ? 'agy' : 'codex'
+  const { getAdapter } = await import('../adapters/registry')
+  const adapter = getAdapter(cli)
+  const agentId = `planner-${cli}-${randomUUID()}`
+  const isolatedLocalCwd = engine === 'local'
+    ? mkdtempSync(join(tmpdir(), 'morz-planner-'))
+    : null
+  return new Promise((resolve, reject) => {
+    let output = ''
+    let settled = false
+    let sendTimer: NodeJS.Timeout | null = null
+    let localPromptScheduled = false
+    let localTrustConfirmed = false
+    const finish = (error?: Error): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      if (sendTimer) clearTimeout(sendTimer)
+      unsubscribe()
+      stopAdapterLane(adapter, agentId)
+      if (isolatedLocalCwd) {
+        try {
+          rmSync(isolatedLocalCwd, { recursive: true, force: true })
+        } catch {
+          // The OS can finish reaping Agy after the planner promise settles.
+        }
+      }
+      if (error) reject(error)
+      else resolve(output.trim())
+    }
+    const unsubscribe = adapter.onEvent((eventAgentId, event) => {
+      if (eventAgentId !== agentId || settled) return
+      if (event.type === 'delta' || (event.type === 'message' && event.role === 'assistant')) {
+        output += event.text
+        if (engine === 'local' && !localPromptScheduled) {
+          const rendered = stripTerminalControls(output)
+          if (!localTrustConfirmed && rendered.includes('Do you trust the contents of this project?')) {
+            localTrustConfirmed = true
+            adapter.send(agentId, '')
+          }
+          if (rendered.includes('? for shortcuts')) {
+            localPromptScheduled = true
+            sendTimer = setTimeout(() => {
+              sendTimer = null
+              if (!settled) adapter.send(agentId, prompt)
+            }, LOCAL_BOOT_MS)
+          }
+        }
+        if (Buffer.byteLength(output, 'utf8') > MAX_STREAM_BYTES) {
+          finish(new Error(`${cli} planner output exceeded the size limit`))
+        } else if (engine === 'local') {
+          try {
+            extractLocalSpawnPlanBlock(output)
+            finish()
+          } catch {
+            // Agy redraws and can emit advisory result events before the answer is complete.
+          }
+        }
+      } else if (event.type === 'result') {
+        if (engine === 'local') return
+        if (!output.trim()) finish(new Error(`${cli} planner returned no text`))
+        else finish()
+      } else if (event.type === 'error') {
+        finish(new Error(`${cli} planner failed: ${event.message}`))
+      } else if (event.type === 'exit') {
+        finish(new Error(`${cli} planner exited ${event.code ?? 'unexpectedly'}`))
+      }
+    })
+    const timer = setTimeout(
+      () => finish(new Error(`${cli} planner timed out`)),
+      engine === 'local' ? LOCAL_ADAPTER_TIMEOUT_MS : ADAPTER_TIMEOUT_MS
+    )
+    try {
+      adapter.start({ agentId, cwd: isolatedLocalCwd ?? cwd })
+      if (engine !== 'local') {
+        adapter.send(agentId, prompt)
+      }
+    } catch (error) {
+      finish(new Error(`Could not start ${cli} planner: ${error instanceof Error ? error.message : String(error)}`))
+    }
+  })
+}
+
+function e2ePlannerResponse(
+  engine: PlannerEngine,
+  goal: string,
+  spaceRoot: string,
+  id: string,
+  createdAt: string
+): string {
+  if (engine === 'claude' && goal.includes('claude-fails')) return 'not a SpawnPlan'
+  const label = engine === 'claude' ? 'Claude' : engine === 'codex' ? 'Codex' : 'Local'
+  const cli = engine === 'local' ? 'agy' : engine
+  return `\`\`\`json\n${JSON.stringify({
+    version: '1.0',
+    id,
+    goal,
+    agents: [{
+      agentId: `${engine}-planner`,
+      cli,
+      role: `MORZ_E2E ${label} planner`,
+      branch: `run/e2e/${engine}-planner`,
+      worktree: null,
+      cwd: '',
+      promptSeed: `Execute the ${label} planner stub task.`,
+      dependsOn: [],
+      port: null
+    }],
+    spaceRoot,
+    caps: { maxUsd: null, maxTokens: null },
+    createdAt,
+    planHash: '0'.repeat(64)
+  })}\n\`\`\``
+}
+
+async function generatePlan(
   rawGoal: string,
   spaceRoot: string,
-  dependencies: PlannerDependencies = {}
+  engine: PlannerEngine,
+  dependencies: PlannerDependencies
 ): Promise<SpawnPlan> {
   const goal = rawGoal.trim()
   if (!goal || goal.length > MAX_GOAL_CHARS) throw new Error('Goal must be 1-4000 characters')
   if (!isAbsolute(spaceRoot) || spaceRoot.length > 2_000) throw new Error('Space root must be absolute')
   const createId = dependencies.createId ?? randomUUID
   const now = dependencies.now ?? (() => new Date().toISOString())
-  const runClaude = dependencies.runClaude ?? runClaudePlanner
   const id = createId()
   const createdAt = now()
+  const runEngine = dependencies.runEngine ?? (async (selected, prompt, root) => {
+    if (process.env.MORZ_E2E === '1') {
+      return e2ePlannerResponse(selected, goal, root, id, createdAt)
+    }
+    if (selected === 'claude') return (dependencies.runClaude ?? runClaudePlanner)(prompt)
+    return runAdapterPlanner(selected, prompt, root)
+  })
   let issues: string[] | undefined
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
     let candidate: unknown
     try {
-      candidate = extractSpawnPlanBlock(
-        await runClaude(plannerPrompt(goal, spaceRoot, id, createdAt, issues))
+      const response = await runEngine(
+        engine,
+        plannerPrompt(goal, spaceRoot, id, createdAt, issues),
+        spaceRoot
       )
+      candidate = engine === 'local'
+        ? extractLocalSpawnPlanBlock(response)
+        : extractSpawnPlanBlock(response)
     } catch (error) {
       issues = [error instanceof Error ? error.message : 'invalid planner response']
       if (attempt === 0) continue
@@ -351,6 +564,33 @@ export async function planGoal(
     }
   }
   throw new Error('Planner failed unexpectedly')
+}
+
+export async function planGoal(
+  rawGoal: string,
+  spaceRoot: string,
+  dependencies: PlannerDependencies = {}
+): Promise<SpawnPlan> {
+  return generatePlan(rawGoal, spaceRoot, 'claude', dependencies)
+}
+
+export async function planGoalWithEngine(
+  rawGoal: string,
+  spaceRoot: string,
+  engine: PlannerEngine,
+  dependencies: PlannerDependencies = {}
+): Promise<PlannerResult> {
+  try {
+    return { plan: await generatePlan(rawGoal, spaceRoot, engine, dependencies), engine }
+  } catch (error) {
+    if (engine !== 'claude') throw error
+    const plan = await generatePlan(rawGoal, spaceRoot, 'codex', dependencies)
+    return {
+      plan,
+      engine: 'codex',
+      notice: 'Claude could not produce a valid plan after retry; used Codex instead.'
+    }
+  }
 }
 
 function validateAmendmentAction(value: unknown): ValidationResult<PlanAmendmentAction> {
@@ -407,17 +647,88 @@ function assertHash(value: unknown, label: string): asserts value is string {
   if (typeof value !== 'string' || !HASH_PATTERN.test(value)) throw new Error(`${label} is invalid`)
 }
 
+// w12/orch-engine
+const PLANNER_ENGINES = new Set<PlannerEngine>(['claude', 'codex', 'local'])
+
+function normalizePlannerEngine(value: unknown): PlannerEngine {
+  if (typeof value !== 'string' || !PLANNER_ENGINES.has(value as PlannerEngine)) {
+    throw new Error('Planner engine must be claude, codex, or local')
+  }
+  return value as PlannerEngine
+}
+
+class PlannerEngineStore {
+  private readonly db: Database.Database
+
+  constructor(dbPath: string) {
+    mkdirSync(dirname(dbPath), { recursive: true })
+    this.db = new Database(dbPath)
+    this.db.pragma('journal_mode = WAL')
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS orchestrator_planner_settings (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        engine TEXT NOT NULL CHECK (engine IN ('claude', 'codex', 'local')),
+        updated_at TEXT NOT NULL
+      );
+      INSERT OR IGNORE INTO orchestrator_planner_settings (id, engine, updated_at)
+      VALUES (1, 'claude', CURRENT_TIMESTAMP);
+    `)
+  }
+
+  get(): PlannerEngine {
+    const row = this.db
+      .prepare('SELECT engine FROM orchestrator_planner_settings WHERE id = 1')
+      .get() as { engine?: unknown } | undefined
+    return normalizePlannerEngine(row?.engine ?? 'claude')
+  }
+
+  set(value: unknown): PlannerEngine {
+    const engine = normalizePlannerEngine(value)
+    this.db
+      .prepare('UPDATE orchestrator_planner_settings SET engine = ?, updated_at = ? WHERE id = 1')
+      .run(engine, new Date().toISOString())
+    return engine
+  }
+
+  close(): void {
+    if (this.db.open) this.db.close()
+  }
+}
+
+let plannerEngineStore: PlannerEngineStore | null = null
+
+function engineStore(dbPath: string): PlannerEngineStore {
+  return (plannerEngineStore ??= new PlannerEngineStore(dbPath))
+}
+
+export async function registerPlannerEngineIpc(): Promise<void> {
+  const { app, ipcMain } = await import('electron')
+  const store = engineStore(join(app.getPath('appData'), 'Morz', 'morz.db'))
+  ipcMain.handle(PlannerEngineApi.get, () => store.get())
+  ipcMain.handle(PlannerEngineApi.set, (_event, value: unknown) => store.set(value))
+  app.once('before-quit', () => {
+    store.close()
+    plannerEngineStore = null
+  })
+}
+// end w12/orch-engine
+
 /** Register the append-only w5/planner IPC surface after Electron is ready. */
 export async function registerPlannerIpc(dispatcher: DispatchPort = new LoggingDispatchStub()): Promise<void> {
   const { app, ipcMain } = await import('electron')
-  const store = new PlanStore(join(app.getPath('appData'), 'Morz', 'morz.db'))
+  const dbPath = join(app.getPath('appData'), 'Morz', 'morz.db')
+  const store = new PlanStore(dbPath)
   app.once('before-quit', () => store.close())
 
   ipcMain.handle(PlannerApi.plan, async (_event, input: { goal?: unknown; spaceRoot?: unknown }) => {
     if (!isPlainObject(input)) throw new Error('Invalid plan request')
-    const plan = await planGoal(String(input.goal ?? ''), String(input.spaceRoot ?? ''))
-    const draft = store.createDraft(plan)
-    return store.propose(draft.plan.id)
+    const result = await planGoalWithEngine(
+      String(input.goal ?? ''),
+      String(input.spaceRoot ?? ''),
+      engineStore(dbPath).get()
+    )
+    const draft = store.createDraft(result.plan)
+    return { ...store.propose(draft.plan.id), ...(result.notice ? { notice: result.notice } : {}) }
   })
   ipcMain.handle(
     PlannerApi.update,

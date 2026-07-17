@@ -781,3 +781,8 @@ app.whenReady().then(() => registerCommitAiIpc(ipcMain))
 import { registerSessionsIpc } from './services/sessions'
 app.whenReady().then(() => registerSessionsIpc())
 // end w11/sessions
+
+// w12/orch-engine — append-only persisted planner engine registration.
+import { registerPlannerEngineIpc } from './orchestrator/planner'
+app.whenReady().then(() => registerPlannerEngineIpc())
+// end w12/orch-engine

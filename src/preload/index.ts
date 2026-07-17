@@ -749,3 +749,18 @@ const sessionsBridge: SessionHistoryBridge = {
 
 contextBridge.exposeInMainWorld('morzSessions', sessionsBridge)
 // end w11/sessions
+
+// w12/orch-engine — append-only isolated planner engine bridge.
+import {
+  PlannerEngineApi as PlannerEngineChannels,
+  type PlannerEngine,
+  type PlannerEngineBridge
+} from '../shared/ipc'
+
+const plannerEngineBridge: PlannerEngineBridge = {
+  get: (): Promise<PlannerEngine> => ipcRenderer.invoke(PlannerEngineChannels.get),
+  set: (engine): Promise<PlannerEngine> => ipcRenderer.invoke(PlannerEngineChannels.set, engine)
+}
+
+contextBridge.exposeInMainWorld('morzPlannerEngine', plannerEngineBridge)
+// end w12/orch-engine

@@ -2,7 +2,13 @@ import { useEffect, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { IconClipboardList, IconFlask, IconHandStop, IconSparkles } from '@tabler/icons-react'
 import type { Message, Part, Task, TaskState } from '@shared/bus'
-import type { PlannerBridge, StoredPlanAmendment, StoredSpawnPlan } from '@shared/ipc'
+import type {
+  PlannerBridge,
+  PlannerEngine,
+  PlannerEngineBridge,
+  StoredPlanAmendment,
+  StoredSpawnPlan
+} from '@shared/ipc'
 import { colors } from '@/lib/tokens'
 import { staggerContainer, staggerItem } from '@/lib/springs'
 import { useModeStore } from '@/store/modeStore'
@@ -209,9 +215,20 @@ function getPlanner(): PlannerBridge | undefined {
   return (window as unknown as { morzPlanner?: PlannerBridge }).morzPlanner
 }
 
+// w12/orch-engine
+function getPlannerEngine(): PlannerEngineBridge | undefined {
+  return (window as unknown as { morzPlannerEngine?: PlannerEngineBridge }).morzPlannerEngine
+}
+// end w12/orch-engine
+
 function PlannerFlow(): JSX.Element {
   const spaceRoot = useSpaceStore(selectActiveSpaceRoot)
   const [goal, setGoal] = useState('')
+  // w12/orch-engine
+  const [engine, setEngine] = useState<PlannerEngine>('claude')
+  const [engineSaving, setEngineSaving] = useState(false)
+  const [engineNotice, setEngineNotice] = useState('')
+  // end w12/orch-engine
   const [record, setRecord] = useState<StoredSpawnPlan | null>(null)
   const [amendments, setAmendments] = useState<StoredPlanAmendment[]>([])
   const [amendmentRequest, setAmendmentRequest] = useState('')
@@ -230,6 +247,17 @@ function PlannerFlow(): JSX.Element {
       })
       .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : String(reason)))
   }, [])
+
+  // w12/orch-engine
+  useEffect(() => {
+    const bridge = getPlannerEngine()
+    if (!bridge) return
+    void bridge
+      .get()
+      .then(setEngine)
+      .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : String(reason)))
+  }, [])
+  // end w12/orch-engine
 
   const run = async (work: () => Promise<void>): Promise<void> => {
     setBusy(true)
@@ -251,6 +279,7 @@ function PlannerFlow(): JSX.Element {
     void run(async () => {
       const next = await planner.plan(goal.trim(), spaceRoot)
       setRecord(next)
+      setEngineNotice(next.notice ?? '')
       setStatus('')
     })
   }
@@ -272,6 +301,7 @@ function PlannerFlow(): JSX.Element {
     run(async () => {
       await getPlanner()!.discard(planHash)
       setRecord(null)
+      setEngineNotice('')
       setStatus('')
     })
 
@@ -330,9 +360,39 @@ function PlannerFlow(): JSX.Element {
             }
           />
         </div>
+        {/* w12/orch-engine */}
+        <select
+          aria-label="Planner engine"
+          value={engine}
+          disabled={busy || engineSaving || !getPlannerEngine()}
+          onChange={(event) => {
+            const selected = event.target.value as PlannerEngine
+            const bridge = getPlannerEngine()
+            if (!bridge) return
+            setEngine(selected)
+            setEngineSaving(true)
+            setError('')
+            void bridge
+              .set(selected)
+              .then(setEngine)
+              .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : String(reason)))
+              .finally(() => setEngineSaving(false))
+          }}
+          className="w-[66px] rounded-md border bg-black/10 px-1 py-1 text-[9px] font-semibold outline-none focus:ring-1 disabled:opacity-40"
+          style={{
+            borderColor: 'var(--color-line-strong)',
+            color: colors.quartz,
+            '--tw-ring-color': colors.bronze
+          } as React.CSSProperties}
+        >
+          <option value="claude">Claude</option>
+          <option value="codex">Codex</option>
+          <option value="local">Local</option>
+        </select>
+        {/* end w12/orch-engine */}
         <button
           type="submit"
-          disabled={busy || !goal.trim() || !getPlanner()}
+          disabled={busy || engineSaving || !goal.trim() || !getPlanner()}
           className="flex items-center gap-1 rounded-md px-2 py-1.5 text-[10px] font-bold disabled:cursor-not-allowed disabled:opacity-40"
           style={{ background: colors.bronze, color: colors.page }}
           aria-label="Plan team"
@@ -342,6 +402,13 @@ function PlannerFlow(): JSX.Element {
         </button>
       </form>
 
+      {/* w12/orch-engine */}
+      {engineNotice && (
+        <p role="status" className="text-[9.5px] leading-snug" style={{ color: colors.bronzeHot }}>
+          {engineNotice}
+        </p>
+      )}
+      {/* end w12/orch-engine */}
       {status && <p className="text-[9.5px]" style={{ color: colors.bronzeHot }}>{status}</p>}
       {error && <p role="alert" className="text-[9.5px] leading-snug" style={{ color: colors.error }}>{error}</p>}
 
