@@ -1,6 +1,7 @@
 import { useEffect, useMemo } from 'react'
 import {
   IconAlertCircle,
+  IconCheck,
   IconFileDiff,
   IconGitBranch,
   IconGitCommit,
@@ -80,6 +81,7 @@ export function CommitPanel(): JSX.Element {
     diff,
     log,
     selectedCommitSha,
+    lastCommitSha,
     summary,
     message,
     loading,
@@ -115,6 +117,21 @@ export function CommitPanel(): JSX.Element {
     if (!interactive) return
     if (!window.confirm(`Discard all unstaged changes in ${path}? This cannot be undone.`)) return
     void discardFile(root, path, true)
+  }
+
+  const commit = async (): Promise<void> => {
+    if (!interactive) return
+    const commitMessage = message.trim()
+    const sha = await createCommit(root)
+    if (!sha) return
+    const shortSha = sha.slice(0, 7)
+    window.morz.notify?.emit({
+      id: `app:commit:${sha}`,
+      level: 'success',
+      source: 'app',
+      title: `Committed ${shortSha}`,
+      detail: commitMessage
+    })
   }
 
   return (
@@ -187,7 +204,7 @@ export function CommitPanel(): JSX.Element {
             )}
             <button
               type="button"
-              onClick={() => void createCommit(root)}
+              onClick={() => void commit()}
               disabled={working || staged.length === 0 || !message.trim()}
               className="ml-auto flex cursor-pointer items-center gap-1.5 rounded-lg px-3 py-1.5 text-[10.5px] font-semibold disabled:cursor-not-allowed disabled:opacity-40"
               style={{ background: colors.bronze, color: colors.page }}
@@ -200,6 +217,17 @@ export function CommitPanel(): JSX.Element {
               Commit
             </button>
           </div>
+          {lastCommitSha && (
+            <div
+              role="status"
+              aria-live="polite"
+              className="mt-2 flex items-center gap-1.5 text-[10.5px]"
+              style={{ color: colors.done }}
+            >
+              <IconCheck size={13} stroke={2} />
+              Committed {lastCommitSha.slice(0, 7)}
+            </div>
+          )}
         </div>
 
         <div className="min-h-0 flex-1 border-t" style={{ borderColor: 'var(--color-line)' }}>

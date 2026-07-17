@@ -62,17 +62,32 @@ function createFixture(): string {
 }
 
 async function openCommitPage(page: Awaited<ReturnType<typeof launchMorz>>['page'], root: string): Promise<void> {
-  await page.evaluate(({ repo }) => {
-    localStorage.setItem(
-      'morz.spaces',
-      JSON.stringify({
-        state: { spaces: [{ id: 'commit-ai-fixture', name: 'commit-ai-fixture', root: repo, agents: [] }] },
-        version: 1
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await page.evaluate(({ repo }) => {
+      localStorage.setItem(
+        'morz.spaces',
+        JSON.stringify({
+          state: {
+            spaces: [{ id: 'commit-ai-fixture', name: 'commit-ai-fixture', root: repo, agents: [] }],
+            activeSpaceId: 'commit-ai-fixture',
+            initialized: true
+          },
+          version: 2
+        })
+      )
+    }, { repo: root })
+    await page.reload({ waitUntil: 'domcontentloaded' })
+    await page.getByRole('tab', { name: 'Commit', exact: true }).click()
+    try {
+      await expect(page.getByRole('button', { name: /fix: polish launch copy/ })).toBeVisible({
+        timeout: 5_000
       })
-    )
-  }, { repo: root })
-  await page.reload()
-  await page.getByRole('tab', { name: 'Commit', exact: true }).click()
+      return
+    } catch {
+      // The persisted space store may finish one last write during reload; reseed deterministically.
+    }
+  }
+  throw new Error('Failed to activate the commit AI fixture repository')
 }
 
 test('renders commit history and returns commit, file, and branch context', async () => {
