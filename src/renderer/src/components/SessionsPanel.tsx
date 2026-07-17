@@ -1,5 +1,13 @@
 import { useEffect } from 'react'
-import { IconClock, IconHistory, IconRefresh, IconRobot } from '@tabler/icons-react'
+import {
+  IconClock,
+  IconHistory,
+  IconPin,
+  IconPinFilled,
+  IconPlayerPlay,
+  IconRefresh,
+  IconRobot
+} from '@tabler/icons-react'
 import { colors } from '@/lib/tokens'
 import { selectActiveSpaceRoot, useSpaceStore } from '@/store/spaceStore'
 import { useSessionsStore } from '@/store/sessionsStore'
@@ -16,11 +24,24 @@ function formatTime(value: string): string {
   }).format(date)
 }
 
-function SessionCard({ record, live }: { record: SessionHistoryRecord; live: boolean }): JSX.Element {
+function SessionCard({
+  record,
+  live,
+  busy,
+  onPin,
+  onResume
+}: {
+  record: SessionHistoryRecord
+  live: boolean
+  busy: boolean
+  onPin(): void
+  onResume(): void
+}): JSX.Element {
   return (
     <article
       data-session-record={record.id}
       data-session-live={live ? 'true' : 'false'}
+      data-session-pinned={record.pinned ? 'true' : 'false'}
       className="group relative overflow-hidden rounded-xl border px-4 py-3 transition-colors duration-200"
       style={{
         background: live ? `${colors.bronze}12` : colors.card,
@@ -69,6 +90,54 @@ function SessionCard({ record, live }: { record: SessionHistoryRecord; live: boo
               {record.summary}
             </p>
           )}
+          <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+            {record.model && (
+              <span
+                data-testid="session-model"
+                className="inline-flex rounded-full border px-2 py-0.5 font-mono text-[9px] font-semibold"
+                style={{
+                  color: colors.agentClaude,
+                  borderColor: `${colors.agentClaude}55`,
+                  background: `${colors.agentClaude}10`
+                }}
+              >
+                {record.model}
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={onPin}
+              disabled={busy}
+              aria-label={`${record.pinned ? 'Unpin' : 'Pin'} ${record.title}`}
+              aria-pressed={record.pinned}
+              className="ml-auto inline-flex cursor-pointer items-center gap-1 rounded-md border px-2 py-1 text-[10px] font-semibold transition-colors hover:bg-[#37332B] disabled:cursor-wait disabled:opacity-50"
+              style={{
+                color: record.pinned ? colors.bronzeHot : colors.quartzDim,
+                borderColor: record.pinned ? `${colors.bronze}66` : 'var(--color-line-strong)',
+                background: record.pinned ? `${colors.bronze}14` : 'transparent'
+              }}
+            >
+              {record.pinned ? <IconPinFilled size={12} /> : <IconPin size={12} stroke={1.6} />}
+              {record.pinned ? 'Pinned' : 'Pin'}
+            </button>
+            {record.source === 'claude' && (
+              <button
+                type="button"
+                onClick={onResume}
+                disabled={busy}
+                aria-label={`Resume ${record.title}`}
+                className="inline-flex cursor-pointer items-center gap-1 rounded-md border px-2 py-1 text-[10px] font-semibold transition-colors hover:bg-[#37332B] disabled:cursor-wait disabled:opacity-50"
+                style={{
+                  color: colors.bronzeHot,
+                  borderColor: `${colors.bronze}66`,
+                  background: `${colors.bronze}0A`
+                }}
+              >
+                <IconPlayerPlay size={11} stroke={1.8} />
+                Resume
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </article>
@@ -81,7 +150,10 @@ export function SessionsPanel(): JSX.Element {
   const current = useSessionsStore((state) => state.current)
   const loading = useSessionsStore((state) => state.loading)
   const error = useSessionsStore((state) => state.error)
+  const busyId = useSessionsStore((state) => state.busyId)
   const refresh = useSessionsStore((state) => state.refresh)
+  const pin = useSessionsStore((state) => state.pin)
+  const resume = useSessionsStore((state) => state.resume)
 
   useEffect(() => {
     void refresh(spaceRoot)
@@ -137,6 +209,9 @@ export function SessionsPanel(): JSX.Element {
                 key={record.id}
                 record={record}
                 live={record.source === 'morz' && record.endedAt === null && record.id === current?.id}
+                busy={busyId === record.id}
+                onPin={() => void pin(record.id, !record.pinned)}
+                onResume={() => void resume(record.id)}
               />
             ))}
           </div>

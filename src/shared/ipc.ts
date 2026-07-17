@@ -1038,3 +1038,44 @@ export interface SessionHistoryBridge {
   current(spaceRoot: string): Promise<SessionHistoryRecord | null>
 }
 // end w11/sessions
+// w12/sessions-resume — append-only model, pin, and native resume contract.
+export interface SessionHistoryRecord {
+  /** CLI-reported model when the native transcript exposes one. */
+  model?: string
+  /** CLI-reported agent identity when the native transcript exposes one. */
+  agent?: string
+  pinned: boolean
+}
+
+export interface SessionResumeInfo {
+  cli: Extract<AdapterCli, 'claude' | 'codex'>
+  sessionId: string
+  cwd: string
+}
+
+export interface SessionLaneStartInput {
+  id: string
+  agentId: string
+}
+
+export interface SessionLaneStart extends SessionResumeInfo {
+  agentId: string
+}
+
+export const SessionResumeApi = {
+  pin: 'sessions:pin',
+  resumeInfo: 'sessions:resume-info',
+  startLane: 'sessions:resume-start-lane',
+  testStarts: 'sessions:resume-test-starts'
+} as const
+
+export interface SessionResumeBridge {
+  pin(id: string, pinned: boolean): Promise<void>
+  resumeInfo(id: string): Promise<SessionResumeInfo | null>
+  startLane(input: SessionLaneStartInput): Promise<{ agentId: string }>
+}
+
+export interface SessionResumeTestBridge {
+  starts(): Promise<SessionLaneStart[]>
+}
+// end w12/sessions-resume

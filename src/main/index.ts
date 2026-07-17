@@ -781,3 +781,7 @@ app.whenReady().then(() => registerCommitAiIpc(ipcMain))
 import { registerSessionsIpc } from './services/sessions'
 app.whenReady().then(() => registerSessionsIpc())
 // end w11/sessions
+// w12/sessions-resume — append-only pin and native lane-resume registration.
+import { registerSessionsResumeIpc } from './services/sessions'
+app.whenReady().then(() => registerSessionsResumeIpc())
+// end w12/sessions-resume
