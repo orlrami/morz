@@ -31,12 +31,32 @@ export function hashPlanAmendment(amendment: PlanAmendment): string {
   return createHash('sha256').update(canonicalJson(hashable as unknown as JsonValue)).digest('hex')
 }
 
+function immutablePlanFields(plan: SpawnPlan): Omit<SpawnPlan, 'agents' | 'planHash'> {
+  const { agents: _agents, planHash: _planHash, ...fixed } = plan
+  return {
+    ...fixed,
+    caps: {
+      maxUsd: plan.caps.maxUsd ?? null,
+      maxTokens: plan.caps.maxTokens ?? null
+    }
+  }
+}
+
+function immutableAgentFields(
+  agent: SpawnPlan['agents'][number]
+): Omit<SpawnPlan['agents'][number], 'cli' | 'promptSeed'> {
+  const { cli: _cli, promptSeed: _promptSeed, ...fixed } = agent
+  return {
+    ...fixed,
+    worktree: agent.worktree ?? null,
+    port: agent.port ?? null
+  }
+}
+
 export function assertPlanEditAllowed(current: SpawnPlan, updated: SpawnPlan): void {
-  const { agents: _currentAgents, planHash: _currentHash, ...currentFixed } = current
-  const { agents: _updatedAgents, planHash: _updatedHash, ...updatedFixed } = updated
   if (
-    canonicalJson(currentFixed as unknown as JsonValue) !==
-    canonicalJson(updatedFixed as unknown as JsonValue)
+    canonicalJson(immutablePlanFields(current) as unknown as JsonValue) !==
+    canonicalJson(immutablePlanFields(updated) as unknown as JsonValue)
   ) {
     throw new Error('Plan edit changed immutable plan fields')
   }
@@ -51,11 +71,9 @@ export function assertPlanEditAllowed(current: SpawnPlan, updated: SpawnPlan): v
   for (const agent of updated.agents) {
     const original = currentById.get(agent.agentId)
     if (!original) throw new Error('Plan edit added an immutable agent')
-    const { promptSeed: _oldPrompt, ...oldFixed } = original
-    const { promptSeed: _newPrompt, ...newFixed } = agent
     if (
-      canonicalJson(oldFixed as unknown as JsonValue) !==
-      canonicalJson(newFixed as unknown as JsonValue)
+      canonicalJson(immutableAgentFields(original) as unknown as JsonValue) !==
+      canonicalJson(immutableAgentFields(agent) as unknown as JsonValue)
     ) {
       throw new Error(`Plan edit changed immutable fields for ${agent.agentId}`)
     }
