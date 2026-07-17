@@ -114,6 +114,8 @@ export function CommandPalette({ open, actions, onClose, onAction }: CommandPale
                   setActiveIndex(0)
                 }}
                 onKeyDown={(event) => {
+                  // w12/voice-input: do not run a command while IME composition confirms text.
+                  if (event.nativeEvent.isComposing) return
                   if (event.key === 'Escape') onClose()
                   if (event.key === 'ArrowDown') {
                     event.preventDefault()

@@ -39,6 +39,7 @@ import { ClaudeLane } from './ClaudeLane'
 import { useTerminalContextMenu } from './TerminalPane'
 import { serializeTerminal, useTerminal } from '@/hooks/useTerminal'
 import { emit, off, on } from '@/lib/app-events'
+import { isEditableTarget } from '@/lib/keyboard'
 import { colors } from '@/lib/tokens'
 import { springs } from '@/lib/springs'
 import { themes, useThemeStore } from '@/lib/themes'
@@ -218,11 +219,18 @@ export function Shell(): JSX.Element {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+      // w12/voice-input: only exact app chords may escape an editable control.
+      const primaryChord = (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey
+      const key = e.key.toLowerCase()
+      const paletteShortcut = primaryChord && key === 'k'
+      const explorerShortcut = primaryChord && key === 'b'
+      if (isEditableTarget(e) && !paletteShortcut && !explorerShortcut) return
+
+      if (paletteShortcut) {
         e.preventDefault()
         setPaletteOpen((v) => !v)
       }
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'b') {
+      if (explorerShortcut) {
         e.preventDefault()
         setExplorerOpen((v) => !v)
       }

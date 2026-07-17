@@ -377,6 +377,8 @@ function ActiveLane({ agentId, cwd }: { agentId: string; cwd: string }): JSX.Ele
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
+              // w12/voice-input: Enter confirms an IME candidate before it submits a prompt.
+              if (e.nativeEvent.isComposing) return
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault()
                 submit()
