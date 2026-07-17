@@ -268,11 +268,38 @@ export async function organizerAudit(inputRoot: string): Promise<OrganizerViolat
   const root = await resolveOrganizerRoot(inputRoot)
   const rules = await resolveRules(root)
   const tree = await listTree(root)
-  const violations = [
-    ...auditNativeRules(tree, rules),
-    ...await auditDependencyGraph(root, rules),
-    ...await auditVersionDrift(root, rules)
+  // A failure in ONE external check (dependency-cruiser erroring on a real
+  // src/ project, or the syncpack platform binary missing in the installed
+  // app) must not fail the WHOLE audit — the native rules always return, and a
+  // broken optional check degrades to a soft note instead of throwing.
+  const violations = [...auditNativeRules(tree, rules)]
+  const optional: { run: () => Promise<OrganizerViolation[]>; rule: string; cite: string }[] = [
+    {
+      run: () => auditDependencyGraph(root, rules),
+      rule: 'dependencies/no-cycles',
+      cite: 'https://github.com/sverweij/dependency-cruiser'
+    },
+    {
+      run: () => auditVersionDrift(root, rules),
+      rule: 'dependencies/version-drift',
+      cite: 'https://github.com/JamieMason/syncpack'
+    }
   ]
+  for (const check of optional) {
+    try {
+      violations.push(...(await check.run()))
+    } catch (error) {
+      violations.push({
+        rule: check.rule,
+        path: '.',
+        detail: `Skipped — this check could not run in this repository: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        cite: check.cite
+      })
+    }
+  }
+
   return violations.sort((left, right) =>
     left.rule.localeCompare(right.rule) || left.path.localeCompare(right.path)
   )
