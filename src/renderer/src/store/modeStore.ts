@@ -11,6 +11,7 @@ import { persist } from 'zustand/middleware'
 export type MorzMode = 'manual' | 'assisted' | 'orchestrated'
 
 export const ORCHESTRATED_AVAILABLE = true
+const MODE_STORAGE_KEY = 'morz.mode'
 
 /** Single gate for every Claude affordance (lane mount, start button, palette entry). */
 export const claudeAllowed = (mode: MorzMode): boolean => mode === 'assisted'
@@ -29,6 +30,26 @@ export const useModeStore = create<ModeState>()(
         set({ mode })
       }
     }),
-    { name: 'morz.mode', version: 1 }
+    { name: MODE_STORAGE_KEY, version: 1 }
   )
 )
+
+if (import.meta.env.DEV && typeof localStorage !== 'undefined') {
+  useModeStore.subscribe(() => {
+    queueMicrotask(() => {
+      try {
+        const mode = useModeStore.getState().mode
+        const raw = localStorage.getItem(MODE_STORAGE_KEY)
+        const persisted = raw
+          ? (JSON.parse(raw) as { state?: { mode?: unknown } }).state?.mode
+          : undefined
+        console.assert(
+          persisted === mode,
+          `[morz-mode] persistence mismatch: store=${mode}, persisted=${String(persisted)}`
+        )
+      } catch (error) {
+        console.assert(false, '[morz-mode] persisted mode could not be verified', error)
+      }
+    })
+  })
+}
