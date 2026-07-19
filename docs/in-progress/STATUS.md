@@ -68,6 +68,12 @@ From owner's first look at the running app:
 
 **MODE CHANGE: owner is dogfooding — coding Morz *with* Morz, and will NOT report every bug.** Waves become owner-driven from real usage, not roadmap-driven. Integration cadence: after each wave I rebuild+reinstall the signed exe so what the owner sees is always the packaged product. Parked: remote app, code signing cert, SaaS.
 
+### Waves 11–13 (dogfood cycle, capsule)
+- **w11** (9 agents): CLI connections detection + real Limits, AI report engine (BYO OpenAI/Gemini/OpenRouter, default claude), commit-AI summaries, demo-able reviewer, curated MCP catalog, settings scroll+theme-preview, IDE send-to-agent, per-project sessions, live pill-bar model detection.
+- **w12** (7 agents): orchestrator unblocked (plan immutability loop), multiline goal composer, selectable planner engine + Codex fallback, honest post-commit refresh, dictation/injected-keys land in fields, session pin+resume, live orch audit (found: dispatched agents never execute).
+- **w13** (9 agents, from the Fable-5 desktop QA review): **dispatched agents now execute in VISIBLE renderer panes** (attach handshake fixed the flow-control stall — the engine turns over), planner repairs real specs instead of rejecting (200-char rule), immutable-fields normalize (dependsOn), paste-once, syncpack packaged, curated-first workshop ranking + spam denylist, pin/resume on every session row, Assisted dial reachable (hover moved the hit target), pristine panes follow the active space. E2E ~140 passing.
+**NEXT: run the full Tetris orchestration (docs prompt) end-to-end in-app; then the auto-completion loop (run → done off commit/review/DoD), agent-adapter metering for dispatched panes, handoff wake for raw panes (ORCH-AUDIT gaps).**
+
 ## Previous target: **0.0.2 — "The Bus + Additions"** ([spec](../roadmap/0.0.2.md)) — COMPLETE
 
 Wave 4 (8 agents: 4 Fable-5 + 4 GPT-5.6 Sol) merged. **E2E: 29 passed + 3 live handoff tests passed (real claude). Full suite green.**
