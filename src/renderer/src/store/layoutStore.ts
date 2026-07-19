@@ -17,6 +17,8 @@ export interface PaneDef {
   cwd: string
   /** '' = user's default shell; unused for claude panes. */
   shell: string
+  /** False only while no user keystroke has reached this pane. */
+  touched?: boolean
   /** Claude panes only — the lane's adapter agentId. */
   agentId?: string
 }
@@ -115,9 +117,19 @@ function setRatioInTree(node: LayoutNode, splitId: string, ratio: number): Layou
   return { ...node, a, b }
 }
 
+function updatePaneInTree(node: LayoutNode, paneId: string, pane: PaneDef): LayoutNode {
+  if (node.type === 'leaf') {
+    return node.pane.paneId === paneId ? { ...node, pane } : node
+  }
+  const a = updatePaneInTree(node.a, paneId, pane)
+  const b = updatePaneInTree(node.b, paneId, pane)
+  if (a === node.a && b === node.b) return node
+  return { ...node, a, b }
+}
+
 const DEFAULT_PANES: PaneDef[] = [
-  { paneId: 'term-1', kind: 'terminal', cwd: '', shell: '' },
-  { paneId: 'term-2', kind: 'terminal', cwd: '', shell: '' }
+  { paneId: 'term-1', kind: 'terminal', cwd: '', shell: '', touched: false },
+  { paneId: 'term-2', kind: 'terminal', cwd: '', shell: '', touched: false }
 ]
 
 interface LayoutState {
@@ -132,6 +144,8 @@ interface LayoutState {
   addPane(pane: PaneDef): void
   removePane(paneId: string): void
   splitPane(paneId: string, dir: 'right' | 'down', cwd?: string): void
+  setPaneCwd(paneId: string, cwd: string): void
+  touchPane(paneId: string): void
   setRatio(splitId: string, ratio: number): void
   setActivePane(paneId: string): void
 }
@@ -149,11 +163,12 @@ export const useLayoutStore = create<LayoutState>()((set) => ({
     }),
   addPane: (pane) =>
     set((s) => {
-      const leaf: LayoutNode = { type: 'leaf', pane }
+      const added = { ...pane, touched: pane.touched ?? false }
+      const leaf: LayoutNode = { type: 'leaf', pane: added }
       const root: LayoutNode = s.root
         ? { type: 'split', id: newPaneId('split'), dir: 'row', ratio: 0.5, a: s.root, b: leaf }
         : leaf
-      return { root, panes: panesOf(root), activePaneId: pane.paneId }
+      return { root, panes: panesOf(root), activePaneId: added.paneId }
     }),
   removePane: (paneId) =>
     set((s) => {
@@ -175,11 +190,28 @@ export const useLayoutStore = create<LayoutState>()((set) => ({
         paneId: newPaneId('term'),
         kind: 'terminal',
         cwd: cwd ?? src.cwd,
-        shell: src.kind === 'terminal' ? src.shell : ''
+        shell: src.kind === 'terminal' ? src.shell : '',
+        touched: false
       }
       const root = splitLeafInTree(s.root, paneId, dir, sibling)
       if (root === s.root) return s
       return { root, panes: panesOf(root), activePaneId: sibling.paneId }
+    }),
+  setPaneCwd: (paneId, cwd) =>
+    set((s) => {
+      if (!s.root) return s
+      const current = s.panes.find((pane) => pane.paneId === paneId)
+      if (!current || current.cwd === cwd) return s
+      const root = updatePaneInTree(s.root, paneId, { ...current, cwd })
+      return { root, panes: panesOf(root) }
+    }),
+  touchPane: (paneId) =>
+    set((s) => {
+      if (!s.root) return s
+      const current = s.panes.find((pane) => pane.paneId === paneId)
+      if (!current || current.touched === true) return s
+      const root = updatePaneInTree(s.root, paneId, { ...current, touched: true })
+      return { root, panes: panesOf(root) }
     }),
   setRatio: (splitId, ratio) =>
     set((s) => {
