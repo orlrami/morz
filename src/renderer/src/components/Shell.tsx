@@ -91,6 +91,11 @@ function sameRoot(left: string, right: string): boolean {
   return !!left && !!right && key(left) === key(right)
 }
 
+function visibleCd(root: string): string {
+  const quoted = root.replace(/[`$"]/g, '`$&')
+  return `cd "${quoted}"\r`
+}
+
 /* ── session snapshot (Slice 2) ──────────────────────────────── */
 
 function buildSnapshot(root: LayoutNode | null, panes: PaneDef[]): SessionSnapshot {
@@ -112,7 +117,14 @@ function parsePane(v: unknown): PaneDef | null {
   const p = v as Partial<PaneDef> | null | undefined
   if (!p || typeof p.paneId !== 'string') return null
   if (p.kind !== 'terminal' && p.kind !== 'claude') return null
-  return { paneId: p.paneId, kind: p.kind, cwd: p.cwd ?? '', shell: p.shell ?? '', agentId: p.agentId }
+  return {
+    paneId: p.paneId,
+    kind: p.kind,
+    cwd: p.cwd ?? '',
+    shell: p.shell ?? '',
+    touched: typeof p.touched === 'boolean' ? p.touched : true,
+    agentId: p.agentId
+  }
 }
 
 /** Recovering parse: a corrupt child collapses to its sibling, never the whole tree. */
@@ -159,7 +171,8 @@ function layoutFromSnapshot(snap: SessionSnapshot | null): LayoutNode | null {
         paneId: p.paneId,
         kind: 'terminal' as const,
         cwd: p.cwd,
-        shell: p.shell
+        shell: p.shell,
+        touched: true
       }))
     )
   }
@@ -272,6 +285,33 @@ export function Shell(): JSX.Element {
       .then((snap) => finish(layoutFromSnapshot(snap)))
       .catch(() => finish(null))
   }, [spaceRoot, spacesReady])
+
+  /* w13/space-cwd — an active space may arrive after the default PTYs spawned.
+   * Keep the correction visible, and never redirect a pane the user touched. */
+  useEffect(() => {
+    if (!hydrated || !spaceRoot) return
+    const pty = getMorz()?.pty
+    if (!pty) return
+    let cancelled = false
+
+    void pty
+      .list()
+      .then((livePaneIds) => {
+        if (cancelled) return
+        const live = new Set(livePaneIds)
+        const layout = useLayoutStore.getState()
+        for (const pane of layout.panes) {
+          if (pane.kind !== 'terminal' || pane.cwd !== '' || pane.touched !== false) continue
+          if (live.has(pane.paneId)) pty.write(pane.paneId, visibleCd(spaceRoot))
+          else layout.setPaneCwd(pane.paneId, spaceRoot)
+        }
+      })
+      .catch(() => {})
+
+    return () => {
+      cancelled = true
+    }
+  }, [hydrated, spaceRoot])
 
   /* Session save: debounced on pane-list change, 30s idle tick for scrollback
    * drift (never per chunk), and on window unload. */
@@ -817,6 +857,7 @@ function ShellTerminalPane({
         ref={containerRef}
         className="min-h-0 flex-1 py-2 pl-3 pr-1"
         style={{ background: colors.page }}
+        onKeyDownCapture={() => useLayoutStore.getState().touchPane(pane.paneId)}
         onContextMenu={ctxMenu.onContextMenu}
       />
 
