@@ -28,12 +28,14 @@ function SessionCard({
   record,
   live,
   busy,
+  resumable,
   onPin,
   onResume
 }: {
   record: SessionHistoryRecord
   live: boolean
   busy: boolean
+  resumable: boolean
   onPin(): void
   onResume(): void
 }): JSX.Element {
@@ -44,8 +46,13 @@ function SessionCard({
       data-session-pinned={record.pinned ? 'true' : 'false'}
       className="group relative overflow-hidden rounded-xl border px-4 py-3 transition-colors duration-200"
       style={{
-        background: live ? `${colors.bronze}12` : colors.card,
-        borderColor: live ? `${colors.bronze}66` : 'var(--color-line)'
+        background: record.pinned
+          ? `linear-gradient(90deg, ${colors.bronze}18 0%, ${colors.card} 34%)`
+          : live
+            ? `${colors.bronze}12`
+            : colors.card,
+        borderColor: live || record.pinned ? `${colors.bronze}66` : 'var(--color-line)',
+        boxShadow: record.pinned ? `inset 3px 0 0 ${colors.bronze}` : undefined
       }}
     >
       <div className="flex min-w-0 items-start gap-3">
@@ -110,33 +117,32 @@ function SessionCard({
               disabled={busy}
               aria-label={`${record.pinned ? 'Unpin' : 'Pin'} ${record.title}`}
               aria-pressed={record.pinned}
-              className="ml-auto inline-flex cursor-pointer items-center gap-1 rounded-md border px-2 py-1 text-[10px] font-semibold transition-colors hover:bg-[#37332B] disabled:cursor-wait disabled:opacity-50"
+              className="ml-auto inline-flex min-h-7 cursor-pointer items-center gap-1.5 rounded-md border px-2.5 py-1 text-[11px] font-semibold transition-[filter,opacity] hover:brightness-110 disabled:cursor-wait disabled:opacity-50"
               style={{
-                color: record.pinned ? colors.bronzeHot : colors.quartzDim,
+                color: record.pinned ? colors.bronzeHot : colors.quartz,
                 borderColor: record.pinned ? `${colors.bronze}66` : 'var(--color-line-strong)',
-                background: record.pinned ? `${colors.bronze}14` : 'transparent'
+                background: record.pinned ? `${colors.bronze}18` : colors.panel
               }}
             >
               {record.pinned ? <IconPinFilled size={12} /> : <IconPin size={12} stroke={1.6} />}
               {record.pinned ? 'Pinned' : 'Pin'}
             </button>
-            {record.source === 'claude' && (
-              <button
-                type="button"
-                onClick={onResume}
-                disabled={busy}
-                aria-label={`Resume ${record.title}`}
-                className="inline-flex cursor-pointer items-center gap-1 rounded-md border px-2 py-1 text-[10px] font-semibold transition-colors hover:bg-[#37332B] disabled:cursor-wait disabled:opacity-50"
-                style={{
-                  color: colors.bronzeHot,
-                  borderColor: `${colors.bronze}66`,
-                  background: `${colors.bronze}0A`
-                }}
-              >
-                <IconPlayerPlay size={11} stroke={1.8} />
-                Resume
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={onResume}
+              disabled={busy || !resumable}
+              title={resumable ? undefined : 'no native CLI session recorded'}
+              aria-label={`Resume ${record.title}`}
+              className="inline-flex min-h-7 cursor-pointer items-center gap-1.5 rounded-md border px-2.5 py-1 text-[11px] font-semibold transition-[filter,opacity] hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-70"
+              style={{
+                color: resumable ? colors.bronzeHot : colors.quartzFaint,
+                borderColor: resumable ? `${colors.bronze}66` : 'var(--color-line-strong)',
+                background: resumable ? `${colors.bronze}12` : colors.panel
+              }}
+            >
+              <IconPlayerPlay size={12} stroke={1.8} />
+              Resume
+            </button>
           </div>
         </div>
       </div>
@@ -151,6 +157,7 @@ export function SessionsPanel(): JSX.Element {
   const loading = useSessionsStore((state) => state.loading)
   const error = useSessionsStore((state) => state.error)
   const busyId = useSessionsStore((state) => state.busyId)
+  const resumeAvailability = useSessionsStore((state) => state.resumeAvailability)
   const refresh = useSessionsStore((state) => state.refresh)
   const pin = useSessionsStore((state) => state.pin)
   const resume = useSessionsStore((state) => state.resume)
@@ -210,6 +217,7 @@ export function SessionsPanel(): JSX.Element {
                 record={record}
                 live={record.source === 'morz' && record.endedAt === null && record.id === current?.id}
                 busy={busyId === record.id}
+                resumable={resumeAvailability[record.id] === true}
                 onPin={() => void pin(record.id, !record.pinned)}
                 onResume={() => void resume(record.id)}
               />

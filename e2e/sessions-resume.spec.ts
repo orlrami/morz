@@ -35,19 +35,24 @@ function seedClaudeSession(
   )
 }
 
-test.describe.serial('session model, pin, and resume (w12/sessions-resume)', () => {
+test.describe.serial('visible session controls and morz resume (w13/sessions-visible)', () => {
   let morz: MorzApp | undefined
   const fixtureParent = join(ROOT, 'e2e', '.tmp', `sessions-resume-${Date.now()}`)
   const spaceRoot = join(fixtureParent, 'resume-space')
+  const noNativeSpaceRoot = join(fixtureParent, 'no-native-space')
   const claudeConfigDir = join(fixtureParent, 'claude-config')
   const projectDir = join(claudeConfigDir, 'projects', projectSlug(spaceRoot))
   const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR
   const originalStub = process.env.MORZ_E2E_SESSIONS_RESUME_STUB
+  const originalPicker = process.env.MORZ_E2E_PICK_FOLDER
 
   test.beforeAll(() => {
     mkdirSync(spaceRoot, { recursive: true })
     writeFileSync(join(spaceRoot, 'README.md'), '# sessions resume fixture\n', 'utf8')
     execFileSync('git', ['init', '-b', 'resume-work'], { cwd: spaceRoot, windowsHide: true })
+    mkdirSync(noNativeSpaceRoot, { recursive: true })
+    writeFileSync(join(noNativeSpaceRoot, 'README.md'), '# no native session fixture\n', 'utf8')
+    execFileSync('git', ['init', '-b', 'no-native-work'], { cwd: noNativeSpaceRoot, windowsHide: true })
     mkdirSync(projectDir, { recursive: true })
     seedClaudeSession(projectDir, OLD_SESSION_ID, '2026-07-14T12:00:00.000Z', 'main-session', 'claude-opus-4-1')
     seedClaudeSession(projectDir, NEW_SESSION_ID, '2026-07-15T12:00:00.000Z', 'newer-session', 'claude-sonnet-4-5')
@@ -64,12 +69,13 @@ test.describe.serial('session model, pin, and resume (w12/sessions-resume)', () 
     else process.env.CLAUDE_CONFIG_DIR = originalClaudeConfigDir
     if (originalStub === undefined) delete process.env.MORZ_E2E_SESSIONS_RESUME_STUB
     else process.env.MORZ_E2E_SESSIONS_RESUME_STUB = originalStub
+    if (originalPicker === undefined) delete process.env.MORZ_E2E_PICK_FOLDER
+    else process.env.MORZ_E2E_PICK_FOLDER = originalPicker
     delete process.env.MORZ_E2E
-    delete process.env.MORZ_E2E_PICK_FOLDER
     rmSync(fixtureParent, { recursive: true, force: true })
   })
 
-  test('shows models, persists a pin, and resumes with the native session id', async () => {
+  test('shows controls on every row, persists a morz pin, and resumes a linked morz session', async () => {
     morz = await launchMorz()
     let { page, appDataDir } = morz
 
@@ -79,33 +85,31 @@ test.describe.serial('session model, pin, and resume (w12/sessions-resume)', () 
 
     const panel = page.getByRole('region', { name: 'Session history' })
     await expect(panel.getByText('unsafe-session', { exact: true })).toHaveCount(0)
+    const records = panel.locator('[data-session-record]')
+    await expect(records).toHaveCount(3)
+    await expect(panel.getByRole('button', { name: /^(?:Pin|Unpin) / })).toHaveCount(3)
+    await expect(panel.getByRole('button', { name: /^Resume / })).toHaveCount(3)
+
+    const morzSession = panel.locator('[data-session-record]:not([data-session-record^="claude:"])').first()
+    const morzSessionId = await morzSession.getAttribute('data-session-record')
+    expect(morzSessionId).toBeTruthy()
+    const morzResume = morzSession.getByRole('button', { name: 'Resume resume-work' })
+    await expect(morzResume).toBeEnabled()
+
     const mainSession = panel.locator(`[data-session-record="claude:${OLD_SESSION_ID}"]`)
     await expect(mainSession.getByTestId('session-model')).toHaveText('claude-opus-4-1')
 
-    await mainSession.getByRole('button', { name: 'Pin main-session' }).click()
+    await morzSession.getByRole('button', { name: 'Pin resume-work' }).click()
     await expect(panel.locator('[data-session-record]').first()).toHaveAttribute(
       'data-session-record',
-      `claude:${OLD_SESSION_ID}`
+      morzSessionId!
     )
-    await expect(mainSession.getByRole('button', { name: 'Unpin main-session' })).toHaveAttribute(
+    await expect(morzSession.getByRole('button', { name: 'Unpin resume-work' })).toHaveAttribute(
       'aria-pressed',
       'true'
     )
 
-    await closeMorz(morz.app)
-    morz = undefined
-    morz = await launchMorz({ appDataDir })
-    page = morz.page
-    await page.getByRole('tab', { name: 'Sessions' }).click()
-
-    const relaunchedPanel = page.getByRole('region', { name: 'Session history' })
-    await expect(relaunchedPanel.locator('[data-session-record]').first()).toHaveAttribute(
-      'data-session-record',
-      `claude:${OLD_SESSION_ID}`
-    )
-
-    const relaunchedMain = relaunchedPanel.locator(`[data-session-record="claude:${OLD_SESSION_ID}"]`)
-    await relaunchedMain.getByRole('button', { name: 'Resume main-session' }).click()
+    await morzResume.click()
     await page.getByRole('tab', { name: 'Terminals' }).click()
     await expect(page.getByRole('region', { name: /Claude lane/ })).toHaveCount(1)
 
@@ -119,8 +123,46 @@ test.describe.serial('session model, pin, and resume (w12/sessions-resume)', () 
     })
     expect(starts.at(-1)).toMatchObject({
       cli: 'claude',
-      sessionId: OLD_SESSION_ID,
+      sessionId: NEW_SESSION_ID,
       cwd: spaceRoot
     })
+
+    await closeMorz(morz.app)
+    morz = undefined
+    morz = await launchMorz({ appDataDir })
+    page = morz.page
+    await page.getByRole('tab', { name: 'Sessions' }).click()
+
+    const relaunchedPanel = page.getByRole('region', { name: 'Session history' })
+    await expect(relaunchedPanel.locator('[data-session-record]').first()).toHaveAttribute(
+      'data-session-record',
+      morzSessionId!
+    )
+    await expect(
+      relaunchedPanel
+        .locator(`[data-session-record="${morzSessionId}"]`)
+        .getByRole('button', { name: 'Unpin resume-work' })
+    ).toHaveAttribute('aria-pressed', 'true')
+
+    await closeMorz(morz.app)
+    morz = undefined
+  })
+
+  test('shows an honest disabled resume control when no native session exists', async () => {
+    process.env.MORZ_E2E_PICK_FOLDER = noNativeSpaceRoot
+    morz = await launchMorz()
+    const { page } = morz
+
+    await page.getByRole('button', { name: 'Open folder' }).click()
+    await expect(page.locator(`[data-space-name="${basename(noNativeSpaceRoot)}"]`)).toHaveAttribute('data-active', 'true')
+    await page.getByRole('tab', { name: 'Sessions' }).click()
+
+    const panel = page.getByRole('region', { name: 'Session history' })
+    const morzSession = panel.locator('[data-session-record]:not([data-session-record^="claude:"])').first()
+    await expect(morzSession.getByRole('button', { name: 'Pin no-native-work' })).toBeVisible()
+    const resume = morzSession.getByRole('button', { name: 'Resume no-native-work' })
+    await expect(resume).toBeVisible()
+    await expect(resume).toBeDisabled()
+    await expect(resume).toHaveAttribute('title', 'no native CLI session recorded')
   })
 })
