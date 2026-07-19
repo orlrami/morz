@@ -38,30 +38,44 @@ test.describe.serial('titlebar space tabs (w10/tabs)', () => {
   test('adds, switches, and removes spaces without phase-0 mock tabs', async () => {
     morz = await launchMorz()
     const { page } = morz
-    await page.evaluate(
-      ({ id, name, root }) => {
-        const spaces = Array.from({ length: 10 }, (_, index) => ({
-          id: index === 0 ? id : `space-tabs-overflow-${index}`,
-          name: index === 0 ? name : `Overflow space ${index} with a deliberately long name`,
-          root,
-          agents: []
-        }))
-        localStorage.setItem(
-          'morz.spaces',
-          JSON.stringify({
-            version: 2,
-            state: {
-              spaces,
-              activeSpaceId: id,
-              initialized: true
-            }
-          })
-        )
-      },
-      { id: 'space-tabs-other', name: otherName, root: otherRoot }
-    )
-    await page.reload()
+    // Seed-verify-retry (same pattern as commit-ai's openCommitPage): the OLD
+    // page's zustand persist can flush one final 'morz.spaces' write AFTER our
+    // seed and wipe it during reload — reseed deterministically until the
+    // seeded tab actually renders.
     const tablist = page.getByRole('tablist', { name: 'Spaces' })
+    let seeded = false
+    for (let attempt = 0; attempt < 3 && !seeded; attempt += 1) {
+      await page.evaluate(
+        ({ id, name, root }) => {
+          const spaces = Array.from({ length: 10 }, (_, index) => ({
+            id: index === 0 ? id : `space-tabs-overflow-${index}`,
+            name: index === 0 ? name : `Overflow space ${index} with a deliberately long name`,
+            root,
+            agents: []
+          }))
+          localStorage.setItem(
+            'morz.spaces',
+            JSON.stringify({
+              version: 2,
+              state: {
+                spaces,
+                activeSpaceId: id,
+                initialized: true
+              }
+            })
+          )
+        },
+        { id: 'space-tabs-other', name: otherName, root: otherRoot }
+      )
+      await page.reload()
+      try {
+        await expect(tablist.getByRole('tab', { name: otherName })).toBeAttached({ timeout: 5_000 })
+        seeded = true
+      } catch {
+        // persist race wiped the seed — reseed on the fresh page and retry
+      }
+    }
+    expect(seeded, 'seeded spaces survived reload').toBe(true)
 
     await expect(page.locator('body')).not.toContainText(/morz-core|api-service/)
 
