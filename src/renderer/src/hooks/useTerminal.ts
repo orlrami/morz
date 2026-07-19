@@ -33,6 +33,8 @@ interface Session {
   tui: boolean
   processTui: boolean
   altScreenTui: boolean
+  suppressNextNativePaste: boolean
+  pasteGuardAttached: boolean
 }
 
 const sessions = new Map<string, Session>()
@@ -209,7 +211,9 @@ function createSession(paneId: string): Session {
     exited: false,
     tui: false,
     processTui: false,
-    altScreenTui: false
+    altScreenTui: false,
+    suppressNextNativePaste: false,
+    pasteGuardAttached: false
   }
 
   term.buffer.onBufferChange((buf) => {
@@ -226,8 +230,9 @@ function createSession(paneId: string): Session {
     if (sel) void navigator.clipboard.writeText(sel).catch(() => {})
   })
 
-  // Ctrl+= / Ctrl+- / Ctrl+0 zoom, Ctrl+V paste — consume so xterm never
-  // forwards the raw control sequence to the shell.
+  // Ctrl+= / Ctrl+- / Ctrl+0 zoom and Ctrl+V paste — consume so xterm never
+  // forwards their raw control sequences to the shell. Ctrl+V uses term.paste()
+  // below; the matching browser paste event is suppressed after term.open().
   term.attachCustomKeyEventHandler((ev) => {
     if (ev.type !== 'keydown' || !ev.ctrlKey || ev.altKey || ev.metaKey) return true
     switch (ev.key) {
@@ -243,6 +248,10 @@ function createSession(paneId: string): Session {
         return false
       case 'v':
       case 'V':
+        session.suppressNextNativePaste = true
+        setTimeout(() => {
+          session.suppressNextNativePaste = false
+        }, 0)
         pasteIntoTerminal(paneId)
         return false
       default:
@@ -324,6 +333,19 @@ export function useTerminal(
       } catch {
         /* WebGL unavailable — DOM renderer is fine */
       }
+    }
+    if (term.element && !session.pasteGuardAttached) {
+      term.element.addEventListener(
+        'paste',
+        (ev) => {
+          if (!session.suppressNextNativePaste) return
+          session.suppressNextNativePaste = false
+          ev.preventDefault()
+          ev.stopImmediatePropagation()
+        },
+        { capture: true }
+      )
+      session.pasteGuardAttached = true
     }
     term.options.theme = activeXtermTheme()
     if (term.element) {
