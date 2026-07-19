@@ -1,7 +1,9 @@
 import { execFile, spawn } from 'child_process'
+import { app } from 'electron'
+import { existsSync } from 'fs'
 import { createRequire } from 'module'
 import { readdir, realpath, stat } from 'fs/promises'
-import { basename, extname, isAbsolute, join, relative, sep } from 'path'
+import { basename, dirname, extname, isAbsolute, join, relative, sep } from 'path'
 import type { ICruiseResult } from 'dependency-cruiser'
 import { resolveOrganizerRoot, resolveRules, type ResolvedRule } from './rules'
 
@@ -21,11 +23,72 @@ interface SyncpackRow {
   expected?: { raw?: unknown }
 }
 
+interface ResolvePackageOptions {
+  paths?: string[]
+}
+
+export interface SyncpackBinaryResolution {
+  packageName: string
+  binaryName: string
+  appPath: string
+  resourcesPath: string
+  resolvePackage(request: string, options?: ResolvePackageOptions): string
+}
+
+export interface OrganizerAuditDependencies {
+  resolveRoot(inputRoot: string): Promise<string>
+  resolveRules(root: string): Promise<ResolvedRule[]>
+  listTree(root: string): Promise<string[]>
+  auditDependencyGraph(root: string, rules: ResolvedRule[]): Promise<OrganizerViolation[]>
+  auditVersionDrift(root: string, rules: ResolvedRule[]): Promise<OrganizerViolation[]>
+}
+
 const ignoredDirectories = new Set(['.git', 'node_modules', 'out', 'dist', 'build', 'release'])
 const sourceExtension = /\.(?:[cm]?[jt]sx?)$/i
 
 function toPosix(path: string): string {
   return path.split(sep).join('/')
+}
+
+function toUnpackedPath(path: string): string {
+  return path.replace(/([\\/])app\.asar(?=[\\/]|$)/i, '$1app.asar.unpacked')
+}
+
+export function resolveSyncpackBinary(options: SyncpackBinaryResolution): string {
+  const request = `${options.packageName}/package.json`
+  const unpackedRoots = Array.from(new Set([
+    toUnpackedPath(options.appPath),
+    join(options.resourcesPath, 'app.asar.unpacked')
+  ]))
+
+  const attempts: Array<() => string> = [
+    () => options.resolvePackage(request),
+    ...unpackedRoots.map((root) => () => options.resolvePackage(request, { paths: [root] }))
+  ]
+  for (const attempt of attempts) {
+    try {
+      const packageJson = toUnpackedPath(attempt())
+      return join(dirname(packageJson), 'bin', options.binaryName)
+    } catch {
+      // Try the next resolution base, then the explicit unpacked filesystem paths.
+    }
+  }
+
+  for (const root of unpackedRoots) {
+    const packageJson = join(root, 'node_modules', options.packageName, 'package.json')
+    if (existsSync(packageJson)) return join(dirname(packageJson), 'bin', options.binaryName)
+  }
+  throw new Error('syncpack platform package is unavailable')
+}
+
+function cleanAuditFailure(message: string, error: unknown): Error {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code
+  const detail = error instanceof Error ? error.message : ''
+  const deliberateNotice = /^(?:Organizer |Invalid Organizer |Multiple Organizer |Unknown Organizer |Cannot detect Organizer )/.test(detail)
+  if (!deliberateNotice || code || /\b(?:ENOENT|EACCES|EPERM|ENOTDIR|spawn)\b/i.test(detail)) {
+    return new Error(message)
+  }
+  return error as Error
 }
 
 async function pathExists(path: string): Promise<boolean> {
@@ -178,8 +241,13 @@ function runSyncpack(root: string): Promise<string> {
     }
   }
   const packageName = `syncpack-${platform}-${process.arch}${libc}`
-  const packageJson = requireFromMain.resolve(`${packageName}/package.json`)
-  const binary = join(packageJson, '..', 'bin', process.platform === 'win32' ? 'syncpack.exe' : 'syncpack')
+  const binary = resolveSyncpackBinary({
+    packageName,
+    binaryName: process.platform === 'win32' ? 'syncpack.exe' : 'syncpack',
+    appPath: app.getAppPath(),
+    resourcesPath: process.resourcesPath,
+    resolvePackage: (request, options) => requireFromMain.resolve(request, options)
+  })
   return new Promise((resolve, reject) => {
     const child = spawn(binary, ['json', '--no-ansi', '--log-levels', 'off'], {
       cwd: root,
@@ -264,10 +332,37 @@ async function auditVersionDrift(root: string, rules: ResolvedRule[]): Promise<O
   return violations
 }
 
-export async function organizerAudit(inputRoot: string): Promise<OrganizerViolation[]> {
-  const root = await resolveOrganizerRoot(inputRoot)
-  const rules = await resolveRules(root)
-  const tree = await listTree(root)
+const defaultAuditDependencies: OrganizerAuditDependencies = {
+  resolveRoot: resolveOrganizerRoot,
+  resolveRules,
+  listTree,
+  auditDependencyGraph,
+  auditVersionDrift
+}
+
+export async function organizerAudit(
+  inputRoot: string,
+  overrides: Partial<OrganizerAuditDependencies> = {}
+): Promise<OrganizerViolation[]> {
+  const dependencies = { ...defaultAuditDependencies, ...overrides }
+  let root: string
+  let rules: ResolvedRule[]
+  let tree: string[]
+  try {
+    root = await dependencies.resolveRoot(inputRoot)
+  } catch (error) {
+    throw cleanAuditFailure('Organizer audit could not open this folder.', error)
+  }
+  try {
+    rules = await dependencies.resolveRules(root)
+  } catch (error) {
+    throw cleanAuditFailure('Organizer audit could not load rules for this folder.', error)
+  }
+  try {
+    tree = await dependencies.listTree(root)
+  } catch (error) {
+    throw cleanAuditFailure('Organizer audit could not read this folder.', error)
+  }
   // A failure in ONE external check (dependency-cruiser erroring on a real
   // src/ project, or the syncpack platform binary missing in the installed
   // app) must not fail the WHOLE audit — the native rules always return, and a
@@ -275,12 +370,12 @@ export async function organizerAudit(inputRoot: string): Promise<OrganizerViolat
   const violations = [...auditNativeRules(tree, rules)]
   const optional: { run: () => Promise<OrganizerViolation[]>; rule: string; cite: string }[] = [
     {
-      run: () => auditDependencyGraph(root, rules),
+      run: () => dependencies.auditDependencyGraph(root, rules),
       rule: 'dependencies/no-cycles',
       cite: 'https://github.com/sverweij/dependency-cruiser'
     },
     {
-      run: () => auditVersionDrift(root, rules),
+      run: () => dependencies.auditVersionDrift(root, rules),
       rule: 'dependencies/version-drift',
       cite: 'https://github.com/JamieMason/syncpack'
     }
@@ -292,9 +387,7 @@ export async function organizerAudit(inputRoot: string): Promise<OrganizerViolat
       violations.push({
         rule: check.rule,
         path: '.',
-        detail: `Skipped — this check could not run in this repository: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        detail: 'Skipped — this check could not run here.',
         cite: check.cite
       })
     }

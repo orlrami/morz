@@ -55,6 +55,9 @@ async function readProjectConfig(root: string): Promise<OrganizerProjectConfig> 
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue
       if ((error as Error).message.startsWith('Multiple Organizer config files')) throw error
+      if ((error as NodeJS.ErrnoException).code) {
+        throw new Error(`Organizer could not read its config at ${path}.`)
+      }
       throw new Error(`Invalid Organizer config at ${path}: ${(error as Error).message}`)
     }
   }
@@ -102,6 +105,9 @@ async function detectTypeScriptElectron(root: string): Promise<boolean> {
       (typeof dependencies.typescript === 'string' || typeof devDependencies.typescript === 'string')
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+    if ((error as NodeJS.ErrnoException).code) {
+      throw new Error('Organizer could not read package.json while detecting the project stack.')
+    }
     throw new Error(`Cannot detect Organizer stack from package.json: ${(error as Error).message}`)
   }
 }
@@ -113,11 +119,18 @@ export async function resolveOrganizerRoot(input: string): Promise<string> {
   let metadata
   try {
     metadata = await stat(candidate)
-  } catch {
-    throw new Error(`Organizer root does not exist: ${candidate}`)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      throw new Error(`Organizer root does not exist: ${candidate}`)
+    }
+    throw new Error(`Organizer could not inspect this root: ${candidate}`)
   }
   if (!metadata.isDirectory()) throw new Error(`Organizer root is not a directory: ${candidate}`)
-  return realpath(candidate)
+  try {
+    return await realpath(candidate)
+  } catch {
+    throw new Error(`Organizer could not resolve this root: ${candidate}`)
+  }
 }
 
 export async function resolveRules(root: string): Promise<ResolvedRule[]> {
