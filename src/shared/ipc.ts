@@ -1097,3 +1097,28 @@ export interface StoredSpawnPlan {
   notice?: string
 }
 // end w12/orch-engine
+
+// w13/dispatch-visible — append-only dispatched-agent pane contract.
+// A dispatched pane must be a REAL renderer pane before the CLI launch command
+// is typed: without a mounted xterm session nobody sends flow-control acks, so
+// the PTY pauses at the high watermark and the launch never executes. Main
+// pushes `created` when the dispatcher spawns an agent pane; the renderer adds
+// it to the layout, mounts the terminal, and acks with `attached` — only then
+// does the dispatcher write the launch command.
+export interface RunPaneCreated {
+  paneId: string
+  runId: string
+  agentId: string
+  cwd: string
+  cli: AdapterCli
+}
+export const RunPaneApi = {
+  created: 'run:pane-created', // push main→renderer: RunPaneCreated
+  attached: 'run:pane-attached' // renderer→main: (paneId) after xterm session attach
+} as const
+export interface RunPaneBridge {
+  /** Dispatched-pane pushes. Returns an unsubscribe fn. */
+  onPaneCreated(cb: (info: RunPaneCreated) => void): () => void
+  notifyPaneAttached(paneId: string): void
+}
+// end w13/dispatch-visible

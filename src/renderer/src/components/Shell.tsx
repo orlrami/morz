@@ -37,7 +37,7 @@ import { ToastHost } from './Toast'
 import { IdePane } from './IdePane'
 import { ClaudeLane } from './ClaudeLane'
 import { useTerminalContextMenu } from './TerminalPane'
-import { serializeTerminal, useTerminal } from '@/hooks/useTerminal'
+import { serializeTerminal, useTerminal, whenTerminalAttached } from '@/hooks/useTerminal'
 import { emit, off, on } from '@/lib/app-events'
 import { isEditableTarget } from '@/lib/keyboard'
 import { colors } from '@/lib/tokens'
@@ -60,7 +60,12 @@ import {
 } from '@/store/layoutStore'
 import { getMorz, selectActiveSpaceRoot, useSpaceStore } from '@/store/spaceStore'
 import { useSessionsStore } from '@/store/sessionsStore'
-import type { SessionSnapshot } from '@shared/ipc'
+import type { RunPaneBridge, RunPaneCreated, SessionSnapshot } from '@shared/ipc'
+
+/* w13/dispatch-visible — preload bridge for dispatched agent panes. */
+function getRunPane(): RunPaneBridge | undefined {
+  return (window as unknown as { morzRunPane?: RunPaneBridge }).morzRunPane
+}
 
 type CenterView = 'terminals' | 'commit' | 'review' | 'dag' | 'browser' | 'remote' | 'organizer' | 'sessions' | 'settings' | 'workshop'
 
@@ -296,6 +301,40 @@ export function Shell(): JSX.Element {
       window.clearInterval(idle)
       window.removeEventListener('beforeunload', save)
     }
+  }, [])
+
+  /* w13/dispatch-visible — dispatched agent panes. Main pushes run:pane-created
+   * when the dispatcher spawns an agent pane host-side; add it as a REAL
+   * terminal pane (mount → useTerminal reattaches to the live host pane),
+   * surface the terminals view, and ack attachment so the dispatcher types the
+   * CLI launch only into a live, acking xterm. */
+  useEffect(() => {
+    const runPane = getRunPane()
+    if (!runPane) return
+    const unsubs: (() => void)[] = []
+    const attach = (info: RunPaneCreated): void => {
+      const layout = useLayoutStore.getState()
+      if (!layout.panes.some((p) => p.paneId === info.paneId)) {
+        layout.addPane({ paneId: info.paneId, kind: 'terminal', cwd: info.cwd, shell: '' })
+      }
+      setView('terminals')
+      void whenTerminalAttached(info.paneId).then(() => runPane.notifyPaneAttached(info.paneId))
+    }
+    const onCreated = (info: RunPaneCreated): void => {
+      if (useLayoutStore.getState().hydrated) {
+        attach(info)
+        return
+      }
+      // announced before session restore finished — defer until hydrated
+      const unsub = useLayoutStore.subscribe((s) => {
+        if (!s.hydrated) return
+        unsub()
+        attach(info)
+      })
+      unsubs.push(unsub)
+    }
+    unsubs.push(runPane.onPaneCreated(onCreated))
+    return () => unsubs.forEach((u) => u())
   }, [])
 
   /* Pane lifecycle events from terminal headers / shortcuts (app-events seam). */

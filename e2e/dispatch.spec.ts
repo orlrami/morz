@@ -1,17 +1,23 @@
 /*
  * w5/dispatch e2e — an approved SpawnPlan becomes a real running team, with a
- * clean kill. The agent CLI is REPLACED by a stub (MORZ_DISPATCH_STUB=1: the
- * pane spawns the plain shell and the launch command is never typed), so the
- * whole dispatch/stop/cleanup path runs with zero LLM cost.
+ * clean kill.
+ *
+ * Two paths:
+ *  - STUB (MORZ_DISPATCH_STUB=1): the pane spawns the plain shell and the
+ *    launch command is never typed — exercises dispatch/stop/cleanup machinery
+ *    with zero LLM cost.
+ *  - HONEST (w13/dispatch-visible, MORZ_DISPATCH_FAKE_CLI): the full launch
+ *    path runs against a fake CLI .cmd — proves the dispatched pane appears in
+ *    the RENDERER, the launch command actually EXECUTES, and output streams
+ *    into the visible xterm. This is the regression gate for the "dispatched
+ *    agents never execute" bug (pane never added to the renderer layout → no
+ *    xterm session → no flow-control acks → PTY stalled at the watermark).
  */
 import { expect, test } from '@playwright/test'
 import { execFileSync, spawnSync } from 'child_process'
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { closeMorz, launchMorz, waitForTerm, runInPane, ROOT, PROMPT_RE } from './app'
-
-// must be set before launchMorz copies process.env into the app env
-process.env.MORZ_DISPATCH_STUB = '1'
 
 interface AgentDetail {
   paneId: string
@@ -92,8 +98,7 @@ function makePlan(spaceRoot: string, id: string, agents: { agentId: string; bran
   }
 }
 
-test('dispatch runs an approved 2-agent plan visibly; Stop kills the tree; cleanup removes worktrees', async () => {
-  const fixtureParent = join(ROOT, 'e2e', '.tmp', `dispatch-${Date.now()}`)
+function makeSpaceFixture(fixtureParent: string): string {
   const spaceRoot = join(fixtureParent, 'space')
   mkdirSync(spaceRoot, { recursive: true })
   writeFileSync(join(spaceRoot, 'README.md'), '# dispatch fixture\n', 'utf8')
@@ -102,8 +107,17 @@ test('dispatch runs an approved 2-agent plan visibly; Stop kills the tree; clean
   git(spaceRoot, 'config', 'user.email', 'dispatch-test@morz.invalid')
   git(spaceRoot, 'add', '-A')
   git(spaceRoot, 'commit', '-m', 'test: dispatch fixture')
+  return spaceRoot
+}
 
+test('dispatch runs an approved 2-agent plan visibly; Stop kills the tree; cleanup removes worktrees', async () => {
+  const fixtureParent = join(ROOT, 'e2e', '.tmp', `dispatch-${Date.now()}`)
+  const spaceRoot = makeSpaceFixture(fixtureParent)
+
+  // must be set before launchMorz copies process.env into the app env
+  process.env.MORZ_DISPATCH_STUB = '1'
   const { app, page } = await launchMorz()
+  delete process.env.MORZ_DISPATCH_STUB
   try {
     const plan = makePlan(spaceRoot, 'plan-dispatch-e2e-1', [
       { agentId: 'alpha', branch: 'run/e2e/alpha', dependsOn: [] },
@@ -247,6 +261,82 @@ test('dispatch runs an approved 2-agent plan visibly; Stop kills the tree; clean
     const worktrees = git(spaceRoot, 'worktree', 'list', '--porcelain')
     expect(worktrees.split(/\r?\n/).filter((l) => l.startsWith('worktree '))).toHaveLength(1)
     expect(git(spaceRoot, 'branch', '--list', 'run/e2e/*')).toBe('')
+  } finally {
+    await closeMorz(app)
+    rmSync(fixtureParent, { recursive: true, force: true })
+  }
+})
+
+/*
+ * w13/dispatch-visible — HONEST dispatch: no stub. The launch command is typed
+ * for real against a fake CLI .cmd, so the spec proves the three things the
+ * stub cannot: (1) the dispatched pane exists in the RENDERER DOM, (2) the CLI
+ * actually EXECUTED (it writes a proof file into the worktree), and (3) its
+ * output streamed into the visible xterm session (which also proves the
+ * flow-control ack loop is alive — an unmounted pane would stall the PTY).
+ */
+test('dispatched agent pane is visible in the renderer and its CLI actually executes', async () => {
+  const fixtureParent = join(ROOT, 'e2e', '.tmp', `dispatch-live-${Date.now()}`)
+  const spaceRoot = makeSpaceFixture(fixtureParent)
+
+  // fake CLI: prints a marker (streams through the PTY) + writes proof of execution
+  const fakeCli = join(fixtureParent, 'fake-claude.cmd')
+  writeFileSync(
+    fakeCli,
+    '@echo off\r\necho MORZ_FAKE_CLI_READY\r\necho executed> dispatch-proof.txt\r\n',
+    'utf8'
+  )
+
+  process.env.MORZ_DISPATCH_FAKE_CLI = fakeCli
+  const { app, page } = await launchMorz()
+  delete process.env.MORZ_DISPATCH_FAKE_CLI
+  try {
+    const plan = makePlan(spaceRoot, 'plan-dispatch-e2e-live', [
+      { agentId: 'solo', branch: 'run/e2e/solo', dependsOn: [] }
+    ])
+    const { planHash } = await page.evaluate(
+      (p) => (window as unknown as MorzRunWindow).morz.run.approvePlan(p),
+      plan
+    )
+
+    // dispatch resolves only after the renderer pane attached + launch was typed
+    const { runId } = await page.evaluate(
+      (p) => (window as unknown as MorzRunWindow).morz.run.dispatch(p),
+      { ...(plan as Record<string, unknown>), planHash }
+    )
+    const status = (await page.evaluate(
+      (id) => (window as unknown as MorzRunWindow).morz.run.runStatus(id),
+      runId
+    ))!
+    expect(status.state).toBe('running')
+    expect(status.agents).toEqual({ solo: 'running' })
+    const solo = status.agentsDetail!.solo
+
+    // (1) the pane is a REAL renderer pane: mounted in the DOM with a live xterm
+    const paneSection = page.locator(`[data-pane-id="${solo.paneId}"]`)
+    await expect(paneSection).toBeVisible()
+    await expect(paneSection.locator('.xterm')).toBeVisible()
+
+    // (3) the fake CLI's output streamed into the renderer session
+    await waitForTerm(page, solo.paneId, /MORZ_FAKE_CLI_READY/)
+
+    // (2) the CLI actually executed inside the worktree
+    await expect
+      .poll(() => existsSync(join(solo.worktree!, 'dispatch-proof.txt')), { timeout: 30_000 })
+      .toBe(true)
+
+    // the pane behaves like any pane: the shell survives the CLI and accepts input
+    await runInPane(page, solo.paneId, 'echo MORZ_PANE_ANSWERABLE_$(1+1)')
+    await waitForTerm(page, solo.paneId, /MORZ_PANE_ANSWERABLE_2/)
+
+    // clean kill + cleanup still work on the honest path
+    const stopped = await page.evaluate(
+      (id) => (window as unknown as MorzRunWindow).morz.run.stopRun(id),
+      runId
+    )
+    expect(stopped.state).toBe('aborted')
+    await page.evaluate((id) => (window as unknown as MorzRunWindow).morz.run.cleanup(id), runId)
+    expect(existsSync(solo.worktree!)).toBe(false)
   } finally {
     await closeMorz(app)
     rmSync(fixtureParent, { recursive: true, force: true })
