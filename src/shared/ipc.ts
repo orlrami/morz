@@ -1122,3 +1122,9 @@ export interface RunPaneBridge {
   notifyPaneAttached(paneId: string): void
 }
 // end w13/dispatch-visible
+// w13/planner-schema — non-fatal schema repairs the planner applied to accept
+// the plan (role truncation, branch slugify). Surface them; never hide them.
+export interface StoredSpawnPlan {
+  warnings?: string[]
+}
+// end w13/planner-schema
