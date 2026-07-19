@@ -158,6 +158,7 @@ function startPtyHost(): void {
         for (const row of journalEntries('pty-spawn')) {
           if ((row.payload as SpawnJournal | null)?.paneId === paneId) journalDelete(row.id)
         }
+        dropDispatchedPane(paneId) // w13/dispatch-visible — no ghost re-announce
         break
       }
       case 'pty': {
@@ -668,6 +669,9 @@ app.whenReady().then(() =>
     writePane: (paneId, data) => ptyHost?.postMessage({ type: 'write', paneId, data }),
     killPane: (paneId) => hostRequest('kill', { paneId }).catch(() => undefined),
     listPanes: () => hostRequest<string[]>('list'),
+    // w13/dispatch-visible — renderer pane push + attach handshake (defined at EOF)
+    announcePane: (info) => announceAgentPane(info),
+    waitForAttach: (paneId, timeoutMs) => waitForPaneAttach(paneId, timeoutMs),
     push: (status: RunStatus) => {
       for (const win of BrowserWindow.getAllWindows()) {
         if (!win.isDestroyed()) win.webContents.send(RunApi.changed, status)
@@ -790,3 +794,75 @@ app.whenReady().then(() => registerSessionsResumeIpc())
 import { registerPlannerEngineIpc } from './orchestrator/planner'
 app.whenReady().then(() => registerPlannerEngineIpc())
 // end w12/orch-engine
+
+/* ── w13/dispatch-visible: dispatched-pane attach handshake ──────
+ * The dispatcher may only type a CLI launch command into a pane whose xterm
+ * session is mounted and acking (an unmounted pane hits the flow-control high
+ * watermark and stalls forever). Main brokers that: announce the pane to every
+ * window, hold it pending until the renderer acks attachment, and re-announce
+ * pending panes to any window that (re)loads — covering tray-resident dispatch
+ * and mid-run window reloads. */
+import { RunPaneApi, type RunPaneCreated } from '../shared/ipc'
+
+const attachedAgentPanes = new Set<string>()
+const agentPaneWaiters = new Map<string, ((attached: boolean) => void)[]>()
+const pendingAgentPanes = new Map<string, RunPaneCreated>()
+
+function announceAgentPane(info: RunPaneCreated): void {
+  attachedAgentPanes.delete(info.paneId)
+  pendingAgentPanes.set(info.paneId, info)
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) win.webContents.send(RunPaneApi.created, info)
+  }
+}
+
+function waitForPaneAttach(paneId: string, timeoutMs: number): Promise<boolean> {
+  if (attachedAgentPanes.has(paneId)) return Promise.resolve(true)
+  return new Promise((resolve) => {
+    let settled = false
+    const settle = (attached: boolean): void => {
+      if (settled) return
+      settled = true
+      resolve(attached)
+    }
+    const waiters = agentPaneWaiters.get(paneId) ?? []
+    waiters.push(settle)
+    agentPaneWaiters.set(paneId, waiters)
+    // Windowed → bounded wait (an open window that never acks is a real failure).
+    // Tray-resident (no window) → queue until a window opens and attaches.
+    if (BrowserWindow.getAllWindows().length > 0) {
+      setTimeout(() => settle(false), timeoutMs).unref?.()
+    }
+  })
+}
+
+/** Pane died (or was killed) — resolve stragglers, stop re-announcing it. */
+function dropDispatchedPane(paneId: string): void {
+  pendingAgentPanes.delete(paneId)
+  attachedAgentPanes.delete(paneId)
+  const waiters = agentPaneWaiters.get(paneId)
+  agentPaneWaiters.delete(paneId)
+  waiters?.forEach((w) => w(false))
+}
+
+ipcMain.on(RunPaneApi.attached, (_e, paneId: string) => {
+  if (typeof paneId !== 'string' || !paneId) return
+  attachedAgentPanes.add(paneId)
+  pendingAgentPanes.delete(paneId)
+  // replay output emitted between host-side spawn and renderer mount
+  ptyHost?.postMessage({ type: 'attach', paneId })
+  const waiters = agentPaneWaiters.get(paneId)
+  agentPaneWaiters.delete(paneId)
+  waiters?.forEach((w) => w(true))
+})
+
+// a (re)loading window lost its layout additions — re-announce pending panes
+// (module-level: must be registered before the first createWindow call)
+app.on('browser-window-created', (_e, win) => {
+  win.webContents.on('did-finish-load', () => {
+    for (const info of pendingAgentPanes.values()) {
+      if (!win.isDestroyed()) win.webContents.send(RunPaneApi.created, info)
+    }
+  })
+})
+// end w13/dispatch-visible

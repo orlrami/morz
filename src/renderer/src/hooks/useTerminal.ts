@@ -37,6 +37,29 @@ interface Session {
 
 const sessions = new Map<string, Session>()
 
+/* ── w13/dispatch-visible: attach signal for dispatched panes ──
+ * Resolves once the pane's PTY spawn/reattach round-trip acked ok, i.e. the
+ * xterm session exists and is consuming + acking data. The dispatcher gates
+ * the CLI launch command on this (via Shell's run:pane-attached ack). */
+const spawnAcked = new Set<string>()
+const attachWaiters = new Map<string, (() => void)[]>()
+
+function fireAttached(paneId: string): void {
+  spawnAcked.add(paneId)
+  const waiters = attachWaiters.get(paneId)
+  attachWaiters.delete(paneId)
+  waiters?.forEach((resolve) => resolve())
+}
+
+export function whenTerminalAttached(paneId: string): Promise<void> {
+  if (spawnAcked.has(paneId)) return Promise.resolve()
+  return new Promise((resolve) => {
+    const waiters = attachWaiters.get(paneId) ?? []
+    waiters.push(resolve)
+    attachWaiters.set(paneId, waiters)
+  })
+}
+
 /* ── framed-TUI: alt-screen buffer state, exposed for a pane chip ── */
 const tuiListeners = new Map<string, Set<(tui: boolean) => void>>()
 
@@ -260,6 +283,8 @@ function spawn(session: Session, paneId: string, shell?: string, cwd?: string): 
       if (!ok) {
         session.exited = true
         session.term.writeln(`\x1b[31m— failed to spawn ${shell ?? 'shell'} —\x1b[0m`)
+      } else {
+        fireAttached(paneId) // w13/dispatch-visible — spawn OR host-side reattach acked
       }
     })
     .catch(() => {

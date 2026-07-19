@@ -792,3 +792,18 @@ const plannerEngineBridge: PlannerEngineBridge = {
 
 contextBridge.exposeInMainWorld('morzPlannerEngine', plannerEngineBridge)
 // end w12/orch-engine
+
+// w13/dispatch-visible — append-only dispatched-agent pane bridge.
+import { RunPaneApi, type RunPaneBridge, type RunPaneCreated } from '../shared/ipc'
+
+const runPaneBridge: RunPaneBridge = {
+  onPaneCreated: (cb) => {
+    const listener = (_e: unknown, info: RunPaneCreated): void => cb(info)
+    ipcRenderer.on(RunPaneApi.created, listener)
+    return () => ipcRenderer.off(RunPaneApi.created, listener)
+  },
+  notifyPaneAttached: (paneId: string) => ipcRenderer.send(RunPaneApi.attached, paneId)
+}
+
+contextBridge.exposeInMainWorld('morzRunPane', runPaneBridge)
+// end w13/dispatch-visible

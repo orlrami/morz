@@ -74,9 +74,24 @@ export interface DispatcherHost {
   listPanes(): Promise<string[]>
   /** Broadcast a run-changed push to every window. */
   push(status: RunStatus): void
+  /* w13/dispatch-visible — a dispatched pane must become a REAL renderer pane
+   * (mounted xterm, sending flow-control acks) BEFORE the launch command is
+   * typed; a pane nobody acks stalls at the flow-control high watermark and
+   * the CLI never runs. announcePane pushes the pane into the renderer layout;
+   * waitForAttach resolves once its xterm session acks attachment. */
+  announcePane(info: {
+    paneId: string
+    runId: string
+    agentId: string
+    cwd: string
+    cli: PlannedCli
+  }): void
+  waitForAttach(paneId: string, timeoutMs: number): Promise<boolean>
 }
 
 let host: DispatcherHost | null = null
+/** Renderer attach handshake bound (window open; a silent renderer is a bug). */
+const ATTACH_TIMEOUT_MS = 30_000
 const pool = new PortPool()
 const watchers = new Map<string, NodeJS.Timeout>()
 /** Runs mid-stop — the watcher must not race the kill with 'failed' marks. */
@@ -167,6 +182,11 @@ function git(cwd: string, args: string[]): Promise<string> {
 /** The command you'd type by hand to launch this agent's CLI on its seed. */
 function launchCommand(cli: PlannedCli, seedPath: string): string {
   const quoted = `'${seedPath.replace(/'/g, "''")}'`
+  // w13/dispatch-visible test hook: substitute a fake CLI executable so the e2e
+  // suite can prove real end-to-end execution (pane visible, command actually
+  // runs, output streams) without spending LLM tokens.
+  const fake = process.env.MORZ_DISPATCH_FAKE_CLI
+  if (fake) return `& '${fake.replace(/'/g, "''")}' "$(Get-Content -Raw ${quoted})"`
   switch (cli) {
     case 'claude':
       return `claude "$(Get-Content -Raw ${quoted})"`
@@ -282,9 +302,10 @@ async function launchAgent(
   if (process.env.MORZ_BUS_PIPE) env.MORZ_BUS_PIPE = process.env.MORZ_BUS_PIPE
   if (process.env.MORZ_BUS_TOKEN) env.MORZ_BUS_TOKEN = process.env.MORZ_BUS_TOKEN
 
+  const paneCwd = agent.cwd ? join(worktree, agent.cwd) : worktree
   const spawned = await h.spawnPane({
     paneId,
-    cwd: agent.cwd ? join(worktree, agent.cwd) : worktree,
+    cwd: paneCwd,
     cols: 120,
     rows: 32,
     env
@@ -295,8 +316,18 @@ async function launchAgent(
   patchAgent(runId, agent.agentId, { pane_id: paneId })
   patchAgent(runId, agent.agentId, { pid: await findPanePid(paneId) })
 
-  // the visible launch — type what you'd type by hand (stub skips the CLI)
+  // the visible launch — type what you'd type by hand (stub skips the CLI).
+  // w13/dispatch-visible: push the pane into the renderer layout FIRST and wait
+  // until its xterm session is attached and acking — only a live, answerable
+  // pane may receive the launch command ('running' means it was actually typed).
   if (process.env.MORZ_DISPATCH_STUB !== '1') {
+    h.announcePane({ paneId, runId, agentId: agent.agentId, cwd: paneCwd, cli: agent.cli })
+    const attached = await h.waitForAttach(paneId, ATTACH_TIMEOUT_MS)
+    if (!attached) {
+      throw new Error(
+        `[dispatch] renderer never attached pane ${paneId} — refusing to launch into a stalled PTY`
+      )
+    }
     h.writePane(paneId, `${launchCommand(agent.cli, seedPath)}\r`)
   }
   agentTransition(runId, agent.agentId, 'running')
