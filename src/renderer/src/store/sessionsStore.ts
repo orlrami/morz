@@ -21,6 +21,7 @@ export interface SessionsState {
   loading: boolean
   error: string | null
   busyId: string | null
+  resumeAvailability: Record<string, boolean>
   refresh(spaceRoot: string): Promise<void>
   activate(input: SessionHistoryStartInput): Promise<void>
   endCurrent(): Promise<void>
@@ -42,6 +43,23 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Session history is unavailable.'
 }
 
+async function readResumeAvailability(
+  sessions: SessionHistoryRecord[]
+): Promise<Record<string, boolean>> {
+  const bridge = resumeApi()
+  if (!bridge) return {}
+  const entries = await Promise.all(
+    sessions.map(async (record): Promise<[string, boolean]> => {
+      try {
+        return [record.id, Boolean(await bridge.resumeInfo(record.id))]
+      } catch {
+        return [record.id, false]
+      }
+    })
+  )
+  return Object.fromEntries(entries)
+}
+
 export const useSessionsStore = create<SessionsState>((set, get) => ({
   spaceRoot: '',
   sessions: [],
@@ -49,36 +67,39 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
   loading: false,
   error: null,
   busyId: null,
+  resumeAvailability: {},
   refresh: async (spaceRoot) => {
     const bridge = api()
     const generation = ++requestGeneration
     if (!bridge || !spaceRoot) {
-      set({ spaceRoot, sessions: [], current: null, loading: false, error: null })
+      set({ spaceRoot, sessions: [], current: null, loading: false, error: null, resumeAvailability: {} })
       return
     }
-    set({ spaceRoot, loading: true, error: null })
+    set({ spaceRoot, loading: true, error: null, resumeAvailability: {} })
     try {
       const [sessions, current] = await Promise.all([
         bridge.list(spaceRoot),
         bridge.current(spaceRoot)
       ])
+      const resumeAvailability = await readResumeAvailability(sessions)
       if (generation !== requestGeneration) return
-      set({ sessions, current, loading: false })
+      set({ sessions, current, loading: false, resumeAvailability })
     } catch (error) {
       if (generation !== requestGeneration) return
-      set({ sessions: [], current: null, loading: false, error: errorMessage(error) })
+      set({ sessions: [], current: null, loading: false, error: errorMessage(error), resumeAvailability: {} })
     }
   },
   activate: async (input) => {
     const bridge = api()
     const generation = ++requestGeneration
     if (!bridge) return
-    set({ spaceRoot: input.spaceRoot, loading: true, error: null })
+    set({ spaceRoot: input.spaceRoot, loading: true, error: null, resumeAvailability: {} })
     try {
       const current = await bridge.start(input)
       const sessions = await bridge.list(input.spaceRoot)
+      const resumeAvailability = await readResumeAvailability(sessions)
       if (generation !== requestGeneration) return
-      set({ sessions, current, loading: false })
+      set({ sessions, current, loading: false, resumeAvailability })
     } catch (error) {
       if (generation !== requestGeneration) return
       set({ loading: false, error: errorMessage(error) })
@@ -103,7 +124,10 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
     try {
       await bridge.pin(id, pinned)
       const sessions = await api()?.list(spaceRoot)
-      if (sessions && get().spaceRoot === spaceRoot) set({ sessions })
+      if (sessions && get().spaceRoot === spaceRoot) {
+        const resumeAvailability = await readResumeAvailability(sessions)
+        if (get().spaceRoot === spaceRoot) set({ sessions, resumeAvailability })
+      }
     } catch (error) {
       set({ error: errorMessage(error) })
     } finally {

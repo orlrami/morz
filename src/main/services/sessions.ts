@@ -331,6 +331,33 @@ function claudeSessions(spaceRoot: string): SessionHistoryRecord[] {
   }
 }
 
+function resetResumeInfoForRoot(spaceRoot: string): void {
+  const key = rootKey(spaceRoot)
+  for (const [recordId, info] of resumeByRecordId) {
+    if (rootKey(info.cwd) === key) resumeByRecordId.delete(recordId)
+  }
+}
+
+function linkMorzSessionsToNative(
+  local: SessionHistoryRecord[],
+  native: SessionHistoryRecord[]
+): void {
+  if (native.length === 0) return
+  for (const record of local) {
+    const startedAt = Date.parse(record.startedAt)
+    // Morz records do not store a native id, so the closest transcript start
+    // within the already-matched project space is the most honest association.
+    const match = native.reduce((closest, candidate) => {
+      if (!closest || !Number.isFinite(startedAt)) return candidate
+      const closestDistance = Math.abs(Date.parse(closest.startedAt) - startedAt)
+      const candidateDistance = Math.abs(Date.parse(candidate.startedAt) - startedAt)
+      return candidateDistance < closestDistance ? candidate : closest
+    }, native[0])
+    const info = resumeByRecordId.get(match.id)
+    if (info) resumeByRecordId.set(record.id, { ...info })
+  }
+}
+
 export function listSessions(spaceRoot: string): SessionHistoryRecord[] {
   const root = checkedRoot(spaceRoot)
   const local = (
@@ -338,12 +365,15 @@ export function listSessions(spaceRoot: string): SessionHistoryRecord[] {
       .prepare('SELECT * FROM session_history WHERE space_key = ? ORDER BY started_at DESC LIMIT 100')
       .all(rootKey(root)) as SessionRow[]
   ).map(fromRow)
+  resetResumeInfoForRoot(root)
+  const native = claudeSessions(root)
+  linkMorzSessionsToNative(local, native)
   const pinned = new Set(
     (openDb().prepare('SELECT session_id FROM session_pins WHERE pinned = 1').all() as Array<{ session_id: string }>).map(
       (row) => row.session_id
     )
   )
-  return [...local, ...claudeSessions(root)].map((record) => ({
+  return [...local, ...native].map((record) => ({
     ...record,
     pinned: pinned.has(record.id)
   })).sort((left, right) => {
