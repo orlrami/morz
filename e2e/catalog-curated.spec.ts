@@ -47,6 +47,7 @@ test.describe.serial('Curated MCP catalog', () => {
         response.end(JSON.stringify({
           servers: [
             registryServer('com.stripe/mcp', 'Stripe', 'stripe/agent-toolkit', '@stripe/mcp'),
+            registryServer('fun.pump/mcp', 'Pump.fun Trading Bot', 'pump-fun/pump-mcp', 'pump.fun-mcp'),
             registryServer('com.ibm/granite-mcp', 'IBM Granite MCP', 'ibm/granite-mcp', '@ibm/granite-mcp')
           ],
           metadata: {}
@@ -58,7 +59,15 @@ test.describe.serial('Curated MCP catalog', () => {
           'content-type': 'application/json',
           'x-ratelimit-remaining': '100'
         })
-        response.end(JSON.stringify({ stargazers_count: 10 }))
+        response.end(JSON.stringify({ stargazers_count: 500 }))
+        return
+      }
+      if (request.url === '/github/repos/pump-fun/pump-mcp') {
+        response.writeHead(200, {
+          'content-type': 'application/json',
+          'x-ratelimit-remaining': '100'
+        })
+        response.end(JSON.stringify({ stargazers_count: 99_999 }))
         return
       }
       if (request.url === '/github/repos/ibm/granite-mcp') {
@@ -106,20 +115,32 @@ test.describe.serial('Curated MCP catalog', () => {
     delete process.env.MORZ_CATALOG_GITHUB_URL
   })
 
-  test('recommends curated Stripe and denies higher-star Granite', async () => {
+  test('ranks curated Stripe first and denies higher-star spam', async () => {
     const snapshot = await morz.page.evaluate(() => window.morz.catalog?.refresh({
-      category: 'mcp',
+      category: 'recommended',
       limit: 50
     }))
     const stripe = snapshot?.items.find((item) => item.id === 'mcp:com.stripe/mcp')
+    const pump = snapshot?.items.find((item) => item.id === 'mcp:fun.pump/mcp')
     const granite = snapshot?.items.find((item) => item.id === 'mcp:com.ibm/granite-mcp')
 
     expect(stripe?.recommended).toBe(true)
-    expect(granite?.recommended).toBe(false)
+    expect(snapshot?.items[0]?.id).toBe('mcp:com.stripe/mcp')
+    expect(pump).toBeUndefined()
+    expect(granite).toBeUndefined()
     expect(requestedUrls).toContain('/github/repos/stripe/agent-toolkit')
+    expect(requestedUrls).toContain('/github/repos/pump-fun/pump-mcp')
     expect(requestedUrls).toContain('/github/repos/ibm/granite-mcp')
-    expect(stripe?.stars).toBe(10)
-    expect(granite?.stars).toBe(1_000_000)
+    expect(stripe?.stars).toBe(500)
+
+    const allMcps = await morz.page.evaluate(() => window.morz.catalog?.refresh({
+      category: 'mcp',
+      limit: 50
+    }))
+    expect(allMcps?.items.find((item) => item.id === 'mcp:fun.pump/mcp')?.recommended).toBe(false)
+    expect(allMcps?.items.find((item) => item.id === 'mcp:com.ibm/granite-mcp')?.recommended).toBe(false)
+    expect(allMcps?.items.find((item) => item.id === 'mcp:fun.pump/mcp')?.stars).toBe(99_999)
+    expect(allMcps?.items.find((item) => item.id === 'mcp:com.ibm/granite-mcp')?.stars).toBe(1_000_000)
   })
 
   test('refreshes the incremental catalog when an app window gains focus', async () => {

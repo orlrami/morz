@@ -37,10 +37,28 @@ export const CURATED_MCP_ALLOWLIST: readonly CuratedMcpGroup[] = [
   }
 ]
 
+// Normalized whole-token patterns. Keep broad categories such as "crypto" out so
+// legitimate official integrations (for example Coinbase) remain eligible.
 export const MCP_RECOMMENDATION_DENYLIST: readonly string[] = [
   'ibm',
   'granite',
   'watson',
   'watsonx',
-  'watson x'
+  'watson x',
+  'pump.fun',
+  'pump fun',
+  'pump',
+  'memecoin',
+  'meme coin',
+  'shitcoin',
+  'shit coin',
+  'airdrop',
+  'solana sniper',
+  'solana trading bot',
+  'crypto trading bot',
+  'token sniper',
+  'casino',
+  'gambling',
+  'wallet drainer',
+  'wallet drain'
 ]

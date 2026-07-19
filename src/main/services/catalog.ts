@@ -132,6 +132,7 @@ function openCatalogDb(): Database.Database {
       stars           INTEGER,
       official        INTEGER NOT NULL DEFAULT 0,
       recommended     INTEGER NOT NULL DEFAULT 0,
+      recommendation_rank INTEGER,
       install_spec    TEXT,
       benchmark_score REAL,
       benchmark_label TEXT,
@@ -163,6 +164,18 @@ function openCatalogDb(): Database.Database {
       fetched_at    INTEGER NOT NULL,
       backoff_until INTEGER
     );
+  `)
+  const catalogColumns = new Set(
+    (catalogDb.prepare('PRAGMA table_info(catalog_items)').all() as { name: string }[]).map(
+      (column) => column.name
+    )
+  )
+  if (!catalogColumns.has('recommendation_rank')) {
+    catalogDb.exec('ALTER TABLE catalog_items ADD COLUMN recommendation_rank INTEGER')
+  }
+  catalogDb.exec(`
+    CREATE INDEX IF NOT EXISTS catalog_items_recommendation_rank_idx
+      ON catalog_items (kind, recommended, recommendation_rank, stars DESC, name);
   `)
   const sourceColumns = new Set(
     (catalogDb.prepare('PRAGMA table_info(catalog_sources)').all() as { name: string }[]).map(
@@ -904,6 +917,7 @@ async function fetchGithubStars(repo: string): Promise<number | null> {
 interface RecommendationCandidate {
   id: string
   name: string
+  description: string
   stars: number | null
   official: number
 }
@@ -912,23 +926,29 @@ function normalizedIdentifier(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
 }
 
-function candidateMatches(candidate: RecommendationCandidate, identifier: string): boolean {
+function candidateMatches(
+  candidate: RecommendationCandidate,
+  identifier: string,
+  includeDescription = false
+): boolean {
   const needle = normalizedIdentifier(identifier)
   if (!needle) return false
-  const haystack = normalizedIdentifier(`${candidate.id.replace(/^mcp:/, '')} ${candidate.name}`)
+  const haystack = normalizedIdentifier(
+    `${candidate.id.replace(/^mcp:/, '')} ${candidate.name}${includeDescription ? ` ${candidate.description}` : ''}`
+  )
   return ` ${haystack} `.includes(` ${needle} `)
 }
 
 function curateMcpRecommendations(): void {
   const db = openCatalogDb()
   const candidates = db.prepare(
-    `SELECT id, name, stars, official
+    `SELECT id, name, description, stars, official
      FROM catalog_items
      WHERE kind = 'mcp' AND install_spec IS NOT NULL
-     ORDER BY COALESCE(stars, 0) DESC, official DESC, name COLLATE NOCASE`
+     ORDER BY official DESC, COALESCE(stars, 0) DESC, name COLLATE NOCASE`
   ).all() as RecommendationCandidate[]
   const allowed = candidates.filter((candidate) =>
-    !MCP_RECOMMENDATION_DENYLIST.some((identifier) => candidateMatches(candidate, identifier))
+    !MCP_RECOMMENDATION_DENYLIST.some((identifier) => candidateMatches(candidate, identifier, true))
   )
   const recommended = new Set<string>()
 
@@ -944,10 +964,15 @@ function curateMcpRecommendations(): void {
     recommended.add(candidate.id)
   }
 
-  const markRecommended = db.prepare('UPDATE catalog_items SET recommended = 1 WHERE id = ?')
+  const markRecommended = db.prepare(
+    'UPDATE catalog_items SET recommended = 1, recommendation_rank = ? WHERE id = ?'
+  )
   db.transaction(() => {
-    db.prepare("UPDATE catalog_items SET recommended = 0 WHERE kind = 'mcp'").run()
-    for (const id of recommended) markRecommended.run(id)
+    db.prepare(
+      "UPDATE catalog_items SET recommended = 0, recommendation_rank = NULL WHERE kind = 'mcp'"
+    ).run()
+    let rank = 0
+    for (const id of recommended) markRecommended.run(rank++, id)
   })()
 }
 
@@ -1051,6 +1076,9 @@ export function queryCatalog(query?: CatalogQuery): CatalogSnapshot {
     params.push(pattern, pattern, pattern)
   }
   params.push(normalized.limit)
+  const recommendationOrder = normalized.category === 'recommended'
+    ? "CASE WHEN kind = 'mcp' THEN COALESCE(recommendation_rank, 2147483647) ELSE 2147483647 END ASC,"
+    : ''
   const rows = openCatalogDb()
     .prepare(
       `SELECT id, kind, name, description, source, source_url, stars, official,
@@ -1059,6 +1087,7 @@ export function queryCatalog(query?: CatalogQuery): CatalogSnapshot {
        FROM catalog_items
        WHERE ${clauses.join(' AND ')}
        ORDER BY
+         ${recommendationOrder}
          CASE WHEN kind = 'model' THEN COALESCE(benchmark_score, -1) ELSE COALESCE(stars, -1) END DESC,
          official DESC,
          name COLLATE NOCASE
