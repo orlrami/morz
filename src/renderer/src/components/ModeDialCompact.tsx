@@ -1,5 +1,4 @@
-import { useState } from 'react'
-import { AnimatePresence, motion } from 'framer-motion'
+import { motion } from 'framer-motion'
 import { IconHandStop, IconSteeringWheel, IconUsersGroup } from '@tabler/icons-react'
 import { springs } from '@/lib/springs'
 import { colors } from '@/lib/tokens'
@@ -23,11 +22,8 @@ const MODES: { id: MorzMode; label: string; icon: typeof IconHandStop }[] = [
 export function ModeDialCompact(): JSX.Element {
   const mode = useModeStore((s) => s.mode)
   const setMode = useModeStore((s) => s.setMode)
-  const [hovered, setHovered] = useState<MorzMode | null>(null)
 
   const switchMode = (next: MorzMode): void => {
-    if (next === mode) return
-    if (next === 'orchestrated' && !ORCHESTRATED_AVAILABLE) return
     if (next === 'manual') {
       // Last Claude calls happen HERE, while still leaving Assisted; once the
       // mode flips, nothing in the renderer touches window.morz.claude.
@@ -51,20 +47,18 @@ export function ModeDialCompact(): JSX.Element {
       {MODES.map((m) => {
         const active = mode === m.id
         const disabled = m.id === 'orchestrated' && !ORCHESTRATED_AVAILABLE
-        const expanded = active || hovered === m.id
         const Icon = m.icon
         return (
           <button
             key={m.id}
+            type="button"
             role="radio"
             aria-checked={active}
             aria-disabled={disabled}
             aria-label={m.label}
             title={disabled ? 'Orchestrated ships in 0.0.3' : m.label}
             onClick={() => switchMode(m.id)}
-            onMouseEnter={() => setHovered(m.id)}
-            onMouseLeave={() => setHovered(null)}
-            className={`relative flex items-center overflow-hidden rounded-full px-1.5 py-[3px] ${
+            className={`relative flex h-[22px] w-9 shrink-0 items-center justify-center overflow-hidden rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-bronze-hot)] focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--color-page)] ${
               disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'
             }`}
             style={{ color: active ? '#241c0a' : colors.quartzDim }}
@@ -73,28 +67,12 @@ export function ModeDialCompact(): JSX.Element {
               <motion.span
                 layoutId="mode-compact-pill"
                 transition={springs.layout}
-                className="absolute inset-0 rounded-full"
+                className="pointer-events-none absolute inset-0 rounded-full"
                 style={{ background: `linear-gradient(180deg, ${colors.bronzeHot}, ${colors.bronze})` }}
               />
             )}
-            <span className="relative flex items-center">
-              <Icon size={12} stroke={2} />
-              <AnimatePresence initial={false}>
-                {expanded && (
-                  <motion.span
-                    initial={{ width: 0, opacity: 0 }}
-                    animate={{ width: 'auto', opacity: 1, transition: springs.snappy }}
-                    exit={{ width: 0, opacity: 0, transition: { duration: 0.12 } }}
-                    className="overflow-hidden whitespace-nowrap text-[10px] font-semibold"
-                    style={{ fontFamily: 'var(--font-display)' }}
-                  >
-                    <span className="pl-1">
-                      {m.label}
-                      {disabled && ' · 0.0.3'}
-                    </span>
-                  </motion.span>
-                )}
-              </AnimatePresence>
+            <span className="pointer-events-none relative flex items-center">
+              <Icon size={13} stroke={2} />
             </span>
           </button>
         )
