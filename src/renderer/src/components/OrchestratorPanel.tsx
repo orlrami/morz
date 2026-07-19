@@ -361,7 +361,7 @@ function PlannerFlow(): JSX.Element {
             rows={1}
             maxLength={100_000}
             placeholder="What should the team finish?"
-            className="max-h-32 min-w-0 flex-1 resize-none overflow-y-auto rounded-md border bg-black/10 px-2 py-1.5 text-[10.5px] leading-relaxed outline-none focus:ring-1"
+            className="max-h-64 min-w-0 flex-1 resize-none overflow-y-auto rounded-md border bg-black/10 px-2 py-1.5 text-[10.5px] leading-relaxed outline-none focus:ring-1"
             style={{
               borderColor: 'var(--color-line-strong)',
               color: colors.quartz,

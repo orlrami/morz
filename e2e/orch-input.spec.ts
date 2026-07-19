@@ -61,8 +61,8 @@ test.describe('Orchestrator goal composer', () => {
 
     const initialHeight = await composer.evaluate((element) => element.clientHeight)
     const lines = Array.from(
-      { length: 10 },
-      (_, index) => `${String(index + 1).padStart(2, '0')} ${'x'.repeat(36)}`
+      { length: 20 },
+      (_, index) => `${String(index + 1).padStart(2, '0')} ${'x'.repeat(16)}`
     )
     const longGoal = `${lines.join('\n')}!`
     expect(longGoal).toHaveLength(400)

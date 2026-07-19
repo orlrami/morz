@@ -31,10 +31,19 @@ export function hashPlanAmendment(amendment: PlanAmendment): string {
   return createHash('sha256').update(canonicalJson(hashable as unknown as JsonValue)).digest('hex')
 }
 
-function immutablePlanFields(plan: SpawnPlan): Omit<SpawnPlan, 'agents' | 'planHash'> {
-  const { agents: _agents, planHash: _planHash, ...fixed } = plan
+function normalizeAgent(agent: SpawnPlan['agents'][number]): SpawnPlan['agents'][number] {
   return {
-    ...fixed,
+    ...agent,
+    dependsOn: agent.dependsOn ?? [],
+    worktree: agent.worktree ?? null,
+    port: agent.port ?? null
+  }
+}
+
+function normalizePlan(plan: SpawnPlan): SpawnPlan {
+  return {
+    ...plan,
+    agents: plan.agents.map(normalizeAgent),
     caps: {
       maxUsd: plan.caps.maxUsd ?? null,
       maxTokens: plan.caps.maxTokens ?? null
@@ -42,15 +51,16 @@ function immutablePlanFields(plan: SpawnPlan): Omit<SpawnPlan, 'agents' | 'planH
   }
 }
 
+function immutablePlanFields(plan: SpawnPlan): Omit<SpawnPlan, 'agents' | 'planHash'> {
+  const { agents: _agents, planHash: _planHash, ...fixed } = normalizePlan(plan)
+  return fixed
+}
+
 function immutableAgentFields(
   agent: SpawnPlan['agents'][number]
 ): Omit<SpawnPlan['agents'][number], 'cli' | 'promptSeed'> {
-  const { cli: _cli, promptSeed: _promptSeed, ...fixed } = agent
-  return {
-    ...fixed,
-    worktree: agent.worktree ?? null,
-    port: agent.port ?? null
-  }
+  const { cli: _cli, promptSeed: _promptSeed, ...fixed } = normalizeAgent(agent)
+  return fixed
 }
 
 export function assertPlanEditAllowed(current: SpawnPlan, updated: SpawnPlan): void {
@@ -135,7 +145,8 @@ export class PlanStore {
   }
 
   createDraft(candidate: SpawnPlan): StoredSpawnPlan {
-    const plan = { ...candidate, planHash: hashSpawnPlan(candidate) }
+    const normalized = normalizePlan(candidate)
+    const plan = { ...normalized, planHash: hashSpawnPlan(normalized) }
     const now = new Date().toISOString()
     this.db
       .prepare(
@@ -162,8 +173,9 @@ export class PlanStore {
     const current = this.requirePlanById(plan.id)
     if (current.state !== 'PROPOSED') throw new Error('Only proposed plans can be edited')
     if (current.plan.planHash !== expectedHash) throw new Error('Plan changed; reload before editing')
-    assertPlanEditAllowed(current.plan, plan)
-    const updated = { ...plan, planHash: hashSpawnPlan(plan) }
+    const normalized = normalizePlan(plan)
+    assertPlanEditAllowed(current.plan, normalized)
+    const updated = { ...normalized, planHash: hashSpawnPlan(normalized) }
     const changed = this.db
       .prepare(
         `UPDATE orchestrator_plans SET plan_hash = ?, json = ?, updated_at = ?
