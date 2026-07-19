@@ -15,8 +15,14 @@ import type { AgentAdapter } from '../adapters/types'
 import type { PlannedAgent, SpawnPlan } from '../../shared/spawn-plan'
 import { hashSpawnPlan, PlanStore } from './plan-store'
 
-const MAX_GOAL_CHARS = 4_000
+const MAX_GOAL_CHARS = 100_000
 const MAX_PROMPT_CHARS = 12_000
+const MAX_ROLE_CHARS = 200
+const MAX_BRANCH_CHARS = 100
+// The plan JSON echoes Main-owned fields; the goal can be huge, so the model
+// returns this placeholder and Main substitutes the verbatim goal (w13).
+const GOAL_PLACEHOLDER = '*'
+const MAX_PLANNER_PROMPT_CHARS = MAX_GOAL_CHARS + 20_000
 const MAX_STREAM_BYTES = 2 * 1024 * 1024
 const CLAUDE_TIMEOUT_MS = 120_000
 const ADAPTER_TIMEOUT_MS = 120_000
@@ -30,6 +36,8 @@ export interface ValidationResult<T> {
   ok: boolean
   value?: T
   issues: string[]
+  /** Non-fatal repairs applied to accept the value (w13/planner-schema). */
+  warnings: string[]
 }
 
 export interface DispatchPort {
@@ -47,6 +55,8 @@ export interface PlannerResult {
   plan: SpawnPlan
   engine: PlannerEngine
   notice?: string
+  /** Non-fatal schema repairs applied to accept the plan (w13). */
+  warnings: string[]
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -81,7 +91,37 @@ function stringField(
   return value
 }
 
-function validatePlannedAgent(value: unknown, path: string, issues: string[]): PlannedAgent | null {
+function isSafeBranch(branch: string): boolean {
+  return (
+    SAFE_BRANCH_PATTERN.test(branch) &&
+    !branch.includes('..') &&
+    !branch.includes('//') &&
+    !branch.endsWith('/') &&
+    !branch.endsWith('.') &&
+    !branch.endsWith('.lock') &&
+    !branch.includes('@{')
+  )
+}
+
+/** Kebab-slug a model-written branch into a safe git ref (dots dropped so
+ * '..'/'.lock'/trailing-dot traps cannot survive); '' when nothing usable. */
+function slugifyBranch(raw: string): string {
+  return raw
+    .toLowerCase()
+    .replace(/[^a-z0-9/]+/g, '-')
+    .replace(/\/{2,}/g, '/')
+    .replace(/-{2,}/g, '-')
+    .replace(/^[-/]+/, '')
+    .slice(0, MAX_BRANCH_CHARS)
+    .replace(/[-/]+$/, '')
+}
+
+function validatePlannedAgent(
+  value: unknown,
+  path: string,
+  issues: string[],
+  warnings: string[]
+): PlannedAgent | null {
   if (!isPlainObject(value)) {
     issues.push(`${path} must be an object`)
     return null
@@ -93,27 +133,56 @@ function validatePlannedAgent(value: unknown, path: string, issues: string[]): P
     issues
   )
   const agentId = stringField(value, 'agentId', issues, 63)
-  const role = stringField(value, 'role', issues, 200)
-  const branch = stringField(value, 'branch', issues, 200)
   const cwd = typeof value.cwd === 'string' ? value.cwd : ''
-  const promptSeed = stringField(value, 'promptSeed', issues, MAX_PROMPT_CHARS)
   const cli = value.cli
 
   if (!AGENT_ID_PATTERN.test(agentId)) issues.push(`${path}.agentId is not a safe lane id`)
   if (cli !== 'claude' && cli !== 'codex' && cli !== 'agy') {
     issues.push(`${path}.cli must be claude, codex, or agy`)
   }
-  if (
-    !SAFE_BRANCH_PATTERN.test(branch) ||
-    branch.includes('..') ||
-    branch.includes('//') ||
-    branch.endsWith('/') ||
-    branch.endsWith('.') ||
-    branch.endsWith('.lock') ||
-    branch.includes('@{')
-  ) {
-    issues.push(`${path}.branch is not a safe git branch name`)
+
+  // Repair-instead-of-reject (w13): a verbose model must not sink a real plan.
+  // Only genuinely broken shapes (missing/empty fields, wrong types) hard-fail.
+  let role = ''
+  if (typeof value.role !== 'string' || value.role.length === 0) {
+    issues.push(`${path}.role must be a non-empty string`)
+  } else if (value.role.length > MAX_ROLE_CHARS) {
+    role = `${value.role.slice(0, MAX_ROLE_CHARS - 1)}…`
+    warnings.push(`${path}.role was ${value.role.length} characters; truncated to ${MAX_ROLE_CHARS}`)
+  } else {
+    role = value.role
   }
+
+  let branch = ''
+  if (typeof value.branch !== 'string' || value.branch.length === 0) {
+    issues.push(`${path}.branch must be a non-empty string`)
+  } else if (isSafeBranch(value.branch)) {
+    branch = value.branch
+  } else {
+    const slug = slugifyBranch(value.branch) ||
+      (AGENT_ID_PATTERN.test(agentId) ? `run/plan/${agentId}` : '')
+    if (slug && isSafeBranch(slug)) {
+      branch = slug
+      warnings.push(
+        `${path}.branch ${JSON.stringify(value.branch.slice(0, 80))} was not a safe git branch name; repaired to ${JSON.stringify(slug)}`
+      )
+    } else {
+      issues.push(`${path}.branch is not a safe git branch name`)
+    }
+  }
+
+  let promptSeed = ''
+  if (typeof value.promptSeed !== 'string' || value.promptSeed.length === 0) {
+    issues.push(`${path}.promptSeed must be a non-empty string`)
+  } else if (value.promptSeed.length > MAX_PROMPT_CHARS) {
+    promptSeed = value.promptSeed.slice(0, MAX_PROMPT_CHARS)
+    warnings.push(
+      `${path}.promptSeed was ${value.promptSeed.length} characters; truncated to ${MAX_PROMPT_CHARS}`
+    )
+  } else {
+    promptSeed = value.promptSeed
+  }
+
   if (value.worktree !== null) issues.push(`${path}.worktree must be null`)
   if (value.port !== null) issues.push(`${path}.port must be null`)
   if (typeof value.cwd !== 'string' || isAbsolute(cwd) || cwd.split(/[\\/]/).includes('..')) {
@@ -143,7 +212,8 @@ function validatePlannedAgent(value: unknown, path: string, issues: string[]): P
 
 export function validateSpawnPlan(value: unknown): ValidationResult<SpawnPlan> {
   const issues: string[] = []
-  if (!isPlainObject(value)) return { ok: false, issues: ['plan must be an object'] }
+  const warnings: string[] = []
+  if (!isPlainObject(value)) return { ok: false, issues: ['plan must be an object'], warnings }
   rejectUnknownFields(
     value,
     ['version', 'id', 'goal', 'agents', 'spaceRoot', 'caps', 'createdAt', 'planHash'],
@@ -171,14 +241,32 @@ export function validateSpawnPlan(value: unknown): ValidationResult<SpawnPlan> {
     issues.push('agents must contain between 1 and 8 entries')
   } else {
     value.agents.forEach((agent, index) => {
-      const parsed = validatePlannedAgent(agent, `agents[${index}]`, issues)
+      const parsed = validatePlannedAgent(agent, `agents[${index}]`, issues, warnings)
       if (parsed) agents.push(parsed)
     })
     if (new Set(agents.map((agent) => agent.agentId)).size !== agents.length) {
       issues.push('agentId values must be unique')
     }
-    if (new Set(agents.map((agent) => agent.branch)).size !== agents.length) {
-      issues.push('branch values must be unique')
+    // Branch collisions (often introduced by slugify repairs) get a suffix
+    // instead of a reject; agent identity (agentId) stays a hard failure.
+    const seenBranches = new Set<string>()
+    for (const agent of agents) {
+      if (!seenBranches.has(agent.branch)) {
+        seenBranches.add(agent.branch)
+        continue
+      }
+      const base = agent.branch.slice(0, MAX_BRANCH_CHARS)
+      let suffix = 2
+      let candidateBranch = `${base}-${suffix}`
+      while (seenBranches.has(candidateBranch)) {
+        suffix += 1
+        candidateBranch = `${base}-${suffix}`
+      }
+      warnings.push(
+        `branch ${JSON.stringify(agent.branch)} duplicated another agent; repaired to ${JSON.stringify(candidateBranch)}`
+      )
+      agent.branch = candidateBranch
+      seenBranches.add(candidateBranch)
     }
   }
 
@@ -200,10 +288,11 @@ export function validateSpawnPlan(value: unknown): ValidationResult<SpawnPlan> {
     caps = { maxUsd: maxUsd as number | null, maxTokens: maxTokens as number | null }
   }
 
-  if (issues.length > 0) return { ok: false, issues }
+  if (issues.length > 0) return { ok: false, issues, warnings }
   return {
     ok: true,
     issues: [],
+    warnings,
     value: { version: '1.0', id, goal, agents, spaceRoot, caps, createdAt, planHash }
   }
 }
@@ -262,12 +351,15 @@ function plannerPrompt(
 Return exactly one fenced \`\`\`json block and no prose. The JSON must match the imported SpawnPlan 1.0 contract:
 - version: "1.0"
 - id: exactly ${JSON.stringify(id)}
-- goal: exactly ${JSON.stringify(goal)}
+- goal: exactly the placeholder string ${JSON.stringify(GOAL_PLACEHOLDER)} (Main replaces it with the verbatim user goal; never copy the goal text here)
 - spaceRoot: exactly ${JSON.stringify(spaceRoot)}
 - createdAt: exactly ${JSON.stringify(createdAt)}
 - planHash: exactly 64 lowercase zero characters (Main replaces it with canonical SHA-256)
-- agents: 1-8 focused agents; unique lowercase-hyphen agentId and unique safe branch
+- agents: 1-8 focused agents; unique lowercase-hyphen agentId (max 63 chars) and unique safe branch
 - each agent has cli (claude|codex|agy), role, branch, worktree:null, cwd relative to spaceRoot, promptSeed with complete deliverables, dependsOn:[], port:null
+- role: ONE short line, max ${MAX_ROLE_CHARS} characters — every detail belongs in promptSeed, never in role
+- branch: short kebab-case slug like run/<tag>/<agent>, max ${MAX_BRANCH_CHARS} characters, letters/digits/hyphens/slashes only
+- promptSeed: the agent's full task brief, max ${MAX_PROMPT_CHARS} characters
 - caps: {"maxUsd":null,"maxTokens":null}
 
 Prefer the smallest team that can complete the goal. Never include shell commands outside promptSeed. Never add unknown fields.${correctionText}
@@ -276,12 +368,14 @@ Prefer the smallest team that can complete the goal. Never include shell command
 }
 
 async function runClaudePlanner(prompt: string): Promise<string> {
-  if (prompt.length > 30_000) throw new Error('Planner prompt is too large')
+  if (prompt.length > MAX_PLANNER_PROMPT_CHARS) throw new Error('Planner prompt is too large')
   return new Promise((resolve, reject) => {
+    // The prompt goes over stdin: a multi-hundred-line goal overflows the
+    // Windows argv limit (~32k chars) if passed to -p as an argument.
     const child = spawn(
       'claude',
-      ['-p', prompt, '--output-format', 'stream-json', '--verbose', '--tools', ''],
-      { windowsHide: true, shell: false, stdio: ['ignore', 'pipe', 'pipe'] }
+      ['-p', '--output-format', 'stream-json', '--verbose', '--tools', ''],
+      { windowsHide: true, shell: false, stdio: ['pipe', 'pipe', 'pipe'] }
     )
     let stdout = ''
     let stderr = ''
@@ -319,6 +413,11 @@ async function runClaudePlanner(prompt: string): Promise<string> {
       if (code !== 0) finish(new Error(`Claude planner exited ${code}: ${stderr.trim() || 'no details'}`))
       else finish()
     })
+    child.stdin.on('error', () => {
+      // Claude can exit before consuming stdin; close/error paths report it.
+    })
+    child.stdin.write(prompt)
+    child.stdin.end()
   })
 }
 
@@ -486,21 +585,28 @@ function e2ePlannerResponse(
   if (engine === 'claude' && goal.includes('claude-fails')) return 'not a SpawnPlan'
   const label = engine === 'claude' ? 'Claude' : engine === 'codex' ? 'Codex' : 'Local'
   const cli = engine === 'local' ? 'agy' : engine
+  // w13/planner-schema markers: exercise the repair + hard-reject paths.
+  const repair = goal.includes('MORZ_E2E_REPAIR')
+  const broken = goal.includes('MORZ_E2E_BROKEN')
+  const agent: Record<string, unknown> = {
+    agentId: `${engine}-planner`,
+    cli,
+    role: repair
+      ? `MORZ_E2E ${label} planner ${'verbose '.repeat(70)}`.slice(0, 500)
+      : `MORZ_E2E ${label} planner`,
+    branch: repair ? 'Run Plan/../Unsafe Branch!.lock' : `run/e2e/${engine}-planner`,
+    worktree: null,
+    cwd: '',
+    promptSeed: `Execute the ${label} planner stub task.`,
+    dependsOn: [],
+    port: null
+  }
+  if (broken) delete agent.agentId
   return `\`\`\`json\n${JSON.stringify({
     version: '1.0',
     id,
     goal,
-    agents: [{
-      agentId: `${engine}-planner`,
-      cli,
-      role: `MORZ_E2E ${label} planner`,
-      branch: `run/e2e/${engine}-planner`,
-      worktree: null,
-      cwd: '',
-      promptSeed: `Execute the ${label} planner stub task.`,
-      dependsOn: [],
-      port: null
-    }],
+    agents: [agent],
     spaceRoot,
     caps: { maxUsd: null, maxTokens: null },
     createdAt,
@@ -508,14 +614,21 @@ function e2ePlannerResponse(
   })}\n\`\`\``
 }
 
+interface GeneratedPlan {
+  plan: SpawnPlan
+  warnings: string[]
+}
+
 async function generatePlan(
   rawGoal: string,
   spaceRoot: string,
   engine: PlannerEngine,
   dependencies: PlannerDependencies
-): Promise<SpawnPlan> {
+): Promise<GeneratedPlan> {
   const goal = rawGoal.trim()
-  if (!goal || goal.length > MAX_GOAL_CHARS) throw new Error('Goal must be 1-4000 characters')
+  if (!goal || goal.length > MAX_GOAL_CHARS) {
+    throw new Error(`Goal must be 1-${MAX_GOAL_CHARS} characters`)
+  }
   if (!isAbsolute(spaceRoot) || spaceRoot.length > 2_000) throw new Error('Space root must be absolute')
   const createId = dependencies.createId ?? randomUUID
   const now = dependencies.now ?? (() => new Date().toISOString())
@@ -546,18 +659,27 @@ async function generatePlan(
       if (attempt === 0) continue
       throw new Error(`Planner failed schema validation after retry: ${issues.join('; ')}`)
     }
+    // The goal is Main-owned data: substitute the placeholder (contract, no
+    // warning) so a huge goal never needs a byte-perfect model echo.
+    if (isPlainObject(candidate) && candidate.goal === GOAL_PLACEHOLDER) {
+      candidate.goal = goal
+    }
     const validation = validateSpawnPlan(candidate)
     issues = [...validation.issues]
+    const warnings = [...validation.warnings]
     if (validation.value) {
       if (validation.value.id !== id) issues.push('id did not match the Main-minted id')
-      if (validation.value.goal !== goal) issues.push('goal did not match the user goal')
+      if (validation.value.goal !== goal) {
+        warnings.push('goal did not match the user goal; replaced with the verbatim goal')
+        validation.value.goal = goal
+      }
       if (validation.value.spaceRoot !== spaceRoot) issues.push('spaceRoot did not match the active Space')
       if (validation.value.createdAt !== createdAt) issues.push('createdAt did not match Main time')
       if (validation.value.planHash !== '0'.repeat(64)) issues.push('planHash was not the required placeholder')
     }
     if (validation.value && issues.length === 0) {
       const plan = validation.value
-      return { ...plan, planHash: hashSpawnPlan(plan) }
+      return { plan: { ...plan, planHash: hashSpawnPlan(plan) }, warnings }
     }
     if (attempt === 1) {
       throw new Error(`Planner failed schema validation after retry: ${issues.join('; ')}`)
@@ -571,7 +693,7 @@ export async function planGoal(
   spaceRoot: string,
   dependencies: PlannerDependencies = {}
 ): Promise<SpawnPlan> {
-  return generatePlan(rawGoal, spaceRoot, 'claude', dependencies)
+  return (await generatePlan(rawGoal, spaceRoot, 'claude', dependencies)).plan
 }
 
 export async function planGoalWithEngine(
@@ -581,35 +703,39 @@ export async function planGoalWithEngine(
   dependencies: PlannerDependencies = {}
 ): Promise<PlannerResult> {
   try {
-    return { plan: await generatePlan(rawGoal, spaceRoot, engine, dependencies), engine }
+    const generated = await generatePlan(rawGoal, spaceRoot, engine, dependencies)
+    return { plan: generated.plan, engine, warnings: generated.warnings }
   } catch (error) {
     if (engine !== 'claude') throw error
-    const plan = await generatePlan(rawGoal, spaceRoot, 'codex', dependencies)
+    const generated = await generatePlan(rawGoal, spaceRoot, 'codex', dependencies)
     return {
-      plan,
+      plan: generated.plan,
       engine: 'codex',
-      notice: 'Claude could not produce a valid plan after retry; used Codex instead.'
+      notice: 'Claude could not produce a valid plan after retry; used Codex instead.',
+      warnings: generated.warnings
     }
   }
 }
 
 function validateAmendmentAction(value: unknown): ValidationResult<PlanAmendmentAction> {
   const issues: string[] = []
-  if (!isPlainObject(value)) return { ok: false, issues: ['amendment must be an object'] }
+  const warnings: string[] = []
+  if (!isPlainObject(value)) return { ok: false, issues: ['amendment must be an object'], warnings }
   rejectUnknownFields(value, ['kind', 'replaceAgentId', 'agent'], '', issues)
-  const agent = validatePlannedAgent(value.agent, 'agent', issues)
+  const agent = validatePlannedAgent(value.agent, 'agent', issues, warnings)
   if (value.kind !== 'add' && value.kind !== 'replace') issues.push('kind must be add or replace')
   if (value.kind === 'replace' && !AGENT_ID_PATTERN.test(String(value.replaceAgentId ?? ''))) {
     issues.push('replaceAgentId must be a safe existing agent id')
   }
-  if (issues.length > 0 || !agent) return { ok: false, issues }
+  if (issues.length > 0 || !agent) return { ok: false, issues, warnings }
   return value.kind === 'replace'
     ? {
         ok: true,
         issues: [],
+        warnings,
         value: { kind: 'replace', replaceAgentId: String(value.replaceAgentId), agent }
       }
-    : { ok: true, issues: [], value: { kind: 'add', agent } }
+    : { ok: true, issues: [], warnings, value: { kind: 'add', agent } }
 }
 
 async function planAmendment(plan: SpawnPlan, request: string): Promise<PlanAmendmentAction> {
@@ -728,7 +854,11 @@ export async function registerPlannerIpc(dispatcher: DispatchPort = new LoggingD
       engineStore(dbPath).get()
     )
     const draft = store.createDraft(result.plan)
-    return { ...store.propose(draft.plan.id), ...(result.notice ? { notice: result.notice } : {}) }
+    return {
+      ...store.propose(draft.plan.id),
+      ...(result.notice ? { notice: result.notice } : {}),
+      ...(result.warnings.length > 0 ? { warnings: result.warnings } : {})
+    }
   })
   ipcMain.handle(
     PlannerApi.update,

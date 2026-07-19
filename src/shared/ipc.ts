@@ -1097,3 +1097,10 @@ export interface StoredSpawnPlan {
   notice?: string
 }
 // end w12/orch-engine
+
+// w13/planner-schema — non-fatal schema repairs the planner applied to accept
+// the plan (role truncation, branch slugify). Surface them; never hide them.
+export interface StoredSpawnPlan {
+  warnings?: string[]
+}
+// end w13/planner-schema
