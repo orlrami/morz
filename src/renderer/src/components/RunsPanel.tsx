@@ -7,7 +7,7 @@ import {
   IconX,
   IconUsersGroup
 } from '@tabler/icons-react'
-import type { RunSummary } from '@shared/ipc'
+import type { ClearedRun, RunHistoryBridge, RunSummary } from '@shared/ipc'
 import type { MorzNotifyApi } from '@shared/notify'
 import type { AgentRunState, RunState, RunStatus } from '@shared/spawn-plan'
 import { colors } from '@/lib/tokens'
@@ -24,17 +24,6 @@ import { selectActiveSpaceRoot, useSpaceStore } from '@/store/spaceStore'
 const TERMINAL_RUN_STATES: readonly RunState[] = ['done', 'aborted']
 const appliedHistoryRoots = new Set<string>()
 const launchHistoryPolicy = getLaunchRunHistoryPolicy()
-
-interface ClearedRunResult {
-  runId: string
-  clearedAt: string
-  hasWorktrees: boolean
-}
-
-interface RunClearApi {
-  clearRun(runId: string): Promise<ClearedRunResult>
-  clearFinished(spaceRoot: string): Promise<ClearedRunResult[]>
-}
 
 const AGENT_STATE_COLOR: Record<AgentRunState, string> = {
   queued: colors.quartzDim,
@@ -63,14 +52,17 @@ function getNotify(): MorzNotifyApi | undefined {
   return (window as unknown as { morz?: { notify?: MorzNotifyApi } }).morz?.notify
 }
 
-function getRunClearApi(): RunClearApi | undefined {
-  const api = getRunApi() as (ReturnType<typeof getRunApi> & Partial<RunClearApi>) | undefined
-  return api && typeof api.clearRun === 'function' && typeof api.clearFinished === 'function'
-    ? (api as RunClearApi)
+function getRunClearApi(): RunHistoryBridge | undefined {
+  const api = (window as unknown as { morzRunHistory?: RunHistoryBridge }).morzRunHistory
+  return api &&
+    typeof api.clearRun === 'function' &&
+    typeof api.clearFinished === 'function' &&
+    typeof api.applyPolicy === 'function'
+    ? api
     : undefined
 }
 
-function announceCleared(results: readonly ClearedRunResult[], title: string): void {
+function announceCleared(results: readonly ClearedRun[], title: string): void {
   const retained = results.filter((result) => result.hasWorktrees).length
   getNotify()?.emit({
     id: `runs-cleared-${Date.now()}`,
@@ -145,31 +137,9 @@ export function RunsPanel(): JSX.Element {
       setHistoryAction('policy')
       setError(null)
       try {
-        let results: ClearedRunResult[]
-        let failed = 0
-        if (launchHistoryPolicy === 'launch') {
-          results = await api.clearFinished(activeSpaceRoot)
-        } else {
-          const settled = await Promise.allSettled(
-            runs
-              .filter((run) => TERMINAL_RUN_STATES.includes(run.state))
-              .sort(
-                (a, b) =>
-                  b.createdAt.localeCompare(a.createdAt) || b.runId.localeCompare(a.runId)
-              )
-              .slice(5)
-              .map((run) => api.clearRun(run.runId))
-          )
-          results = settled.flatMap((result) => (result.status === 'fulfilled' ? [result.value] : []))
-          failed = settled.length - results.length
-        }
+        const results = await api.applyPolicy(activeSpaceRoot, launchHistoryPolicy)
         evictRuns(results.map((result) => result.runId))
         if (results.length > 0) announceCleared(results, 'Run history policy applied')
-        if (failed > 0) {
-          throw new Error(
-            `${failed} finished run${failed === 1 ? '' : 's'} could not be cleared; retry by reopening Runs.`
-          )
-        }
       } catch (reason) {
         appliedHistoryRoots.delete(activeSpaceRoot)
         setError(notifyFailure('history', 'Apply run history policy', reason))

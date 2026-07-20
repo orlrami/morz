@@ -866,3 +866,59 @@ app.on('browser-window-created', (_e, win) => {
   })
 })
 // end w13/dispatch-visible
+
+// w14/runs-clear — append-only validated run-history handlers.
+import {
+  RunHistoryApi as RunHistoryChannels,
+  type RunHistoryPolicy
+} from '../shared/ipc'
+import {
+  applyRunHistoryPolicy,
+  clearFinished as clearFinishedRunHistory,
+  clearRun as clearRunHistory
+} from './orchestrator/run-store'
+import { isAbsolute as isAbsoluteRunHistoryRoot } from 'path'
+
+const RUN_HISTORY_POLICIES = new Set<RunHistoryPolicy>(['forever', 'launch', 'last-5'])
+
+function runHistoryText(value: unknown, label: string, maxLength: number): string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > maxLength) {
+    throw new Error(`${label} is invalid`)
+  }
+  return value
+}
+
+function runHistoryPolicy(value: unknown): RunHistoryPolicy {
+  if (typeof value !== 'string' || !RUN_HISTORY_POLICIES.has(value as RunHistoryPolicy)) {
+    throw new Error('Run history policy must be forever, launch, or last-5')
+  }
+  return value as RunHistoryPolicy
+}
+
+function runHistoryRoot(value: unknown): string {
+  const root = runHistoryText(value, 'Space root', 32_767)
+  if (root.trim() !== root || root.includes('\0') || !isAbsoluteRunHistoryRoot(root)) {
+    throw new Error('Space root must be an absolute path')
+  }
+  return root
+}
+
+app.whenReady().then(() => {
+  ipcMain.handle(RunHistoryChannels.clearRun, (_event, runId: unknown) =>
+    clearRunHistory(runHistoryText(runId, 'Run id', 256))
+  )
+  ipcMain.handle(RunHistoryChannels.clearFinished, (_event, spaceRoot: unknown) =>
+    clearFinishedRunHistory(runHistoryRoot(spaceRoot))
+  )
+  ipcMain.handle(RunHistoryChannels.policy, (_event, input: unknown) => {
+    if (input === null || typeof input !== 'object' || Array.isArray(input)) {
+      throw new Error('Run history policy request is invalid')
+    }
+    const request = input as { spaceRoot?: unknown; policy?: unknown }
+    return applyRunHistoryPolicy(
+      runHistoryRoot(request.spaceRoot),
+      runHistoryPolicy(request.policy)
+    )
+  })
+})
+// end w14/runs-clear

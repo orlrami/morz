@@ -1,13 +1,13 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import type { MorzRunApi, RunSummary } from '@shared/ipc'
+import type { MorzRunApi, RunHistoryPolicy, RunSummary } from '@shared/ipc'
 import type { RunStatus } from '@shared/spawn-plan'
+
+export type { RunHistoryPolicy } from '@shared/ipc'
 
 const LIVE_RUN_STATES = new Set<RunSummary['state']>(['dispatching', 'running', 'merging'])
 const RUNS_SETTINGS_KEY = 'morz.runs.settings.v1'
 const LEGACY_HISTORY_POLICY_KEY = 'morz.runs.history-policy.v1'
-
-export type RunHistoryPolicy = 'forever' | 'launch' | 'last-5'
 
 export const RUN_HISTORY_POLICIES: readonly {
   value: RunHistoryPolicy

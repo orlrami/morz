@@ -1128,3 +1128,27 @@ export interface StoredSpawnPlan {
   warnings?: string[]
 }
 // end w13/planner-schema
+
+// w14/runs-clear — append-only history IPC contract.
+// Clearing only changes ledger visibility. It never removes panes, worktrees,
+// branches, or any other resource owned by the explicit cleanup action.
+export type RunHistoryPolicy = 'forever' | 'launch' | 'last-5'
+
+export interface ClearedRun {
+  runId: string
+  clearedAt: string
+  hasWorktrees: boolean
+}
+
+export const RunHistoryApi = {
+  clearRun: 'run:clear',
+  clearFinished: 'run:clear-finished',
+  policy: 'run:history-policy'
+} as const
+
+export interface RunHistoryBridge {
+  clearRun(runId: string): Promise<ClearedRun>
+  clearFinished(spaceRoot: string): Promise<ClearedRun[]>
+  applyPolicy(spaceRoot: string, policy: RunHistoryPolicy): Promise<ClearedRun[]>
+}
+// end w14/runs-clear

@@ -19,7 +19,7 @@ import { app } from 'electron'
 import { join } from 'path'
 import { mkdirSync } from 'fs'
 import type { AgentId } from '../../shared/bus'
-import type { RunSummary } from '../../shared/ipc'
+import type { ClearedRun, RunHistoryPolicy, RunSummary } from '../../shared/ipc'
 import type {
   AgentRunDetail,
   AgentRunState,
@@ -327,11 +327,7 @@ export function getRunStatus(runId: string): RunStatus | null {
 export type { RunSummary }
 
 /** Result returned to the UI so clearing never implies resource cleanup. */
-export interface ClearedRun {
-  runId: string
-  clearedAt: string
-  hasWorktrees: boolean
-}
+export type { ClearedRun } from '../../shared/ipc'
 
 function clearedRun(d: Database.Database, runId: string, clearedAt: string): ClearedRun {
   const row = d
@@ -412,3 +408,28 @@ export function listLiveRuns(): RunRow[] {
     .prepare(`SELECT * FROM orch_runs WHERE state IN ('dispatching', 'running', 'merging')`)
     .all() as RunRow[]
 }
+
+// w14/runs-clear — one transaction applies the launch policy within one space.
+export function applyRunHistoryPolicy(
+  spaceRoot: string,
+  policy: RunHistoryPolicy
+): ClearedRun[] {
+  if (policy === 'forever') return []
+  const d = open()
+  return d.transaction(() => {
+    const offset = policy === 'last-5' ? 'LIMIT -1 OFFSET 5' : ''
+    const runs = d
+      .prepare(
+        `SELECT run_id
+         FROM orch_runs
+         WHERE space_root = ?
+           AND cleared_at IS NULL
+           AND state IN ('done', 'aborted')
+         ORDER BY created_at DESC, run_id DESC
+         ${offset}`
+      )
+      .all(spaceRoot) as Pick<RunRow, 'run_id'>[]
+    return runs.map(({ run_id: runId }) => clearRunInDb(d, runId))
+  })()
+}
+// end w14/runs-clear
