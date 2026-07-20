@@ -11,20 +11,19 @@ import type { RunSummary } from '@shared/ipc'
 import type { MorzNotifyApi } from '@shared/notify'
 import type { AgentRunState, RunState, RunStatus } from '@shared/spawn-plan'
 import { colors } from '@/lib/tokens'
-import { getRunApi, subscribeRuns, useRunsStore } from '@/store/runsStore'
+import {
+  getRunApi,
+  getLaunchRunHistoryPolicy,
+  RUN_HISTORY_POLICIES,
+  subscribeRuns,
+  useRunsStore,
+  type RunHistoryPolicy
+} from '@/store/runsStore'
 import { selectActiveSpaceRoot, useSpaceStore } from '@/store/spaceStore'
 
 const TERMINAL_RUN_STATES: readonly RunState[] = ['done', 'aborted']
-const HISTORY_POLICY_KEY = 'morz.runs.history-policy.v1'
-
-type HistoryPolicy = 'forever' | 'launch' | 'last-5'
-
-const HISTORY_POLICIES: readonly { value: HistoryPolicy; label: string }[] = [
-  { value: 'forever', label: 'Keep forever' },
-  { value: 'launch', label: 'Clear on launch' },
-  { value: 'last-5', label: 'Keep last 5' }
-]
 const appliedHistoryRoots = new Set<string>()
+const launchHistoryPolicy = getLaunchRunHistoryPolicy()
 
 interface ClearedRunResult {
   runId: string
@@ -71,31 +70,6 @@ function getRunClearApi(): RunClearApi | undefined {
     : undefined
 }
 
-function readHistoryPolicy(): HistoryPolicy {
-  const stored = window.localStorage.getItem(HISTORY_POLICY_KEY)
-  return HISTORY_POLICIES.some((policy) => policy.value === stored)
-    ? (stored as HistoryPolicy)
-    : 'forever'
-}
-
-function evictRuns(runIds: readonly string[]): void {
-  if (runIds.length === 0) return
-  const cleared = new Set(runIds)
-  useRunsStore.setState((state) => {
-    const runs = state.runs.filter((run) => !cleared.has(run.runId))
-    const statuses = { ...state.statuses }
-    for (const runId of cleared) delete statuses[runId]
-    return {
-      runs,
-      statuses,
-      selectedRunId:
-        state.selectedRunId && !cleared.has(state.selectedRunId)
-          ? state.selectedRunId
-          : (runs[0]?.runId ?? null)
-    }
-  })
-}
-
 function announceCleared(results: readonly ClearedRunResult[], title: string): void {
   const retained = results.filter((result) => result.hasWorktrees).length
   getNotify()?.emit({
@@ -134,53 +108,77 @@ function notifyFailure(runId: string, action: string, error: unknown): string {
 }
 
 export function RunsPanel(): JSX.Element {
-  const { available, loading, error, runs, statuses, selectedRunId, ingest, selectRun, setError } =
-    useRunsStore()
+  const {
+    available,
+    loading,
+    error,
+    runs,
+    statuses,
+    selectedRunId,
+    historyPolicy,
+    ingest,
+    selectRun,
+    evictRuns,
+    setHistoryPolicy,
+    setError
+  } = useRunsStore()
   const activeSpaceRoot = useSpaceStore(selectActiveSpaceRoot)
   const [action, setAction] = useState<'stop' | 'cleanup' | null>(null)
   const [historyAction, setHistoryAction] = useState<'clear' | 'clear-finished' | 'policy' | null>(
     null
   )
-  const [historyPolicy, setHistoryPolicy] = useState<HistoryPolicy>(readHistoryPolicy)
 
   useEffect(() => subscribeRuns(), [])
-  useEffect(() => {
-    window.localStorage.setItem(HISTORY_POLICY_KEY, historyPolicy)
-  }, [historyPolicy])
   useEffect(() => {
     if (loading || !activeSpaceRoot || appliedHistoryRoots.has(activeSpaceRoot)) return
     const api = getRunClearApi()
     if (!api) return
+    if (launchHistoryPolicy === 'forever') {
+      appliedHistoryRoots.add(activeSpaceRoot)
+      return
+    }
+    // Reserve the root before awaiting IPC so live run updates cannot start a
+    // concurrent policy pass. Failures release it in catch for a later retry.
     appliedHistoryRoots.add(activeSpaceRoot)
-    if (historyPolicy === 'forever') return
 
     const applyPolicy = async (): Promise<void> => {
       setHistoryAction('policy')
       setError(null)
       try {
-        const results =
-          historyPolicy === 'launch'
-            ? await api.clearFinished(activeSpaceRoot)
-            : await Promise.all(
-                runs
-                  .filter((run) => TERMINAL_RUN_STATES.includes(run.state))
-                  .sort(
-                    (a, b) =>
-                      b.createdAt.localeCompare(a.createdAt) || b.runId.localeCompare(a.runId)
-                  )
-                  .slice(5)
-                  .map((run) => api.clearRun(run.runId))
+        let results: ClearedRunResult[]
+        let failed = 0
+        if (launchHistoryPolicy === 'launch') {
+          results = await api.clearFinished(activeSpaceRoot)
+        } else {
+          const settled = await Promise.allSettled(
+            runs
+              .filter((run) => TERMINAL_RUN_STATES.includes(run.state))
+              .sort(
+                (a, b) =>
+                  b.createdAt.localeCompare(a.createdAt) || b.runId.localeCompare(a.runId)
               )
+              .slice(5)
+              .map((run) => api.clearRun(run.runId))
+          )
+          results = settled.flatMap((result) => (result.status === 'fulfilled' ? [result.value] : []))
+          failed = settled.length - results.length
+        }
         evictRuns(results.map((result) => result.runId))
         if (results.length > 0) announceCleared(results, 'Run history policy applied')
+        if (failed > 0) {
+          throw new Error(
+            `${failed} finished run${failed === 1 ? '' : 's'} could not be cleared; retry by reopening Runs.`
+          )
+        }
       } catch (reason) {
+        appliedHistoryRoots.delete(activeSpaceRoot)
         setError(notifyFailure('history', 'Apply run history policy', reason))
       } finally {
         setHistoryAction(null)
       }
     }
     void applyPolicy()
-  }, [activeSpaceRoot, historyPolicy, loading, runs, setError])
+  }, [activeSpaceRoot, evictRuns, loading, runs, setError])
 
   if (!available) {
     return (
@@ -334,12 +332,12 @@ export function RunsPanel(): JSX.Element {
           <select
             aria-label="Run history policy"
             value={historyPolicy}
-            onChange={(event) => setHistoryPolicy(event.target.value as HistoryPolicy)}
-            className="min-w-0 flex-1 rounded border bg-transparent px-1.5 py-1 text-[9px] outline-none"
+            onChange={(event) => setHistoryPolicy(event.target.value as RunHistoryPolicy)}
+            className="min-w-0 flex-1 rounded border bg-transparent px-1.5 py-1 text-[9px] outline-none focus-visible:ring-1"
             style={{ borderColor: 'var(--color-line-strong)', color: colors.quartz }}
             title="Saved now; applied when this space is loaded on the next launch"
           >
-            {HISTORY_POLICIES.map((policy) => (
+            {RUN_HISTORY_POLICIES.map((policy) => (
               <option key={policy.value} value={policy.value}>
                 {policy.label}
               </option>
