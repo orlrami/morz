@@ -4,6 +4,7 @@ import {
   IconPlayerStop,
   IconRefresh,
   IconTrash,
+  IconX,
   IconUsersGroup
 } from '@tabler/icons-react'
 import type { RunSummary } from '@shared/ipc'
@@ -11,8 +12,30 @@ import type { MorzNotifyApi } from '@shared/notify'
 import type { AgentRunState, RunState, RunStatus } from '@shared/spawn-plan'
 import { colors } from '@/lib/tokens'
 import { getRunApi, subscribeRuns, useRunsStore } from '@/store/runsStore'
+import { selectActiveSpaceRoot, useSpaceStore } from '@/store/spaceStore'
 
 const TERMINAL_RUN_STATES: readonly RunState[] = ['done', 'aborted']
+const HISTORY_POLICY_KEY = 'morz.runs.history-policy.v1'
+
+type HistoryPolicy = 'forever' | 'launch' | 'last-5'
+
+const HISTORY_POLICIES: readonly { value: HistoryPolicy; label: string }[] = [
+  { value: 'forever', label: 'Keep forever' },
+  { value: 'launch', label: 'Clear on launch' },
+  { value: 'last-5', label: 'Keep last 5' }
+]
+const appliedHistoryRoots = new Set<string>()
+
+interface ClearedRunResult {
+  runId: string
+  clearedAt: string
+  hasWorktrees: boolean
+}
+
+interface RunClearApi {
+  clearRun(runId: string): Promise<ClearedRunResult>
+  clearFinished(spaceRoot: string): Promise<ClearedRunResult[]>
+}
 
 const AGENT_STATE_COLOR: Record<AgentRunState, string> = {
   queued: colors.quartzDim,
@@ -41,6 +64,52 @@ function getNotify(): MorzNotifyApi | undefined {
   return (window as unknown as { morz?: { notify?: MorzNotifyApi } }).morz?.notify
 }
 
+function getRunClearApi(): RunClearApi | undefined {
+  const api = getRunApi() as (ReturnType<typeof getRunApi> & Partial<RunClearApi>) | undefined
+  return api && typeof api.clearRun === 'function' && typeof api.clearFinished === 'function'
+    ? (api as RunClearApi)
+    : undefined
+}
+
+function readHistoryPolicy(): HistoryPolicy {
+  const stored = window.localStorage.getItem(HISTORY_POLICY_KEY)
+  return HISTORY_POLICIES.some((policy) => policy.value === stored)
+    ? (stored as HistoryPolicy)
+    : 'forever'
+}
+
+function evictRuns(runIds: readonly string[]): void {
+  if (runIds.length === 0) return
+  const cleared = new Set(runIds)
+  useRunsStore.setState((state) => {
+    const runs = state.runs.filter((run) => !cleared.has(run.runId))
+    const statuses = { ...state.statuses }
+    for (const runId of cleared) delete statuses[runId]
+    return {
+      runs,
+      statuses,
+      selectedRunId:
+        state.selectedRunId && !cleared.has(state.selectedRunId)
+          ? state.selectedRunId
+          : (runs[0]?.runId ?? null)
+    }
+  })
+}
+
+function announceCleared(results: readonly ClearedRunResult[], title: string): void {
+  const retained = results.filter((result) => result.hasWorktrees).length
+  getNotify()?.emit({
+    id: `runs-cleared-${Date.now()}`,
+    level: 'success',
+    source: 'dispatch',
+    title,
+    detail:
+      retained > 0
+        ? `${retained} cleared run${retained === 1 ? '' : 's'} still ${retained === 1 ? 'has' : 'have'} worktrees; cleanup remains separate.`
+        : undefined
+  })
+}
+
 function shortPath(path: string | null | undefined): string {
   if (!path) return '—'
   const parts = path.split(/[\\/]/)
@@ -67,9 +136,51 @@ function notifyFailure(runId: string, action: string, error: unknown): string {
 export function RunsPanel(): JSX.Element {
   const { available, loading, error, runs, statuses, selectedRunId, ingest, selectRun, setError } =
     useRunsStore()
+  const activeSpaceRoot = useSpaceStore(selectActiveSpaceRoot)
   const [action, setAction] = useState<'stop' | 'cleanup' | null>(null)
+  const [historyAction, setHistoryAction] = useState<'clear' | 'clear-finished' | 'policy' | null>(
+    null
+  )
+  const [historyPolicy, setHistoryPolicy] = useState<HistoryPolicy>(readHistoryPolicy)
 
   useEffect(() => subscribeRuns(), [])
+  useEffect(() => {
+    window.localStorage.setItem(HISTORY_POLICY_KEY, historyPolicy)
+  }, [historyPolicy])
+  useEffect(() => {
+    if (loading || !activeSpaceRoot || appliedHistoryRoots.has(activeSpaceRoot)) return
+    const api = getRunClearApi()
+    if (!api) return
+    appliedHistoryRoots.add(activeSpaceRoot)
+    if (historyPolicy === 'forever') return
+
+    const applyPolicy = async (): Promise<void> => {
+      setHistoryAction('policy')
+      setError(null)
+      try {
+        const results =
+          historyPolicy === 'launch'
+            ? await api.clearFinished(activeSpaceRoot)
+            : await Promise.all(
+                runs
+                  .filter((run) => TERMINAL_RUN_STATES.includes(run.state))
+                  .sort(
+                    (a, b) =>
+                      b.createdAt.localeCompare(a.createdAt) || b.runId.localeCompare(a.runId)
+                  )
+                  .slice(5)
+                  .map((run) => api.clearRun(run.runId))
+              )
+        evictRuns(results.map((result) => result.runId))
+        if (results.length > 0) announceCleared(results, 'Run history policy applied')
+      } catch (reason) {
+        setError(notifyFailure('history', 'Apply run history policy', reason))
+      } finally {
+        setHistoryAction(null)
+      }
+    }
+    void applyPolicy()
+  }, [activeSpaceRoot, historyPolicy, loading, runs, setError])
 
   if (!available) {
     return (
@@ -91,16 +202,7 @@ export function RunsPanel(): JSX.Element {
     )
   }
 
-  if (!loading && runs.length === 0 && !error) {
-    return (
-      <EmptyState
-        icon={<IconUsersGroup size={20} stroke={1.5} />}
-        title="No runs yet"
-        detail="Dispatch an approved plan and its live team will appear here."
-      />
-    )
-  }
-
+  const empty = !loading && runs.length === 0 && !error
   const selected = runs.find((run) => run.runId === selectedRunId) ?? runs[0]
   const status = selected ? statuses[selected.runId] : undefined
 
@@ -161,6 +263,54 @@ export function RunsPanel(): JSX.Element {
     }
   }
 
+  const clear = async (): Promise<void> => {
+    if (!selected || !TERMINAL_RUN_STATES.includes(status?.state ?? selected.state)) return
+    const hasWorktrees = Object.values(status?.agentsDetail ?? {}).some((detail) => detail.worktree)
+    const warning = hasWorktrees
+      ? ' Its worktrees and branches will remain. Use Cleanup first if you want them removed.'
+      : ''
+    if (!window.confirm(`Clear ${selected.runTag} from history?${warning}`)) return
+    const api = getRunClearApi()
+    if (!api) return
+    setHistoryAction('clear')
+    setError(null)
+    try {
+      const result = await api.clearRun(selected.runId)
+      evictRuns([result.runId])
+      announceCleared([result], 'Run cleared from history')
+    } catch (reason) {
+      setError(notifyFailure(selected.runId, 'Clear run', reason))
+    } finally {
+      setHistoryAction(null)
+    }
+  }
+
+  const clearFinished = async (): Promise<void> => {
+    const count = runs.filter((run) => TERMINAL_RUN_STATES.includes(run.state)).length
+    if (
+      count === 0 ||
+      !activeSpaceRoot ||
+      !window.confirm(
+        `Clear ${count} finished run${count === 1 ? '' : 's'} from this space's history? Worktrees and branches will remain until explicitly cleaned.`
+      )
+    ) {
+      return
+    }
+    const api = getRunClearApi()
+    if (!api) return
+    setHistoryAction('clear-finished')
+    setError(null)
+    try {
+      const results = await api.clearFinished(activeSpaceRoot)
+      evictRuns(results.map((result) => result.runId))
+      announceCleared(results, `${results.length} finished run${results.length === 1 ? '' : 's'} cleared`)
+    } catch (reason) {
+      setError(notifyFailure('history', 'Clear finished runs', reason))
+    } finally {
+      setHistoryAction(null)
+    }
+  }
+
   return (
     <section className="flex min-h-0 flex-1 flex-col" aria-label="Runs monitor">
       {error && (
@@ -174,57 +324,105 @@ export function RunsPanel(): JSX.Element {
       )}
 
       <div
-        className="max-h-[168px] shrink-0 space-y-1 overflow-y-auto border-b p-2"
+        className="flex shrink-0 items-center gap-2 border-b px-2 py-1.5"
         style={{ borderColor: 'var(--color-line)' }}
       >
-        {runs.map((run) => {
-          const active = run.runId === selected?.runId
-          const tint = RUN_STATE_COLOR[run.state]
-          return (
-            <button
-              key={run.runId}
-              type="button"
-              onClick={() => selectRun(run.runId)}
-              className="w-full rounded-lg border px-2.5 py-2 text-left transition-colors"
-              style={{
-                background: active ? colors.card : 'transparent',
-                borderColor: active ? `${tint}99` : 'var(--color-line)'
-              }}
-              aria-pressed={active}
-            >
-              <span className="flex items-center gap-1.5">
-                <span className="size-2 shrink-0 rounded-full" style={{ background: tint }} />
-                <span
-                  className="min-w-0 flex-1 truncate text-[10.5px] font-semibold"
-                  style={{ color: colors.quartz }}
-                >
-                  {run.goal}
-                </span>
-                <span className="shrink-0 font-mono text-[8.5px] uppercase" style={{ color: tint }}>
-                  {run.state}
-                </span>
-              </span>
-              <span
-                className="mt-1 flex items-center justify-between gap-2 font-mono text-[8.5px]"
-                style={{ color: colors.quartzDim }}
-              >
-                <span className="truncate">{run.runTag}</span>
-                <time className="shrink-0" dateTime={run.createdAt}>
-                  {formatCreated(run.createdAt)}
-                </time>
-              </span>
-            </button>
-          )
-        })}
+        <label className="flex min-w-0 flex-1 items-center gap-1.5">
+          <span className="shrink-0 text-[9px] font-semibold" style={{ color: colors.quartzDim }}>
+            History
+          </span>
+          <select
+            aria-label="Run history policy"
+            value={historyPolicy}
+            onChange={(event) => setHistoryPolicy(event.target.value as HistoryPolicy)}
+            className="min-w-0 flex-1 rounded border bg-transparent px-1.5 py-1 text-[9px] outline-none"
+            style={{ borderColor: 'var(--color-line-strong)', color: colors.quartz }}
+            title="Saved now; applied when this space is loaded on the next launch"
+          >
+            {HISTORY_POLICIES.map((policy) => (
+              <option key={policy.value} value={policy.value}>
+                {policy.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <button
+          type="button"
+          onClick={() => void clearFinished()}
+          disabled={
+            historyAction !== null ||
+            !activeSpaceRoot ||
+            !runs.some((run) => TERMINAL_RUN_STATES.includes(run.state))
+          }
+          className="shrink-0 rounded border px-2 py-1 text-[9px] font-semibold disabled:opacity-40"
+          style={{ borderColor: 'var(--color-line-strong)', color: colors.quartz }}
+        >
+          {historyAction === 'clear-finished' ? 'Clearing…' : 'Clear finished'}
+        </button>
       </div>
 
-      {selected && (
+      {empty ? (
+        <EmptyState
+          icon={<IconUsersGroup size={20} stroke={1.5} />}
+          title="No runs yet"
+          detail="Dispatch an approved plan and its live team will appear here."
+        />
+      ) : (
+        <div
+          className="max-h-[168px] shrink-0 space-y-1 overflow-y-auto border-b p-2"
+          style={{ borderColor: 'var(--color-line)' }}
+        >
+          {runs.map((run) => {
+            const active = run.runId === selected?.runId
+            const tint = RUN_STATE_COLOR[run.state]
+            return (
+              <button
+                key={run.runId}
+                type="button"
+                onClick={() => selectRun(run.runId)}
+                className="w-full rounded-lg border px-2.5 py-2 text-left transition-colors"
+                style={{
+                  background: active ? colors.card : 'transparent',
+                  borderColor: active ? `${tint}99` : 'var(--color-line)'
+                }}
+                aria-pressed={active}
+              >
+                <span className="flex items-center gap-1.5">
+                  <span className="size-2 shrink-0 rounded-full" style={{ background: tint }} />
+                  <span
+                    className="min-w-0 flex-1 truncate text-[10.5px] font-semibold"
+                    style={{ color: colors.quartz }}
+                  >
+                    {run.goal}
+                  </span>
+                  <span className="shrink-0 font-mono text-[8.5px] uppercase" style={{ color: tint }}>
+                    {run.state}
+                  </span>
+                </span>
+                <span
+                  className="mt-1 flex items-center justify-between gap-2 font-mono text-[8.5px]"
+                  style={{ color: colors.quartzDim }}
+                >
+                  <span className="truncate">{run.runTag}</span>
+                  <time className="shrink-0" dateTime={run.createdAt}>
+                    {formatCreated(run.createdAt)}
+                  </time>
+                </span>
+              </button>
+            )
+          })}
+        </div>
+      )}
+
+      {!empty && selected && (
         <RunDetail
           summary={selected}
           status={status}
           action={action}
+          historyAction={historyAction}
           onStop={() => void stop()}
           onCleanup={() => void cleanup()}
+          onClear={() => void clear()}
         />
       )}
     </section>
@@ -235,14 +433,18 @@ function RunDetail({
   summary,
   status,
   action,
+  historyAction,
   onStop,
-  onCleanup
+  onCleanup,
+  onClear
 }: {
   summary: RunSummary
   status?: RunStatus
   action: 'stop' | 'cleanup' | null
+  historyAction: 'clear' | 'clear-finished' | 'policy' | null
   onStop(): void
   onCleanup(): void
+  onClear(): void
 }): JSX.Element {
   const terminal = TERMINAL_RUN_STATES.includes(status?.state ?? summary.state)
   const details = status?.agentsDetail ?? {}
@@ -351,7 +553,7 @@ function RunDetail({
       )}
 
       {status && (
-        <div className="mt-3 border-t pt-3" style={{ borderColor: 'var(--color-line)' }}>
+        <div className="mt-3 space-y-2 border-t pt-3" style={{ borderColor: 'var(--color-line)' }}>
           {!terminal && (
             <button
               type="button"
@@ -382,6 +584,20 @@ function RunDetail({
             <p className="text-center text-[10px]" style={{ color: colors.done }}>
               Worktrees cleaned
             </p>
+          )}
+          {terminal && (
+            <button
+              type="button"
+              onClick={onClear}
+              disabled={action !== null || historyAction !== null}
+              className="flex w-full items-center justify-center gap-1.5 rounded-md px-2.5 py-1.5 text-[10.5px] font-bold disabled:opacity-40"
+              style={{ background: `${colors.quartzDim}22`, color: colors.quartz }}
+              aria-label="Clear run"
+              title="Remove from history only; worktree cleanup remains separate"
+            >
+              <IconX size={13} stroke={1.8} />
+              {historyAction === 'clear' ? 'Clearing…' : 'Clear'}
+            </button>
           )}
         </div>
       )}
