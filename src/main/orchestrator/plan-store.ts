@@ -72,15 +72,33 @@ export function assertPlanEditAllowed(current: SpawnPlan, updated: SpawnPlan): v
   }
 
   const currentById = new Map(current.agents.map((agent) => [agent.agentId, agent]))
+  // w14/multi-agent-plan: the team card may APPEND new agents to a PROPOSED
+  // plan (the user still approves the final hash). Surviving original agents
+  // keep their relative order and immutable fields; new agents must come
+  // after every surviving one and may not take over an original branch (an
+  // id-swap on an existing branch is still an identity rewrite, not an add).
+  const surviving = updated.agents.filter((agent) => currentById.has(agent.agentId))
+  const added = updated.agents.filter((agent) => !currentById.has(agent.agentId))
   const expectedOrder = current.agents
     .filter((agent) => updated.agents.some((candidate) => candidate.agentId === agent.agentId))
     .map((agent) => agent.agentId)
-  if (expectedOrder.join('\0') !== updated.agents.map((agent) => agent.agentId).join('\0')) {
-    throw new Error('Plan edit added or reordered immutable agents')
+  if (expectedOrder.join('\0') !== surviving.map((agent) => agent.agentId).join('\0')) {
+    throw new Error('Plan edit reordered immutable agents')
   }
-  for (const agent of updated.agents) {
-    const original = currentById.get(agent.agentId)
-    if (!original) throw new Error('Plan edit added an immutable agent')
+  if (
+    added.length > 0 &&
+    !updated.agents.slice(updated.agents.length - added.length).every((agent) => !currentById.has(agent.agentId))
+  ) {
+    throw new Error('Plan edit must append new agents after the immutable originals')
+  }
+  const originalBranches = new Set(current.agents.map((agent) => agent.branch))
+  for (const agent of added) {
+    if (originalBranches.has(agent.branch)) {
+      throw new Error(`Plan edit reused the immutable branch ${agent.branch} for a new agent`)
+    }
+  }
+  for (const agent of surviving) {
+    const original = currentById.get(agent.agentId)!
     if (
       canonicalJson(immutableAgentFields(original) as unknown as JsonValue) !==
       canonicalJson(immutableAgentFields(agent) as unknown as JsonValue)

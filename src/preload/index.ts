@@ -210,10 +210,12 @@ const obsidianApi: ObsidianBridge = {
 contextBridge.exposeInMainWorld('morzObsidian', obsidianApi)
 
 // w5/planner
-import { PlannerApi, type PlannerBridge } from '../shared/ipc'
+import { PlannerApi, type PlannerBridge, type PlanTeamOptions } from '../shared/ipc'
 
 const plannerApi: PlannerBridge = {
-  plan: (goal, spaceRoot) => ipcRenderer.invoke(PlannerApi.plan, { goal, spaceRoot }),
+  // w14/multi-agent-plan — optional team constraints ride along on re-plans.
+  plan: (goal: string, spaceRoot: string, teamOptions?: PlanTeamOptions) =>
+    ipcRenderer.invoke(PlannerApi.plan, { goal, spaceRoot, teamOptions }),
   update: (plan, expectedHash) => ipcRenderer.invoke(PlannerApi.update, { plan, expectedHash }),
   approveAndRun: (planHash) => ipcRenderer.invoke(PlannerApi.approveAndRun, planHash),
   discard: (planHash) => ipcRenderer.invoke(PlannerApi.discard, planHash),
