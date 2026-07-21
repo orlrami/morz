@@ -69,6 +69,13 @@ function open(): Database.Database {
     );
     CREATE INDEX IF NOT EXISTS bus_tasks_state ON bus_tasks (state);
   `)
+  // w14/orch-scoped — additive column: the space a task belongs to (NULL =
+  // legacy/spaceless task, visible in every space).
+  const taskColumns = db.prepare(`PRAGMA table_info(bus_tasks)`).all() as { name: string }[]
+  if (!taskColumns.some((column) => column.name === 'space_root')) {
+    db.exec(`ALTER TABLE bus_tasks ADD COLUMN space_root TEXT`)
+  }
+  // end w14/orch-scoped
   return db
 }
 
@@ -99,6 +106,7 @@ interface TaskRow {
   blocked_reason: string | null
   lease_until: string | null
   artifacts: string
+  space_root: string | null // w14/orch-scoped
 }
 
 function hydrate(row: TaskRow): Task {
@@ -127,6 +135,7 @@ function hydrate(row: TaskRow): Task {
   }
   if (row.blocked_reason !== null) task.blockedReason = row.blocked_reason
   if (row.lease_until !== null) task.leaseUntil = row.lease_until
+  if (row.space_root !== null) task.spaceRoot = row.space_root // w14/orch-scoped
   return task
 }
 
@@ -154,9 +163,10 @@ export function createTask(input: BusCreateTaskInput): Task {
   const ts = nowIso()
   const insert = d.transaction(() => {
     d.prepare(
-      `INSERT INTO bus_tasks (id, state, title, created_by, assignee, created_at, updated_at)
-       VALUES (?, 'proposed', ?, ?, NULL, ?, ?)`
-    ).run(id, input.title, input.createdBy, ts, ts)
+      // w14/orch-scoped — space_root stamped at creation when the caller knows it
+      `INSERT INTO bus_tasks (id, state, title, created_by, assignee, created_at, updated_at, space_root)
+       VALUES (?, 'proposed', ?, ?, NULL, ?, ?, ?)`
+    ).run(id, input.title, input.createdBy, ts, ts, input.spaceRoot ?? null)
     for (const dep of input.dependsOn ?? []) {
       d.prepare('INSERT OR IGNORE INTO bus_task_deps (task_id, depends_on) VALUES (?, ?)').run(id, dep)
     }
@@ -333,6 +343,11 @@ export function listTasks(filter?: BusTaskFilter): Task[] {
   if (filter?.assignee) {
     where.push('assignee = ?')
     params.push(filter.assignee)
+  }
+  // w14/orch-scoped — spaceless (NULL) tasks stay visible in every space
+  if (filter?.spaceRoot) {
+    where.push('(space_root IS NULL OR space_root = ?)')
+    params.push(filter.spaceRoot)
   }
   const sql = `SELECT * FROM bus_tasks ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY created_at, id`
   return (open().prepare(sql).all(...params) as TaskRow[]).map(hydrate)

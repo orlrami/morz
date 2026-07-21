@@ -1,6 +1,8 @@
+import { useMemo } from 'react'
 import { create } from 'zustand'
 import type { MorzRunApi, RunSummary } from '@shared/ipc'
 import type { RunStatus } from '@shared/spawn-plan'
+import { selectActiveSpaceRoot, useSpaceStore } from './spaceStore'
 
 const LIVE_RUN_STATES = new Set<RunSummary['state']>(['dispatching', 'running', 'merging'])
 
@@ -93,6 +95,22 @@ export async function hydrateRuns(): Promise<void> {
     })
   }
 }
+
+// w14/orch-scoped — the orchestrator panel sees ONLY the active space's runs.
+// The full ledger stays in `runs` (the pill bar and sidebar heuristics remain
+// cross-space); scoping happens at the consumer through this hook. Runs
+// without a spaceRoot (renderer-only builds) stay visible everywhere.
+export function scopeRuns(runs: RunSummary[], spaceRoot: string): RunSummary[] {
+  if (!spaceRoot) return runs
+  return runs.filter((run) => !run.spaceRoot || run.spaceRoot === spaceRoot)
+}
+
+export function useSpaceRuns(): RunSummary[] {
+  const runs = useRunsStore((state) => state.runs)
+  const spaceRoot = useSpaceStore(selectActiveSpaceRoot)
+  return useMemo(() => scopeRuns(runs, spaceRoot), [runs, spaceRoot])
+}
+// end w14/orch-scoped
 
 let liveSubscription: { refs: number; unsubscribe: () => void } | null = null
 

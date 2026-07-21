@@ -249,7 +249,8 @@ function createKickoffTasks(plan: SpawnPlan): Map<AgentId, string> {
     const task = createTask({
       title: `kickoff ${agent.agentId}: ${agent.role}`,
       createdBy: MORZ_AGENT_ID,
-      dependsOn
+      dependsOn,
+      spaceRoot: plan.spaceRoot // w14/orch-scoped — kickoffs belong to the plan's space
     })
     acceptTask(task.id)
     taskByAgent.set(agent.agentId, task.id)
@@ -504,8 +505,9 @@ export function setAgentRunState(
 
 /* ── queries ── */
 
-export function listRuns(): RunSummary[] {
-  return storeListRuns()
+// w14/orch-scoped — optional per-space filter passthrough
+export function listRuns(spaceRoot?: string): RunSummary[] {
+  return storeListRuns(spaceRoot)
 }
 
 export function runStatus(runId: string): RunStatus | null {
@@ -540,7 +542,10 @@ export function registerDispatchIpc(ipcMain: IpcMain, deps: DispatcherHost): voi
   sweepStaleRuns()
   ipcMain.handle(RunApi.approvePlan, (_e, plan: SpawnPlan) => approvePlan(plan))
   ipcMain.handle(RunApi.dispatch, (_e, plan: SpawnPlan) => dispatch(plan))
-  ipcMain.handle(RunApi.list, () => listRuns())
+  // w14/orch-scoped — optional spaceRoot filter (no arg = unfiltered)
+  ipcMain.handle(RunApi.list, (_e, spaceRoot?: unknown) =>
+    listRuns(typeof spaceRoot === 'string' && spaceRoot ? spaceRoot : undefined)
+  )
   ipcMain.handle(RunApi.status, (_e, runId: string) => runStatus(runId))
   ipcMain.handle(RunApi.stop, (_e, runId: string) => stopRun(runId))
   ipcMain.handle(RunApi.cleanup, (_e, runId: string) => cleanup(runId))

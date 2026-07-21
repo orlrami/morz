@@ -880,7 +880,10 @@ export async function registerPlannerIpc(dispatcher: DispatchPort = new LoggingD
     assertHash(planHash, 'Plan hash')
     store.discard(planHash)
   })
-  ipcMain.handle(PlannerApi.listOpen, () => store.listOpen())
+  // w14/orch-scoped — optional spaceRoot filter (no arg = unfiltered)
+  ipcMain.handle(PlannerApi.listOpen, (_event, spaceRoot?: unknown) =>
+    store.listOpen(typeof spaceRoot === 'string' && spaceRoot ? spaceRoot : undefined)
+  )
   ipcMain.handle(
     PlannerApi.requestAmendment,
     async (_event, input: { planId?: unknown; request?: unknown }): Promise<StoredPlanAmendment> => {

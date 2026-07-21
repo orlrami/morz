@@ -139,6 +139,22 @@ export class PlanStore {
       CREATE INDEX IF NOT EXISTS orchestrator_amendments_plan
         ON orchestrator_amendments(plan_id, state);
     `)
+    // w14/orch-scoped — additive column: a plan belongs to the space it was
+    // created in. Existing rows are backfilled from the plan JSON so history
+    // stays queryable per space.
+    const planColumns = this.db.prepare(`PRAGMA table_info(orchestrator_plans)`).all() as {
+      name: string
+    }[]
+    if (!planColumns.some((column) => column.name === 'space_root')) {
+      this.db.exec(`ALTER TABLE orchestrator_plans ADD COLUMN space_root TEXT`)
+    }
+    this.db
+      .prepare(
+        `UPDATE orchestrator_plans SET space_root = json_extract(json, '$.spaceRoot')
+         WHERE space_root IS NULL`
+      )
+      .run()
+    // end w14/orch-scoped
     this.db
       .prepare(`UPDATE orchestrator_plans SET state = 'PROPOSED', updated_at = ? WHERE state = 'DRAFT'`)
       .run(new Date().toISOString())
@@ -150,11 +166,12 @@ export class PlanStore {
     const now = new Date().toISOString()
     this.db
       .prepare(
+        // w14/orch-scoped — space_root stamped at creation
         `INSERT INTO orchestrator_plans
-          (id, plan_hash, state, json, created_at, updated_at)
-         VALUES (?, ?, 'DRAFT', ?, ?, ?)`
+          (id, plan_hash, state, json, created_at, updated_at, space_root)
+         VALUES (?, ?, 'DRAFT', ?, ?, ?, ?)`
       )
-      .run(plan.id, plan.planHash, JSON.stringify(plan), plan.createdAt, now)
+      .run(plan.id, plan.planHash, JSON.stringify(plan), plan.createdAt, now, plan.spaceRoot)
     return { plan, state: 'DRAFT' }
   }
 
@@ -278,18 +295,31 @@ export class PlanStore {
     if (changed.changes !== 1) throw new Error('Only proposed amendments can be discarded')
   }
 
-  listOpen(): { plans: StoredSpawnPlan[]; amendments: StoredPlanAmendment[] } {
+  // w14/orch-scoped — plans and their amendments are queried BY spaceRoot:
+  // a plan belongs to the space it was created in, and opening a space must
+  // never dump every other project's planning history. No arg = unfiltered
+  // (pre-w14 callers keep their behavior).
+  listOpen(spaceRoot?: string): { plans: StoredSpawnPlan[]; amendments: StoredPlanAmendment[] } {
+    const planWhere = spaceRoot ? 'WHERE space_root = ?' : ''
+    const planParams = spaceRoot ? [spaceRoot] : []
     const plans = (
       this.db
-        .prepare(`SELECT json, state FROM orchestrator_plans ORDER BY updated_at DESC LIMIT 20`)
-        .all() as PlanRow[]
+        .prepare(
+          `SELECT json, state FROM orchestrator_plans ${planWhere} ORDER BY updated_at DESC LIMIT 20`
+        )
+        .all(...planParams) as PlanRow[]
     ).map((row) => parsePlanRow(row)!)
     const amendments = (
       this.db
         .prepare(
-          `SELECT json, state FROM orchestrator_amendments WHERE state = 'PROPOSED' ORDER BY updated_at DESC`
+          spaceRoot
+            ? `SELECT a.json, a.state FROM orchestrator_amendments a
+               JOIN orchestrator_plans p ON p.id = a.plan_id
+               WHERE a.state = 'PROPOSED' AND p.space_root = ?
+               ORDER BY a.updated_at DESC`
+            : `SELECT json, state FROM orchestrator_amendments WHERE state = 'PROPOSED' ORDER BY updated_at DESC`
         )
-        .all() as AmendmentRow[]
+        .all(...planParams) as AmendmentRow[]
     ).map((row) => parseAmendmentRow(row)!)
     return { plans, amendments }
   }

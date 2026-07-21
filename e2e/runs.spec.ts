@@ -85,6 +85,36 @@ test('Runs tab stops a live 2-agent team and cleans up its worktrees', async () 
 
   const { app, page } = await launchMorz()
   try {
+    // w14/orch-scoped — the Runs tab shows only the ACTIVE space's runs, so
+    // make the fixture space active first (seed-verify-retry, space-tabs
+    // pattern: the old page's persist flush can wipe the seed during reload).
+    let seeded = false
+    for (let attempt = 0; attempt < 3 && !seeded; attempt += 1) {
+      await page.evaluate((root) => {
+        localStorage.setItem(
+          'morz.spaces',
+          JSON.stringify({
+            version: 2,
+            state: {
+              spaces: [{ id: 'fixture-space', name: 'fixture-space', root, agents: [] }],
+              activeSpaceId: 'fixture-space',
+              initialized: true
+            }
+          })
+        )
+      }, spaceRoot)
+      await page.reload({ waitUntil: 'domcontentloaded' })
+      try {
+        await expect(
+          page.getByRole('tablist', { name: 'Spaces' }).getByRole('tab', { name: 'fixture-space' })
+        ).toHaveAttribute('aria-selected', 'true', { timeout: 5_000 })
+        seeded = true
+      } catch {
+        // persist race wiped the seed — reseed on the fresh page and retry
+      }
+    }
+    expect(seeded, 'seeded fixture space survived reload').toBe(true)
+
     const plan = makePlan(spaceRoot)
     const { planHash } = await page.evaluate(
       (candidate) => (window as unknown as MorzRunWindow).morz.run.approvePlan(candidate),
@@ -124,6 +154,16 @@ test('Runs tab stops a live 2-agent team and cleans up its worktrees', async () 
     expect(worktrees.every((path) => dirname(path) === fixtureParent)).toBe(true)
   } finally {
     await closeMorz(app)
-    rmSync(fixtureParent, { recursive: true, force: true })
+    // w14/orch-scoped — the fixture root is now the ACTIVE space, so the app's
+    // git watcher holds a handle on it; handle release can lag the taskkill.
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        rmSync(fixtureParent, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
+        break
+      } catch (error) {
+        if (attempt >= 4) throw error
+        await new Promise((resolve) => setTimeout(resolve, 1_000))
+      }
+    }
   }
 })

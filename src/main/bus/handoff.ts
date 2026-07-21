@@ -50,11 +50,20 @@ const approvals: BusPendingApproval[] = []
 
 /* ── snapshot + broadcast ────────────────────────────────────── */
 
-function snapshot(): BusSnapshot {
+// w14/orch-scoped — the blackboard is scoped per Space: with a spaceRoot the
+// snapshot carries only that space's tasks (plus legacy spaceless ones) and
+// only the messages/approvals attached to them, so opening a space never
+// dumps every other project's history.
+function snapshot(spaceRoot?: string): BusSnapshot {
+  const tasks = listTasks(spaceRoot ? { spaceRoot } : undefined)
+  const keptTaskIds = new Set(tasks.map((task) => task.id))
+  const messages = [...delivered, ...pendingByTask.values(), ...notices]
   return {
-    tasks: listTasks(),
-    messages: [...delivered, ...pendingByTask.values(), ...notices],
-    approvals: [...approvals]
+    tasks,
+    messages: spaceRoot
+      ? messages.filter((message) => message.taskId === null || keptTaskIds.has(message.taskId))
+      : messages,
+    approvals: spaceRoot ? approvals.filter((a) => keptTaskIds.has(a.taskId)) : [...approvals]
   }
 }
 
@@ -73,7 +82,8 @@ function post(input: BusHandoffInput): { taskId: TaskId } {
   const ts = now()
   let taskId = input.taskId ?? null
   if (!taskId || !getTask(taskId)) {
-    taskId = createTask({ title: input.title, createdBy: input.from }).id
+    // w14/orch-scoped — stamp the space so the blackboard can scope per Space
+    taskId = createTask({ title: input.title, createdBy: input.from, spaceRoot: input.spaceRoot }).id
   }
 
   // The handoff payload — parked until the chip releases it into the Maildir.
@@ -148,7 +158,10 @@ function respondApproval(resp: BusApprovalResp): void {
 }
 
 export function registerHandoffIpc(): void {
-  ipcMain.handle(BusApi.snapshot, () => snapshot())
+  // w14/orch-scoped — optional spaceRoot filter (no arg = full board)
+  ipcMain.handle(BusApi.snapshot, (_e, spaceRoot?: unknown) =>
+    snapshot(typeof spaceRoot === 'string' && spaceRoot ? spaceRoot : undefined)
+  )
   ipcMain.handle(BusApi.post, (_e, input: BusHandoffInput) => post(input))
   ipcMain.on(BusApi.approvalRespond, (_e, resp: BusApprovalResp) => respondApproval(resp))
   // any board write (IPC, MCP tools, sweeper) refreshes the blackboard
