@@ -1,11 +1,19 @@
 import { useEffect, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
-import { IconCheck, IconTrash, IconUserMinus } from '@tabler/icons-react'
-import type { SpawnPlan } from '@shared/spawn-plan'
-import type { RouteDecision, RoutingTarget, StoredPlanAmendment, StoredSpawnPlan } from '@shared/ipc'
+import { IconCheck, IconRefresh, IconTrash, IconUserMinus, IconUserPlus } from '@tabler/icons-react'
+import type { PlannedAgent, PlannedCli, SpawnPlan } from '@shared/spawn-plan'
+import type {
+  PlanTeamOptions,
+  RouteDecision,
+  RoutingTarget,
+  StoredPlanAmendment,
+  StoredSpawnPlan
+} from '@shared/ipc'
 import { colors } from '@/lib/tokens'
 import { useModeStore } from '@/store/modeStore'
 import { useRoutingStore } from '@/store/routingStore'
+import { roleKey, usePlanTeamStore } from '@/store/planTeamStore'
+import { useConnectionsStore } from '@/store/connectionsStore'
 
 const ROUTE_LABEL: Record<RoutingTarget, string> = {
   agy: 'Antigravity',
@@ -18,12 +26,24 @@ function routeCli(target: RoutingTarget): 'agy' | 'codex' | 'claude' {
   return target === 'local' ? 'claude' : target
 }
 
+// w14/multi-agent-plan — per-cli avatar tint + display label for team rows.
+const CLI_META: Record<PlannedCli, { label: string; tint: string }> = {
+  claude: { label: 'Claude', tint: colors.bronze },
+  codex: { label: 'Codex', tint: colors.working },
+  agy: { label: 'Antigravity', tint: colors.done }
+}
+
+const PLAN_CLIS: readonly PlannedCli[] = ['claude', 'codex', 'agy']
+const MAX_TEAM_AGENTS = 8
+
 interface PlanCardProps {
   record: StoredSpawnPlan
   busy: boolean
   onUpdate(plan: SpawnPlan, expectedHash: string): Promise<void>
   onApprove(planHash: string): Promise<void>
   onDiscard(planHash: string): Promise<void>
+  /** w14/multi-agent-plan — re-plan the same goal with team constraints. */
+  onReplan?(options: PlanTeamOptions): Promise<void>
 }
 
 export function PlanCard({
@@ -31,25 +51,53 @@ export function PlanCard({
   busy,
   onUpdate,
   onApprove,
-  onDiscard
+  onDiscard,
+  onReplan
 }: PlanCardProps): JSX.Element {
   const [draft, setDraft] = useState(record.plan)
   const [suggestions, setSuggestions] = useState<Map<number, RouteDecision>>(new Map())
   const [autoNotice, setAutoNotice] = useState<string[]>([])
   const [autoRouteError, setAutoRouteError] = useState('')
+  // w14/multi-agent-plan — the recommendation only rides on the plan response,
+  // so keep it per plan id across hash-changing edits.
+  const [teamRec, setTeamRec] = useState<{ planId: string; size: number; rationale: string } | null>(
+    null
+  )
+  const [sizeChoice, setSizeChoice] = useState('auto')
   const autoAttemptedHashes = useRef(new Set<string>())
   const onUpdateRef = useRef(onUpdate)
   const mode = useModeStore((state) => state.mode)
   const routeTask = useRoutingStore((state) => state.routeTask)
+  // w14/multi-agent-plan — remembered per-role model defaults + connection models.
+  const teamDefaults = usePlanTeamStore((state) => state.defaults)
+  const rememberDefault = usePlanTeamStore((state) => state.remember)
+  const connections = useConnectionsStore((state) => state.connections)
+  const startConnections = useConnectionsStore((state) => state.start)
   const hasUnsavedEdits = JSON.stringify(draft.agents) !== JSON.stringify(record.plan.agents)
 
   useEffect(() => setDraft(record.plan), [record.plan])
   useEffect(() => setAutoRouteError(''), [record.plan.planHash])
+  useEffect(() => setSizeChoice('auto'), [record.plan.id])
+  useEffect(() => startConnections(), [startConnections])
   useEffect(() => {
     onUpdateRef.current = onUpdate
   }, [onUpdate])
+  useEffect(() => {
+    if (record.recommendedTeamSize) {
+      setTeamRec({
+        planId: record.plan.id,
+        size: record.recommendedTeamSize,
+        rationale: record.teamRationale ?? ''
+      })
+    } else {
+      setTeamRec((current) => (current && current.planId === record.plan.id ? current : null))
+    }
+  }, [record])
 
   // w8/routing — rules-only suggestions; no model/classifier call occurs here.
+  // w14/multi-agent-plan — the user's remembered per-role model defaults are
+  // applied first (any non-manual mode) and outrank rule routing; both flow
+  // through ONE update per plan hash so concurrent updates can never race.
   useEffect(() => {
     if (mode === 'manual' || record.state !== 'PROPOSED') {
       setSuggestions(new Map())
@@ -62,31 +110,43 @@ export function PlanCard({
       )
     ).then((decisions) => {
       if (cancelled) return
+      const remembered = new Map<number, PlannedCli>()
+      record.plan.agents.forEach((agent, index) => {
+        const preferred = teamDefaults[roleKey(agent.role)]
+        if (preferred && preferred !== agent.cli) remembered.set(index, preferred)
+      })
       const next = new Map<number, RouteDecision>()
       decisions.forEach((decision, index) => {
         const agent = record.plan.agents[index]
-        if (!decision || !agent) return
+        if (!decision || !agent || remembered.has(index)) return
         const compatibleLocal = decision.target === 'local' && agent.cli === 'claude'
         if (!compatibleLocal && routeCli(decision.target) !== agent.cli) next.set(index, decision)
       })
       setSuggestions(next)
 
+      const autoRoute = mode === 'orchestrated' ? next : new Map<number, RouteDecision>()
       if (
-        mode === 'orchestrated' &&
-        next.size > 0 &&
+        (remembered.size > 0 || autoRoute.size > 0) &&
         !autoAttemptedHashes.current.has(record.plan.planHash)
       ) {
         autoAttemptedHashes.current.add(record.plan.planHash)
         setAutoRouteError('')
         const agents = record.plan.agents.map((agent, index) => {
-          const suggestion = next.get(index)
+          const preferred = remembered.get(index)
+          if (preferred) return { ...agent, cli: preferred }
+          const suggestion = autoRoute.get(index)
           return suggestion ? { ...agent, cli: routeCli(suggestion.target) } : agent
         })
-        setAutoNotice(
-          [...next].map(([index, decision]) =>
-            `Auto-routed ${record.plan.agents[index].role} to ${ROUTE_LABEL[decision.target]}`
+        setAutoNotice([
+          ...[...remembered].map(
+            ([index, cli]) =>
+              `Pre-filled ${record.plan.agents[index].role} with your ${CLI_META[cli].label} default`
+          ),
+          ...[...autoRoute].map(
+            ([index, decision]) =>
+              `Auto-routed ${record.plan.agents[index].role} to ${ROUTE_LABEL[decision.target]}`
           )
-        )
+        ])
         void onUpdateRef.current({ ...record.plan, agents }, record.plan.planHash).catch((reason: unknown) => {
           setAutoNotice([])
           setAutoRouteError(reason instanceof Error ? reason.message : String(reason))
@@ -96,7 +156,7 @@ export function PlanCard({
     return () => {
       cancelled = true
     }
-  }, [mode, record.plan, record.state, routeTask])
+  }, [mode, record.plan, record.state, routeTask, teamDefaults])
 
   const savePrompt = (index: number): void => {
     const promptSeed = draft.agents[index]?.promptSeed.trim()
@@ -115,13 +175,74 @@ export function PlanCard({
     )
   }
 
+  // w14/multi-agent-plan — model swap persists as the role's new default.
+  const changeCli = (index: number, cli: PlannedCli): void => {
+    const agent = draft.agents[index]
+    if (!agent || agent.cli === cli) return
+    rememberDefault(agent.role, cli)
+    void onUpdate(
+      { ...draft, agents: draft.agents.map((item, i) => (i === index ? { ...item, cli } : item)) },
+      record.plan.planHash
+    )
+  }
+
+  // w14/multi-agent-plan — append a blank specialist the user seeds via prompt.
+  const addAgent = (): void => {
+    if (draft.agents.length >= MAX_TEAM_AGENTS) return
+    let n = draft.agents.length + 1
+    let agentId = `agent-${n}`
+    while (draft.agents.some((agent) => agent.agentId === agentId)) {
+      n += 1
+      agentId = `agent-${n}`
+    }
+    const added: PlannedAgent = {
+      agentId,
+      cli: teamDefaults[roleKey('agent')] ?? 'claude',
+      role: `Agent ${n}`,
+      branch: `run/plan/${record.plan.id.slice(0, 8).toLowerCase()}-${agentId}`,
+      worktree: null,
+      cwd: '',
+      promptSeed: "Describe this agent's task before approving the plan.",
+      dependsOn: [],
+      port: null
+    }
+    void onUpdate({ ...draft, agents: [...draft.agents, added] }, record.plan.planHash)
+  }
+
+  // w14/multi-agent-plan — smaller trims the team; larger re-plans with the
+  // required size; Auto leaves the orchestrator's proposal untouched.
+  const applyTeamSize = (value: string): void => {
+    setSizeChoice(value)
+    if (value === 'auto') return
+    const size = Number(value)
+    if (!Number.isInteger(size) || size === draft.agents.length) return
+    if (size < draft.agents.length) {
+      void onUpdate({ ...draft, agents: draft.agents.slice(0, size) }, record.plan.planHash)
+    } else if (onReplan) {
+      void onReplan({
+        teamSize: size,
+        team: draft.agents.map(({ role, cli }) => ({ role, cli }))
+      })
+    }
+  }
+
+  const replanWithTeam = (): void => {
+    if (!onReplan) return
+    void onReplan({
+      teamSize: draft.agents.length,
+      team: draft.agents.map(({ role, cli }) => ({ role, cli }))
+    })
+  }
+
+  const modelLabel = (cli: PlannedCli): string => {
+    const model = connections.find((connection) => connection.id === cli)?.model
+    return model ? `${CLI_META[cli].label} · ${model}` : CLI_META[cli].label
+  }
+
   const applySuggestion = (index: number): void => {
     const suggestion = suggestions.get(index)
     if (!suggestion) return
-    const agents = draft.agents.map((agent, i) =>
-      i === index ? { ...agent, cli: routeCli(suggestion.target) } : agent
-    )
-    void onUpdate({ ...draft, agents }, record.plan.planHash)
+    changeCli(index, routeCli(suggestion.target))
   }
 
   const keepPlannedRoute = (index: number): void => {
@@ -163,6 +284,56 @@ export function PlanCard({
         {record.plan.spaceRoot}
       </code>
 
+      {/* w14/multi-agent-plan — team proposal header + size control */}
+      {teamRec && (
+        <p
+          data-testid="team-recommendation"
+          className="mt-1.5 rounded-md border px-2 py-1 text-[9.5px] leading-snug"
+          style={{ borderColor: `${colors.bronze}55`, color: colors.bronzeHot, background: `${colors.bronze}0d` }}
+        >
+          Orchestrator recommends {teamRec.size} agent{teamRec.size === 1 ? '' : 's'}
+          {teamRec.rationale ? ` — ${teamRec.rationale}` : ''}
+        </p>
+      )}
+      {record.state === 'PROPOSED' && (
+        <div className="mt-1.5 flex items-center gap-1.5">
+          <span className="text-[9px] font-semibold uppercase tracking-wide" style={{ color: colors.quartzDim }}>
+            Team size
+          </span>
+          <select
+            aria-label="Team size"
+            value={sizeChoice}
+            disabled={busy}
+            onChange={(event) => applyTeamSize(event.target.value)}
+            className="rounded-md border bg-black/10 px-1 py-0.5 text-[9px] font-semibold outline-none focus:ring-1 disabled:opacity-40"
+            style={{
+              borderColor: 'var(--color-line-strong)',
+              color: colors.quartz,
+              '--tw-ring-color': colors.bronze
+            } as React.CSSProperties}
+          >
+            <option value="auto">Auto</option>
+            {[1, 2, 3, 4, 5, 6].map((size) => (
+              <option key={size} value={size}>
+                {size}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            aria-label="Add agent"
+            title={draft.agents.length >= MAX_TEAM_AGENTS ? 'A plan holds at most 8 agents' : 'Add an agent'}
+            disabled={busy || draft.agents.length >= MAX_TEAM_AGENTS}
+            onClick={addAgent}
+            className="ml-auto flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[9px] font-semibold disabled:cursor-not-allowed disabled:opacity-40"
+            style={{ borderColor: 'var(--color-line-strong)', color: colors.quartz }}
+          >
+            <IconUserPlus size={11} stroke={1.8} />
+            Add agent
+          </button>
+        </div>
+      )}
+
       <div className="mt-2 space-y-1.5">
         {autoNotice.map((notice) => (
           <p
@@ -191,15 +362,33 @@ export function PlanCard({
             style={{ borderColor: 'var(--color-line)', background: 'rgba(0,0,0,0.1)' }}
           >
             <div className="flex min-w-0 items-center gap-1.5">
+              {/* w14/multi-agent-plan — avatar tint follows the assigned cli */}
+              <span
+                aria-hidden
+                className="size-2 shrink-0 rounded-full"
+                style={{ background: CLI_META[agent.cli].tint }}
+              />
               <span className="truncate text-[11px] font-semibold" style={{ color: colors.quartz }}>
                 {agent.role}
               </span>
-              <span
-                className="shrink-0 rounded px-1 py-px text-[8px] font-bold uppercase"
-                style={{ background: `${colors.working}20`, color: colors.working }}
+              <select
+                aria-label={`Model for ${agent.role}`}
+                value={agent.cli}
+                disabled={busy || record.state !== 'PROPOSED'}
+                onChange={(event) => changeCli(index, event.target.value as PlannedCli)}
+                className="ml-auto max-w-[130px] shrink-0 rounded-md border bg-black/10 px-1 py-0.5 text-[8.5px] font-semibold outline-none focus:ring-1 disabled:opacity-50"
+                style={{
+                  borderColor: 'var(--color-line-strong)',
+                  color: CLI_META[agent.cli].tint,
+                  '--tw-ring-color': colors.bronze
+                } as React.CSSProperties}
               >
-                {agent.cli}
-              </span>
+                {PLAN_CLIS.map((cli) => (
+                  <option key={cli} value={cli}>
+                    {modelLabel(cli)}
+                  </option>
+                ))}
+              </select>
               {record.state === 'PROPOSED' && (
                 <button
                   type="button"
@@ -207,7 +396,7 @@ export function PlanCard({
                   title={draft.agents.length <= 1 ? 'A plan needs at least one agent' : `Remove ${agent.role}`}
                   disabled={busy || draft.agents.length <= 1}
                   onClick={() => removeAgent(index)}
-                  className="ml-auto rounded p-0.5 disabled:cursor-not-allowed disabled:opacity-35"
+                  className="shrink-0 rounded p-0.5 disabled:cursor-not-allowed disabled:opacity-35"
                   style={{ color: colors.quartzDim }}
                 >
                   <IconUserMinus size={12} stroke={1.8} />
@@ -289,6 +478,21 @@ export function PlanCard({
             <IconCheck size={12} stroke={2.2} />
             Approve &amp; Run
           </button>
+          {/* w14/multi-agent-plan — re-plan the same goal keeping this team */}
+          {onReplan && (
+            <button
+              type="button"
+              aria-label="Re-plan with this team"
+              title="Re-plan the same goal keeping this team size and model split"
+              disabled={busy}
+              onClick={replanWithTeam}
+              className="flex items-center gap-1 rounded-md border px-2 py-1.5 text-[10px] disabled:opacity-50"
+              style={{ borderColor: 'var(--color-line-strong)', color: colors.quartz }}
+            >
+              <IconRefresh size={11} stroke={1.8} />
+              Re-plan
+            </button>
+          )}
           <button
             type="button"
             disabled={busy}

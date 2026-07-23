@@ -1151,3 +1151,24 @@ export interface MorzRunApi {
   listRuns(spaceRoot?: string): Promise<RunSummary[]>
 }
 // end w14/orch-scoped
+
+// w14/multi-agent-plan — append-only team-proposal contract.
+// The planner model returns recommendedTeamSize + rationale alongside the
+// SpawnPlan JSON; Main strips them before schema validation and surfaces them
+// on the plan response. Plan requests may carry user team constraints (size /
+// composition) so a re-plan keeps the user's team without touching the goal.
+import type { PlannedCli } from './spawn-plan'
+export interface PlanTeamOptions {
+  /** Required team size for a re-plan (1-8). */
+  teamSize?: number
+  /** Proposed composition to preserve on a re-plan. */
+  team?: Array<{ role: string; cli: PlannedCli }>
+}
+export interface StoredSpawnPlan {
+  recommendedTeamSize?: number
+  teamRationale?: string
+}
+export interface PlannerBridge {
+  plan(goal: string, spaceRoot: string, teamOptions?: PlanTeamOptions): Promise<StoredSpawnPlan>
+}
+// end w14/multi-agent-plan

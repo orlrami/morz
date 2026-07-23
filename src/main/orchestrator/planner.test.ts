@@ -162,6 +162,95 @@ test('hashSpawnPlan is key-order stable and changes when an editable prompt chan
   assert.notEqual(hashSpawnPlan(basePlan), hashSpawnPlan(edited))
 })
 
+// w14/multi-agent-plan
+test('validateSpawnPlan drops self-edges and breaks dependsOn cycles with warnings', () => {
+  const selfDep = structuredClone(basePlan) as SpawnPlan
+  selfDep.agents[0].dependsOn = ['builder', 'external-task']
+  const selfResult = validateSpawnPlan(selfDep)
+  assert.equal(selfResult.ok, true)
+  assert.deepEqual(selfResult.value?.agents[0].dependsOn, ['external-task'])
+  assert.match(selfResult.warnings.join('\n'), /self-edge/)
+
+  const cyclic = structuredClone(basePlan) as SpawnPlan
+  cyclic.agents.push({
+    ...structuredClone(cyclic.agents[0]),
+    agentId: 'reviewer',
+    branch: 'run/planner/reviewer'
+  })
+  cyclic.agents[0].dependsOn = ['reviewer']
+  cyclic.agents[1].dependsOn = ['builder']
+  const cycleResult = validateSpawnPlan(cyclic)
+  assert.equal(cycleResult.ok, true)
+  assert.deepEqual(cycleResult.value?.agents[0].dependsOn, [])
+  assert.deepEqual(cycleResult.value?.agents[1].dependsOn, [])
+  assert.match(cycleResult.warnings.join('\n'), /cycle/)
+
+  const acyclic = structuredClone(cyclic) as SpawnPlan
+  acyclic.agents[0].dependsOn = []
+  acyclic.agents[1].dependsOn = ['builder']
+  const acyclicResult = validateSpawnPlan(acyclic)
+  assert.deepEqual(acyclicResult.value?.agents[1].dependsOn, ['builder'])
+  assert.deepEqual(acyclicResult.warnings, [])
+})
+
+test('the planner surfaces recommendedTeamSize + rationale and threads team constraints', async () => {
+  const prompts: string[] = []
+  const result = await planGoalWithEngine(
+    'Build a Tetris game',
+    'C:\\Projects\\morz-planner',
+    'claude',
+    {
+      createId: () => '00000000-0000-4000-8000-000000000001',
+      now: () => '2026-07-14T12:00:00.000Z',
+      runClaude: async (prompt) => {
+        prompts.push(prompt)
+        return fenced({
+          ...structuredClone(basePlan),
+          goal: '*',
+          recommendedTeamSize: 3,
+          rationale: 'architecture, implementation, and math split by strength'
+        })
+      }
+    },
+    { teamSize: 3, team: [{ role: 'Builder', cli: 'codex' }] }
+  )
+
+  assert.equal(result.recommendedTeamSize, 3)
+  assert.match(result.teamRationale ?? '', /split by strength/)
+  assert.match(prompts[0], /exactly 3 agents/)
+  assert.match(prompts[0], /"cli":"codex"/)
+  assert.equal(result.plan.goal, 'Build a Tetris game')
+})
+
+test('plan edits may append a new agent but never take over an original branch', () => {
+  const appended = structuredClone(basePlan)
+  appended.agents.push({
+    agentId: 'reviewer',
+    cli: 'codex',
+    role: 'Reviewer',
+    branch: 'run/planner/reviewer',
+    worktree: null,
+    cwd: '',
+    promptSeed: 'Review the implementation.',
+    dependsOn: ['builder'],
+    port: null
+  })
+  assert.doesNotThrow(() => assertPlanEditAllowed(basePlan, appended))
+
+  const takeover = structuredClone(appended)
+  takeover.agents[1].branch = basePlan.agents[0].branch
+  assert.throws(() => assertPlanEditAllowed(basePlan, takeover), /immutable/)
+
+  const idSwap = structuredClone(basePlan)
+  idSwap.agents[0].agentId = 'attacker'
+  assert.throws(() => assertPlanEditAllowed(basePlan, idSwap), /immutable/)
+
+  const prepend = structuredClone(appended)
+  prepend.agents.reverse()
+  assert.throws(() => assertPlanEditAllowed(basePlan, prepend), /immutable|append/)
+})
+// end w14/multi-agent-plan
+
 test('plan edits allow prompt changes and removal but reject immutable field rewrites', () => {
   const promptEdit = structuredClone(basePlan)
   promptEdit.agents[0].promptSeed = 'New prompt'

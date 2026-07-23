@@ -6,6 +6,7 @@ import type {
   PlannerBridge,
   PlannerEngine,
   PlannerEngineBridge,
+  PlanTeamOptions, // w14/multi-agent-plan
   StoredPlanAmendment,
   StoredSpawnPlan
 } from '@shared/ipc'
@@ -327,6 +328,29 @@ function PlannerFlow(): JSX.Element {
       setRecord(next)
     })
 
+  // w14/multi-agent-plan — re-plan the same goal with user team constraints;
+  // the old proposed plan is discarded only after the new one lands.
+  const replanTeam = (options: PlanTeamOptions): Promise<void> => {
+    const planner = getPlanner()
+    if (!planner || !record) return Promise.resolve()
+    setStatus('Planning')
+    const previous = record
+    return run(async () => {
+      const next = await planner.plan(previous.plan.goal, previous.plan.spaceRoot, options)
+      setRecord(next)
+      setEngineNotice(next.notice ?? '')
+      setStatus('')
+      if (previous.state === 'PROPOSED') {
+        try {
+          await planner.discard(previous.plan.planHash)
+        } catch {
+          // The superseded proposal may already be gone; the new plan stands.
+        }
+      }
+    })
+  }
+  // end w14/multi-agent-plan
+
   const approvePlan = (planHash: string): Promise<void> =>
     run(async () => {
       const approved = await getPlanner()!.approveAndRun(planHash)
@@ -464,6 +488,7 @@ function PlannerFlow(): JSX.Element {
           onUpdate={updatePlan}
           onApprove={approvePlan}
           onDiscard={discardPlan}
+          onReplan={replanTeam} // w14/multi-agent-plan
         />
       )}
 
