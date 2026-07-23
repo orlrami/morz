@@ -153,7 +153,7 @@ test.describe('orchestrator plan edit contract', () => {
   })
 })
 
-test('an orchestrated auto-route attempts a rejected plan hash only once', async () => {
+test('an orchestrated plan is never rewritten silently; routes surface as chips', async () => {
   const morz = await launchMorz()
   try {
     await morz.app.evaluate(({ ipcMain }) => {
@@ -194,19 +194,26 @@ test('an orchestrated auto-route attempts a rejected plan hash only once', async
     await page.getByRole('radio', { name: 'Orchestrated' }).click()
     await page.getByRole('textbox', { name: 'Goal' }).fill('Review the orchestrator plan flow')
     await page.getByRole('button', { name: 'Plan team' }).click()
-    await expect(page.getByRole('alert')).toContainText('Auto-route update rejected')
+    // The proposal stands as planned (claude) and the review rule is a chip.
+    const card = page.getByRole('region', { name: 'Spawn plan' })
+    await expect(card.getByRole('combobox', { name: 'Model for Architect reviewer' })).toHaveValue(
+      'claude'
+    )
+    await expect(
+      card.getByTestId('route-chip').filter({ hasText: "Route 'Architect reviewer' to Codex?" })
+    ).toBeVisible()
     await page.waitForTimeout(1_000)
 
     const attempts = await morz.app.evaluate(
       () => (globalThis as unknown as { __morzRouteUpdates: number }).__morzRouteUpdates
     )
-    expect(attempts).toBe(1)
+    expect(attempts).toBe(0)
   } finally {
     await closeMorz(morz.app)
   }
 })
 
-test('live Claude planning auto-routes and reaches dispatch without an immutable-field error', async () => {
+test('live Claude planning surfaces a route chip and reaches dispatch without an immutable-field error', async () => {
   test.skip(process.env.MORZ_LIVE_PLANNER !== '1', 'set MORZ_LIVE_PLANNER=1 for the live route proof')
   test.setTimeout(300_000)
   const morz = await launchMorz()
@@ -222,7 +229,9 @@ test('live Claude planning auto-routes and reaches dispatch without an immutable
 
     const card = page.getByRole('region', { name: 'Spawn plan' })
     await expect(card).toBeVisible({ timeout: 150_000 })
-    await expect(card.getByTestId('routing-auto-notice')).toContainText('Codex')
+    const chip = card.getByTestId('route-chip').filter({ hasText: 'Codex' })
+    await expect(chip).toBeVisible()
+    await chip.getByRole('button', { name: 'Apply' }).click()
     await expect(card.getByText('codex', { exact: true })).toBeVisible()
     await expect(page.getByText(/immutable fields/)).toHaveCount(0)
 

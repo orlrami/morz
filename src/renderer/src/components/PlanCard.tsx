@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import { IconCheck, IconRefresh, IconTrash, IconUserMinus, IconUserPlus } from '@tabler/icons-react'
 import type { PlannedAgent, PlannedCli, SpawnPlan } from '@shared/spawn-plan'
@@ -24,6 +24,25 @@ const ROUTE_LABEL: Record<RoutingTarget, string> = {
 
 function routeCli(target: RoutingTarget): 'agy' | 'codex' | 'claude' {
   return target === 'local' ? 'claude' : target
+}
+
+// w15/plan-route-optin — a saved per-role default surfaces as an opt-in chip,
+// shaped like a rule decision so both share one suggestion pipeline.
+const SAVED_DEFAULT_RULE_ID = 'saved-default'
+
+function savedDefaultDecision(cli: PlannedCli): RouteDecision {
+  return {
+    target: cli,
+    reason: 'You picked this model for the role last time.',
+    rule: {
+      id: SAVED_DEFAULT_RULE_ID,
+      label: 'Saved default',
+      match: { keywords: [], regex: [] },
+      target: cli,
+      reason: 'You picked this model for the role last time.',
+      enabled: true
+    }
+  }
 }
 
 // w14/multi-agent-plan — per-cli avatar tint + display label for team rows.
@@ -56,16 +75,12 @@ export function PlanCard({
 }: PlanCardProps): JSX.Element {
   const [draft, setDraft] = useState(record.plan)
   const [suggestions, setSuggestions] = useState<Map<number, RouteDecision>>(new Map())
-  const [autoNotice, setAutoNotice] = useState<string[]>([])
-  const [autoRouteError, setAutoRouteError] = useState('')
   // w14/multi-agent-plan — the recommendation only rides on the plan response,
   // so keep it per plan id across hash-changing edits.
   const [teamRec, setTeamRec] = useState<{ planId: string; size: number; rationale: string } | null>(
     null
   )
   const [sizeChoice, setSizeChoice] = useState('auto')
-  const autoAttemptedHashes = useRef(new Set<string>())
-  const onUpdateRef = useRef(onUpdate)
   const mode = useModeStore((state) => state.mode)
   const routeTask = useRoutingStore((state) => state.routeTask)
   // w14/multi-agent-plan — remembered per-role model defaults + connection models.
@@ -76,12 +91,8 @@ export function PlanCard({
   const hasUnsavedEdits = JSON.stringify(draft.agents) !== JSON.stringify(record.plan.agents)
 
   useEffect(() => setDraft(record.plan), [record.plan])
-  useEffect(() => setAutoRouteError(''), [record.plan.planHash])
   useEffect(() => setSizeChoice('auto'), [record.plan.id])
   useEffect(() => startConnections(), [startConnections])
-  useEffect(() => {
-    onUpdateRef.current = onUpdate
-  }, [onUpdate])
   useEffect(() => {
     if (record.recommendedTeamSize) {
       setTeamRec({
@@ -95,9 +106,10 @@ export function PlanCard({
   }, [record])
 
   // w8/routing — rules-only suggestions; no model/classifier call occurs here.
-  // w14/multi-agent-plan — the user's remembered per-role model defaults are
-  // applied first (any non-manual mode) and outrank rule routing; both flow
-  // through ONE update per plan hash so concurrent updates can never race.
+  // w15/plan-route-optin — NOTHING rewrites the planner's proposal silently.
+  // The planner's per-agent cli stands as proposed; saved per-role defaults and
+  // rule routes both surface as opt-in chips (saved default outranks the rule),
+  // so the plan the user approves is exactly the plan the card shows.
   useEffect(() => {
     if (mode === 'manual' || record.state !== 'PROPOSED') {
       setSuggestions(new Map())
@@ -110,48 +122,19 @@ export function PlanCard({
       )
     ).then((decisions) => {
       if (cancelled) return
-      const remembered = new Map<number, PlannedCli>()
+      const next = new Map<number, RouteDecision>()
       record.plan.agents.forEach((agent, index) => {
         const preferred = teamDefaults[roleKey(agent.role)]
-        if (preferred && preferred !== agent.cli) remembered.set(index, preferred)
-      })
-      const next = new Map<number, RouteDecision>()
-      decisions.forEach((decision, index) => {
-        const agent = record.plan.agents[index]
-        if (!decision || !agent || remembered.has(index)) return
+        if (preferred && preferred !== agent.cli) {
+          next.set(index, savedDefaultDecision(preferred))
+          return
+        }
+        const decision = decisions[index]
+        if (!decision) return
         const compatibleLocal = decision.target === 'local' && agent.cli === 'claude'
         if (!compatibleLocal && routeCli(decision.target) !== agent.cli) next.set(index, decision)
       })
       setSuggestions(next)
-
-      const autoRoute = mode === 'orchestrated' ? next : new Map<number, RouteDecision>()
-      if (
-        (remembered.size > 0 || autoRoute.size > 0) &&
-        !autoAttemptedHashes.current.has(record.plan.planHash)
-      ) {
-        autoAttemptedHashes.current.add(record.plan.planHash)
-        setAutoRouteError('')
-        const agents = record.plan.agents.map((agent, index) => {
-          const preferred = remembered.get(index)
-          if (preferred) return { ...agent, cli: preferred }
-          const suggestion = autoRoute.get(index)
-          return suggestion ? { ...agent, cli: routeCli(suggestion.target) } : agent
-        })
-        setAutoNotice([
-          ...[...remembered].map(
-            ([index, cli]) =>
-              `Pre-filled ${record.plan.agents[index].role} with your ${CLI_META[cli].label} default`
-          ),
-          ...[...autoRoute].map(
-            ([index, decision]) =>
-              `Auto-routed ${record.plan.agents[index].role} to ${ROUTE_LABEL[decision.target]}`
-          )
-        ])
-        void onUpdateRef.current({ ...record.plan, agents }, record.plan.planHash).catch((reason: unknown) => {
-          setAutoNotice([])
-          setAutoRouteError(reason instanceof Error ? reason.message : String(reason))
-        })
-      }
     })
     return () => {
       cancelled = true
@@ -335,26 +318,6 @@ export function PlanCard({
       )}
 
       <div className="mt-2 space-y-1.5">
-        {autoNotice.map((notice) => (
-          <p
-            key={notice}
-            data-testid="routing-auto-notice"
-            className="rounded-md border px-2 py-1 text-[9px]"
-            style={{ borderColor: `${colors.working}55`, color: colors.working, background: `${colors.working}0d` }}
-          >
-            {notice}
-          </p>
-        ))}
-        {autoRouteError && (
-          <p
-            role="alert"
-            data-testid="routing-auto-error"
-            className="rounded-md border px-2 py-1 text-[9px] leading-snug"
-            style={{ borderColor: `${colors.error}55`, color: colors.error, background: `${colors.error}0d` }}
-          >
-            Auto-route update failed: {autoRouteError}
-          </p>
-        )}
         {draft.agents.map((agent, index) => (
           <div
             key={agent.agentId}
@@ -406,13 +369,16 @@ export function PlanCard({
             <code className="mt-0.5 block truncate text-[9px]" style={{ color: colors.quartzDim }} title={agent.branch}>
               {agent.branch}
             </code>
-            {mode === 'assisted' && suggestions.has(index) && (
+            {mode !== 'manual' && suggestions.has(index) && (
               <div
+                data-testid="route-chip"
                 className="mt-1.5 flex items-center gap-1 rounded-md border px-2 py-1"
                 style={{ borderColor: `${colors.bronze}66`, background: `${colors.bronze}0d` }}
               >
                 <span className="min-w-0 flex-1 truncate text-[9px]" style={{ color: colors.bronzeHot }}>
-                  Route &apos;{agent.role}&apos; to {ROUTE_LABEL[suggestions.get(index)!.target]}?
+                  {suggestions.get(index)!.rule.id === SAVED_DEFAULT_RULE_ID
+                    ? `Use your ${ROUTE_LABEL[suggestions.get(index)!.target]} default for '${agent.role}'?`
+                    : `Route '${agent.role}' to ${ROUTE_LABEL[suggestions.get(index)!.target]}?`}
                 </span>
                 <button
                   type="button"
