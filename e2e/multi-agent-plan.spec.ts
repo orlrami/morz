@@ -123,7 +123,6 @@ test.describe('multi-agent team proposal card', () => {
 
     await card.getByRole('button', { name: 'Remove Math specialist' }).click()
     await expect(card.getByRole('combobox', { name: /^Model for / })).toHaveCount(2)
-    await expect(page.getByTestId('routing-auto-error')).toHaveCount(0)
 
     await card.getByRole('button', { name: 'Add agent' }).click()
     await expect(card.getByRole('combobox', { name: /^Model for / })).toHaveCount(3)
@@ -142,7 +141,7 @@ test.describe('multi-agent team proposal card', () => {
     await expect(card.getByRole('combobox', { name: 'Model for Builder' })).toBeVisible()
   })
 
-  test('a model swap persists as the role default and pre-fills the next plan', async () => {
+  test('a model swap persists as the role default and offers it as a chip on the next plan', async () => {
     const { page } = morz
     const card = page.getByRole('region', { name: 'Spawn plan' })
     await card.getByRole('combobox', { name: 'Model for Builder' }).selectOption('agy')
@@ -150,11 +149,15 @@ test.describe('multi-agent team proposal card', () => {
 
     await card.getByRole('button', { name: 'Discard' }).click()
     await page.getByRole('button', { name: 'Plan team' }).click()
-    // The stub proposes codex again; the remembered per-role default wins.
+    // The stub proposes codex again; the proposal stands untouched and the
+    // remembered per-role default is an opt-in chip, never a silent rewrite.
+    await expect(card.getByRole('combobox', { name: 'Model for Builder' })).toHaveValue('codex')
+    const chip = card
+      .getByTestId('route-chip')
+      .filter({ hasText: "Use your Antigravity default for 'Builder'?" })
+    await expect(chip).toBeVisible()
+    await chip.getByRole('button', { name: 'Apply' }).click()
     await expect(card.getByRole('combobox', { name: 'Model for Builder' })).toHaveValue('agy')
-    await expect(page.getByTestId('routing-auto-notice').first()).toContainText(
-      'Pre-filled Builder with your Antigravity default'
-    )
   })
 })
 
