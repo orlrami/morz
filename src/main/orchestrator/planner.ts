@@ -6,6 +6,7 @@ import { dirname, isAbsolute, join } from 'node:path'
 import Database from 'better-sqlite3'
 import type {
   PlanAmendmentAction,
+  PlannerClaudeModel,
   PlannerEngine,
   PlanTeamOptions,
   StoredPlanAmendment,
@@ -54,6 +55,8 @@ export interface PlannerDependencies {
   runEngine?: (engine: PlannerEngine, prompt: string, spaceRoot: string) => Promise<string>
   createId?: () => string
   now?: () => string
+  /** w15/planner-fast-default — Claude model for the claude engine (default sonnet). */
+  claudeModel?: PlannerClaudeModel
 }
 
 export interface PlannerResult {
@@ -427,14 +430,21 @@ For any non-trivial goal propose 2-4 specialist agents with dependsOn edges (arc
 }
 // end w14/multi-agent-plan
 
-async function runClaudePlanner(prompt: string): Promise<string> {
+// w15/planner-fast-default — CLI flag per selectable Claude planner model.
+const CLAUDE_MODEL_FLAG: Record<PlannerClaudeModel, string> = {
+  sonnet: 'sonnet',
+  opus: 'opus',
+  fable: 'claude-fable-5'
+}
+
+async function runClaudePlanner(prompt: string, model: PlannerClaudeModel = 'sonnet'): Promise<string> {
   if (prompt.length > MAX_PLANNER_PROMPT_CHARS) throw new Error('Planner prompt is too large')
   return new Promise((resolve, reject) => {
     // The prompt goes over stdin: a multi-hundred-line goal overflows the
     // Windows argv limit (~32k chars) if passed to -p as an argument.
     const child = spawn(
       'claude',
-      ['-p', '--output-format', 'stream-json', '--verbose', '--tools', ''],
+      ['-p', '--model', CLAUDE_MODEL_FLAG[model], '--output-format', 'stream-json', '--verbose', '--tools', ''],
       { windowsHide: true, shell: false, stdio: ['pipe', 'pipe', 'pipe'] }
     )
     let stdout = ''
@@ -551,7 +561,7 @@ function stopAdapterLane(adapter: AgentAdapter, agentId: string): void {
   }
 }
 
-async function runAdapterPlanner(engine: Exclude<PlannerEngine, 'claude'>, prompt: string, cwd: string): Promise<string> {
+async function runAdapterPlanner(engine: Exclude<PlannerEngine, 'claude' | 'fast'>, prompt: string, cwd: string): Promise<string> {
   const cli = engine === 'local' ? 'agy' : 'codex'
   const { getAdapter } = await import('../adapters/registry')
   const adapter = getAdapter(cli)
@@ -754,7 +764,7 @@ function rejectUnknownFieldsOrThrow(object: Record<string, unknown>, allowed: re
 async function generatePlan(
   rawGoal: string,
   spaceRoot: string,
-  engine: PlannerEngine,
+  engine: Exclude<PlannerEngine, 'fast'>,
   dependencies: PlannerDependencies,
   teamOptions?: PlanTeamOptions // w14/multi-agent-plan
 ): Promise<GeneratedPlan> {
@@ -771,7 +781,12 @@ async function generatePlan(
     if (process.env.MORZ_E2E === '1') {
       return e2ePlannerResponse(selected, goal, root, id, createdAt)
     }
-    if (selected === 'claude') return (dependencies.runClaude ?? runClaudePlanner)(prompt)
+    if (selected === 'fast') throw new Error('fast engine must be resolved before generatePlan')
+    if (selected === 'claude') {
+      return dependencies.runClaude
+        ? dependencies.runClaude(prompt)
+        : runClaudePlanner(prompt, dependencies.claudeModel ?? 'sonnet')
+    }
     return runAdapterPlanner(selected, prompt, root)
   })
   let issues: string[] | undefined
@@ -842,6 +857,33 @@ export async function planGoalWithEngine(
   dependencies: PlannerDependencies = {},
   teamOptions?: PlanTeamOptions // w14/multi-agent-plan
 ): Promise<PlannerResult> {
+  // w15/planner-fast-default — 'fast' races Claude (Sonnet) against Codex
+  // (GPT-5.5); the first schema-valid plan wins. Under MORZ_E2E the race
+  // degrades to the deterministic claude→codex path so stubs stay stable.
+  if (engine === 'fast') {
+    if (process.env.MORZ_E2E === '1') {
+      return planGoalWithEngine(rawGoal, spaceRoot, 'claude', dependencies, teamOptions)
+    }
+    const race = (contender: 'claude' | 'codex'): Promise<PlannerResult> =>
+      generatePlan(rawGoal, spaceRoot, contender, dependencies, teamOptions).then((generated) => ({
+        plan: generated.plan,
+        engine: contender,
+        warnings: generated.warnings,
+        recommendedTeamSize: generated.recommendedTeamSize,
+        teamRationale: generated.teamRationale
+      }))
+    try {
+      return await Promise.any([race('claude'), race('codex')])
+    } catch (error) {
+      const reasons =
+        error instanceof AggregateError
+          ? error.errors.map((e) => (e instanceof Error ? e.message : String(e))).join(' | ')
+          : error instanceof Error
+            ? error.message
+            : String(error)
+      throw new Error(`Both fast planners failed — ${reasons}`)
+    }
+  }
   try {
     const generated = await generatePlan(rawGoal, spaceRoot, engine, dependencies, teamOptions)
     return {
@@ -922,13 +964,21 @@ function assertHash(value: unknown, label: string): asserts value is string {
 }
 
 // w12/orch-engine
-const PLANNER_ENGINES = new Set<PlannerEngine>(['claude', 'codex', 'local'])
+const PLANNER_ENGINES = new Set<PlannerEngine>(['fast', 'claude', 'codex', 'local'])
+const PLANNER_CLAUDE_MODELS = new Set<PlannerClaudeModel>(['sonnet', 'opus', 'fable'])
 
 function normalizePlannerEngine(value: unknown): PlannerEngine {
   if (typeof value !== 'string' || !PLANNER_ENGINES.has(value as PlannerEngine)) {
-    throw new Error('Planner engine must be claude, codex, or local')
+    throw new Error('Planner engine must be fast, claude, codex, or local')
   }
   return value as PlannerEngine
+}
+
+function normalizePlannerClaudeModel(value: unknown): PlannerClaudeModel {
+  if (typeof value !== 'string' || !PLANNER_CLAUDE_MODELS.has(value as PlannerClaudeModel)) {
+    throw new Error('Planner Claude model must be sonnet, opus, or fable')
+  }
+  return value as PlannerClaudeModel
 }
 
 class PlannerEngineStore {
@@ -938,14 +988,39 @@ class PlannerEngineStore {
     mkdirSync(dirname(dbPath), { recursive: true })
     this.db = new Database(dbPath)
     this.db.pragma('journal_mode = WAL')
+    // w15/planner-fast-default — migrate the w12 table: the CHECK gains
+    // 'fast', a claude_model column appears, and rows still on the old
+    // default ('claude') move to the new default ('fast'); explicit
+    // codex/local choices are preserved.
+    const existing = this.db
+      .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'orchestrator_planner_settings'")
+      .get() as { sql?: string } | undefined
+    if (existing?.sql && !existing.sql.includes("'fast'")) {
+      this.db.exec(`
+        BEGIN;
+        ALTER TABLE orchestrator_planner_settings RENAME TO orchestrator_planner_settings_w12;
+        CREATE TABLE orchestrator_planner_settings (
+          id INTEGER PRIMARY KEY CHECK (id = 1),
+          engine TEXT NOT NULL CHECK (engine IN ('fast', 'claude', 'codex', 'local')),
+          claude_model TEXT NOT NULL DEFAULT 'sonnet' CHECK (claude_model IN ('sonnet', 'opus', 'fable')),
+          updated_at TEXT NOT NULL
+        );
+        INSERT INTO orchestrator_planner_settings (id, engine, claude_model, updated_at)
+        SELECT id, CASE engine WHEN 'claude' THEN 'fast' ELSE engine END, 'sonnet', updated_at
+        FROM orchestrator_planner_settings_w12;
+        DROP TABLE orchestrator_planner_settings_w12;
+        COMMIT;
+      `)
+    }
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS orchestrator_planner_settings (
         id INTEGER PRIMARY KEY CHECK (id = 1),
-        engine TEXT NOT NULL CHECK (engine IN ('claude', 'codex', 'local')),
+        engine TEXT NOT NULL CHECK (engine IN ('fast', 'claude', 'codex', 'local')),
+        claude_model TEXT NOT NULL DEFAULT 'sonnet' CHECK (claude_model IN ('sonnet', 'opus', 'fable')),
         updated_at TEXT NOT NULL
       );
-      INSERT OR IGNORE INTO orchestrator_planner_settings (id, engine, updated_at)
-      VALUES (1, 'claude', CURRENT_TIMESTAMP);
+      INSERT OR IGNORE INTO orchestrator_planner_settings (id, engine, claude_model, updated_at)
+      VALUES (1, 'fast', 'sonnet', CURRENT_TIMESTAMP);
     `)
   }
 
@@ -953,7 +1028,7 @@ class PlannerEngineStore {
     const row = this.db
       .prepare('SELECT engine FROM orchestrator_planner_settings WHERE id = 1')
       .get() as { engine?: unknown } | undefined
-    return normalizePlannerEngine(row?.engine ?? 'claude')
+    return normalizePlannerEngine(row?.engine ?? 'fast')
   }
 
   set(value: unknown): PlannerEngine {
@@ -962,6 +1037,21 @@ class PlannerEngineStore {
       .prepare('UPDATE orchestrator_planner_settings SET engine = ?, updated_at = ? WHERE id = 1')
       .run(engine, new Date().toISOString())
     return engine
+  }
+
+  getModel(): PlannerClaudeModel {
+    const row = this.db
+      .prepare('SELECT claude_model FROM orchestrator_planner_settings WHERE id = 1')
+      .get() as { claude_model?: unknown } | undefined
+    return normalizePlannerClaudeModel(row?.claude_model ?? 'sonnet')
+  }
+
+  setModel(value: unknown): PlannerClaudeModel {
+    const model = normalizePlannerClaudeModel(value)
+    this.db
+      .prepare('UPDATE orchestrator_planner_settings SET claude_model = ?, updated_at = ? WHERE id = 1')
+      .run(model, new Date().toISOString())
+    return model
   }
 
   close(): void {
@@ -980,6 +1070,8 @@ export async function registerPlannerEngineIpc(): Promise<void> {
   const store = engineStore(join(app.getPath('appData'), 'Morz', 'morz.db'))
   ipcMain.handle(PlannerEngineApi.get, () => store.get())
   ipcMain.handle(PlannerEngineApi.set, (_event, value: unknown) => store.set(value))
+  ipcMain.handle(PlannerEngineApi.getModel, () => store.getModel())
+  ipcMain.handle(PlannerEngineApi.setModel, (_event, value: unknown) => store.setModel(value))
   app.once('before-quit', () => {
     store.close()
     plannerEngineStore = null
@@ -1002,7 +1094,7 @@ export async function registerPlannerIpc(dispatcher: DispatchPort = new LoggingD
         String(input.goal ?? ''),
         String(input.spaceRoot ?? ''),
         engineStore(dbPath).get(),
-        {},
+        { claudeModel: engineStore(dbPath).getModel() },
         validatePlanTeamOptions(input.teamOptions) // w14/multi-agent-plan
       )
       const draft = store.createDraft(result.plan)

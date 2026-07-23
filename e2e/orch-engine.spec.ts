@@ -17,7 +17,9 @@ test.describe.serial('Orchestrator planner engine', () => {
 
   test('selecting Codex routes planning to the Codex adapter stub and persists', async () => {
     const selector = morz.page.getByRole('combobox', { name: 'Planner engine' })
-    await expect(selector).toHaveValue('claude')
+    // w15/planner-fast-default — fresh installs default to the fast race.
+    await expect(selector).toHaveValue('fast')
+    await expect(morz.page.getByRole('combobox', { name: 'Planner Claude model' })).toHaveValue('sonnet')
     await selector.selectOption('codex')
 
     await morz.page.getByRole('textbox', { name: 'Goal' }).fill('MORZ_E2E codex route')

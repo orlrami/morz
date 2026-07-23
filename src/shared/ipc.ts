@@ -1081,16 +1081,25 @@ export interface SessionResumeTestBridge {
 // end w12/sessions-resume
 
 // w12/orch-engine — append-only planner engine selection contract.
-export type PlannerEngine = 'claude' | 'codex' | 'local'
+// w15/planner-fast-default — 'fast' races Claude (Sonnet) against Codex
+// (GPT-5.5); first valid plan wins. Default engine for new installs.
+export type PlannerEngine = 'fast' | 'claude' | 'codex' | 'local'
+
+/** Which Claude model the planner uses when the claude engine runs. */
+export type PlannerClaudeModel = 'sonnet' | 'opus' | 'fable'
 
 export const PlannerEngineApi = {
   get: 'planner-engine:get',
-  set: 'planner-engine:set'
+  set: 'planner-engine:set',
+  getModel: 'planner-engine:get-model',
+  setModel: 'planner-engine:set-model'
 } as const
 
 export interface PlannerEngineBridge {
   get(): Promise<PlannerEngine>
   set(engine: PlannerEngine): Promise<PlannerEngine>
+  getModel(): Promise<PlannerClaudeModel>
+  setModel(model: PlannerClaudeModel): Promise<PlannerClaudeModel>
 }
 
 export interface StoredSpawnPlan {
