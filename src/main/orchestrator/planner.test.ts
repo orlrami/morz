@@ -144,6 +144,55 @@ test('a repaired plan is accepted on the first attempt without consuming the ret
   assert.ok(result.warnings.length >= 2)
 })
 
+// w15/planner-fast-default — the 'fast' engine races Claude against Codex.
+test('the fast engine falls through to Codex when Claude cannot produce a plan', async () => {
+  const engines: string[] = []
+  const result = await planGoalWithEngine('Ship the planner', 'C:\\Projects\\morz-planner', 'fast', {
+    createId: () => '00000000-0000-4000-8000-000000000001',
+    now: () => '2026-07-14T12:00:00.000Z',
+    runEngine: async (engine) => {
+      engines.push(engine)
+      if (engine === 'claude') throw new Error('claude unavailable')
+      return fenced(basePlan)
+    }
+  })
+  assert.equal(result.engine, 'codex')
+  assert.ok(engines.includes('claude'))
+  assert.ok(engines.includes('codex'))
+})
+
+test('the fast engine returns the first valid plan without waiting for the loser', async () => {
+  let codexSettled = false
+  const result = await planGoalWithEngine('Ship the planner', 'C:\\Projects\\morz-planner', 'fast', {
+    createId: () => '00000000-0000-4000-8000-000000000001',
+    now: () => '2026-07-14T12:00:00.000Z',
+    runEngine: (engine) => {
+      if (engine === 'claude') return Promise.resolve(fenced(basePlan))
+      return new Promise((resolve) =>
+        setTimeout(() => {
+          codexSettled = true
+          resolve(fenced(basePlan))
+        }, 150).unref()
+      )
+    }
+  })
+  assert.equal(result.engine, 'claude')
+  assert.equal(codexSettled, false)
+})
+
+test('the fast engine surfaces both failures when neither contender delivers', async () => {
+  await assert.rejects(
+    planGoalWithEngine('Ship the planner', 'C:\\Projects\\morz-planner', 'fast', {
+      createId: () => '00000000-0000-4000-8000-000000000001',
+      now: () => '2026-07-14T12:00:00.000Z',
+      runEngine: async () => {
+        throw new Error('planner offline')
+      }
+    }),
+    /Both fast planners failed/
+  )
+})
+
 test('hashSpawnPlan is key-order stable and changes when an editable prompt changes', () => {
   const reordered = {
     planHash: basePlan.planHash,

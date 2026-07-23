@@ -785,13 +785,17 @@ if (process.env.MORZ_E2E_SESSIONS_RESUME_STUB === '1') {
 // w12/orch-engine — append-only isolated planner engine bridge.
 import {
   PlannerEngineApi as PlannerEngineChannels,
+  type PlannerClaudeModel,
   type PlannerEngine,
   type PlannerEngineBridge
 } from '../shared/ipc'
 
 const plannerEngineBridge: PlannerEngineBridge = {
   get: (): Promise<PlannerEngine> => ipcRenderer.invoke(PlannerEngineChannels.get),
-  set: (engine): Promise<PlannerEngine> => ipcRenderer.invoke(PlannerEngineChannels.set, engine)
+  set: (engine): Promise<PlannerEngine> => ipcRenderer.invoke(PlannerEngineChannels.set, engine),
+  getModel: (): Promise<PlannerClaudeModel> => ipcRenderer.invoke(PlannerEngineChannels.getModel),
+  setModel: (model): Promise<PlannerClaudeModel> =>
+    ipcRenderer.invoke(PlannerEngineChannels.setModel, model)
 }
 
 contextBridge.exposeInMainWorld('morzPlannerEngine', plannerEngineBridge)

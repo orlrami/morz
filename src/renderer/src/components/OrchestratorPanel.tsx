@@ -4,6 +4,7 @@ import { IconClipboardList, IconFlask, IconHandStop, IconSparkles } from '@table
 import type { Message, Part, Task, TaskState } from '@shared/bus'
 import type {
   PlannerBridge,
+  PlannerClaudeModel,
   PlannerEngine,
   PlannerEngineBridge,
   PlanTeamOptions, // w14/multi-agent-plan
@@ -242,7 +243,10 @@ function PlannerFlow(): JSX.Element {
   const [goal, setGoal] = useState('')
   const goalComposerRef = useRef<HTMLTextAreaElement>(null)
   // w12/orch-engine
-  const [engine, setEngine] = useState<PlannerEngine>('claude')
+  // w15/planner-fast-default — 'fast' (Sonnet + GPT-5.5 race) is the default;
+  // the Claude model is user-selectable for the fast/claude engines.
+  const [engine, setEngine] = useState<PlannerEngine>('fast')
+  const [claudeModel, setClaudeModel] = useState<PlannerClaudeModel>('sonnet')
   const [engineSaving, setEngineSaving] = useState(false)
   const [engineNotice, setEngineNotice] = useState('')
   // end w12/orch-engine
@@ -293,6 +297,10 @@ function PlannerFlow(): JSX.Element {
     void bridge
       .get()
       .then(setEngine)
+      .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : String(reason)))
+    void bridge
+      .getModel()
+      .then(setClaudeModel)
       .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : String(reason)))
   }, [])
   // end w12/orch-engine
@@ -454,10 +462,42 @@ function PlannerFlow(): JSX.Element {
             '--tw-ring-color': colors.bronze
           } as React.CSSProperties}
         >
+          <option value="fast">Fast</option>
           <option value="claude">Claude</option>
           <option value="codex">Codex</option>
           <option value="local">Local</option>
         </select>
+        {/* w15/planner-fast-default — Claude model for the fast/claude engines */}
+        {(engine === 'fast' || engine === 'claude') && (
+          <select
+            aria-label="Planner Claude model"
+            value={claudeModel}
+            disabled={busy || engineSaving || !getPlannerEngine()}
+            onChange={(event) => {
+              const selected = event.target.value as PlannerClaudeModel
+              const bridge = getPlannerEngine()
+              if (!bridge) return
+              setClaudeModel(selected)
+              setEngineSaving(true)
+              setError('')
+              void bridge
+                .setModel(selected)
+                .then(setClaudeModel)
+                .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : String(reason)))
+                .finally(() => setEngineSaving(false))
+            }}
+            className="w-[66px] rounded-md border bg-black/10 px-1 py-1 text-[9px] font-semibold outline-none focus:ring-1 disabled:opacity-40"
+            style={{
+              borderColor: 'var(--color-line-strong)',
+              color: colors.quartz,
+              '--tw-ring-color': colors.bronze
+            } as React.CSSProperties}
+          >
+            <option value="sonnet">Sonnet</option>
+            <option value="opus">Opus</option>
+            <option value="fable">Fable</option>
+          </select>
+        )}
         {/* end w12/orch-engine */}
         <button
           type="submit"
