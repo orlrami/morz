@@ -14,7 +14,7 @@ import { staggerContainer, staggerItem } from '@/lib/springs'
 import { useModeStore } from '@/store/modeStore'
 import { useBusStore, getBus } from '@/store/busStore'
 import { useLaneStore } from '@/store/laneStore'
-import { selectActiveSpaceRoot, useSpaceStore } from '@/store/spaceStore'
+import { selectActiveSpace, selectActiveSpaceRoot, useSpaceStore } from '@/store/spaceStore'
 import { ApprovalChip } from './ApprovalChip'
 import { AmendmentCard, PlanCard } from './PlanCard'
 import { RunsPanel } from './RunsPanel'
@@ -70,7 +70,7 @@ function ManualNotice(): JSX.Element {
   )
 }
 
-function Header({ subtitle }: { subtitle: string }): JSX.Element {
+function Header({ subtitle, spaceName }: { subtitle: string; spaceName?: string }): JSX.Element {
   return (
     <div className="flex items-center gap-2 border-b px-3.5 py-2.5" style={{ borderColor: 'var(--color-line)' }}>
       {/* w10/identity — carry the canonical Signal into the system header. */}
@@ -78,6 +78,17 @@ function Header({ subtitle }: { subtitle: string }): JSX.Element {
       <span className="text-[13px] font-bold" style={{ fontFamily: 'var(--font-display)' }}>
         Orchestrator
       </span>
+      {/* w14/orch-scoped — the panel is scoped to the active space; show it */}
+      {spaceName && (
+        <span
+          className="max-w-[90px] truncate rounded px-1.5 py-px text-[9px] font-semibold"
+          style={{ background: colors.card, color: colors.bronze }}
+          data-testid="orchestrator-space"
+          title={spaceName}
+        >
+          {spaceName}
+        </span>
+      )}
       <span className="ml-auto text-[10px]" style={{ color: colors.quartzDim }}>
         {subtitle}
       </span>
@@ -91,6 +102,9 @@ function LiveBlackboard({ showPlanner }: { showPlanner: boolean }): JSX.Element 
   const { tasks, messages, approvals, live, start, respondApproval, simulateHandoff } =
     useBusStore()
   const lanes = useLaneStore((s) => s.lanes)
+  // w14/orch-scoped — the whole panel follows the active space (busStore and
+  // runsStore re-scope themselves on space change; plans re-fetch below).
+  const activeSpaceName = useSpaceStore((s) => selectActiveSpace(s)?.name)
 
   useEffect(() => {
     start()
@@ -112,7 +126,7 @@ function LiveBlackboard({ showPlanner }: { showPlanner: boolean }): JSX.Element 
 
   return (
     <>
-      <Header subtitle={section === 'runs' ? 'live runs' : subtitle} />
+      <Header subtitle={section === 'runs' ? 'live runs' : subtitle} spaceName={activeSpaceName} />
 
       <div
         className="grid grid-cols-2 border-b p-1"
@@ -180,9 +194,10 @@ function LiveBlackboard({ showPlanner }: { showPlanner: boolean }): JSX.Element 
         {sorted.length === 0 && (
           <div className="flex flex-1 flex-col items-center justify-center gap-2 text-center">
             <IconClipboardList size={20} stroke={1.5} style={{ color: colors.quartzDim }} />
+            {/* w14/orch-scoped — a fresh space opens clean */}
             <p className="max-w-[220px] text-[11px]" style={{ color: colors.quartzDim }}>
-              Blackboard empty — when a lane hands work off, the task and its approval chip land
-              here.
+              No orchestration in this space yet — when a lane hands work off here, the task and
+              its approval chip land on this blackboard.
             </p>
           </div>
         )}
@@ -244,17 +259,31 @@ function PlannerFlow(): JSX.Element {
     composer.style.height = `${composer.scrollHeight}px`
   }, [goal])
 
+  // w14/orch-scoped — plans are per space: re-fetch on every space change and
+  // clear the composer state so a fresh space opens empty.
   useEffect(() => {
+    setRecord(null)
+    setAmendments([])
+    setStatus('')
+    setError('')
+    setEngineNotice('')
     const planner = getPlanner()
-    if (!planner) return
+    if (!planner || !spaceRoot) return
+    let cancelled = false
     void planner
-      .listOpen()
+      .listOpen(spaceRoot)
       .then((open) => {
+        if (cancelled) return
         setRecord(open.plans[0] ?? null)
         setAmendments(open.amendments)
       })
-      .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : String(reason)))
-  }, [])
+      .catch((reason: unknown) => {
+        if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason))
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [spaceRoot])
 
   // w12/orch-engine
   useEffect(() => {

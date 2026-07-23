@@ -52,3 +52,13 @@ export interface MorzBusApi {
   respondApproval(resp: BusApprovalResp): void
   onChanged(cb: (s: BusSnapshot) => void): void
 }
+
+// w14/orch-scoped — APPEND-ONLY: blackboard scoped per Space.
+export interface BusHandoffInput {
+  /** Space the handoff's task belongs to; absent = visible in every space. */
+  spaceRoot?: string
+}
+export interface MorzBusApi {
+  /** Snapshot filtered to one space's tasks (no arg = the full board). */
+  snapshot(spaceRoot?: string): Promise<BusSnapshot>
+}

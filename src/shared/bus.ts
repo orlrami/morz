@@ -114,3 +114,9 @@ export interface Artifact {
 
 /** Reserved coordinator identity (Main). */
 export const MORZ_AGENT_ID: AgentId = 'morz'
+
+// w14/orch-scoped — ADDITIVE optional field per the change policy above.
+export interface Task {
+  /** Space root the task belongs to; absent = visible in every space. */
+  spaceRoot?: string
+}

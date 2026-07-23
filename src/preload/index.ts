@@ -126,7 +126,9 @@ api.bus = {
     return () => ipcRenderer.off(BusApi.tasksChanged, h)
   },
   // blackboard/chip UI surface (typed in shared/bus-ipc.ts)
-  snapshot: () => ipcRenderer.invoke(BusUiApi.snapshot),
+  snapshot: (
+    spaceRoot?: string // w14/orch-scoped
+  ) => ipcRenderer.invoke(BusUiApi.snapshot, spaceRoot),
   post: (input: BusHandoffInput) => ipcRenderer.invoke(BusUiApi.post, input),
   respondApproval: (resp: BusApprovalResp) => ipcRenderer.send(BusUiApi.approvalRespond, resp),
   onChanged: (cb) => {
@@ -168,7 +170,7 @@ import type { RunStatus, SpawnPlan } from '../shared/spawn-plan'
 const runApi: MorzRunApi = {
   approvePlan: (plan: SpawnPlan) => ipcRenderer.invoke(RunApi.approvePlan, plan),
   dispatch: (plan: SpawnPlan) => ipcRenderer.invoke(RunApi.dispatch, plan),
-  listRuns: () => ipcRenderer.invoke(RunApi.list),
+  listRuns: (spaceRoot?: string) => ipcRenderer.invoke(RunApi.list, spaceRoot), // w14/orch-scoped
   runStatus: (runId) => ipcRenderer.invoke(RunApi.status, runId),
   stopRun: (runId) => ipcRenderer.invoke(RunApi.stop, runId),
   cleanup: (runId) => ipcRenderer.invoke(RunApi.cleanup, runId),
@@ -217,7 +219,7 @@ const plannerApi: PlannerBridge = {
   update: (plan, expectedHash) => ipcRenderer.invoke(PlannerApi.update, { plan, expectedHash }),
   approveAndRun: (planHash) => ipcRenderer.invoke(PlannerApi.approveAndRun, planHash),
   discard: (planHash) => ipcRenderer.invoke(PlannerApi.discard, planHash),
-  listOpen: () => ipcRenderer.invoke(PlannerApi.listOpen),
+  listOpen: (spaceRoot?: string) => ipcRenderer.invoke(PlannerApi.listOpen, spaceRoot), // w14/orch-scoped
   requestAmendment: (planId, request) =>
     ipcRenderer.invoke(PlannerApi.requestAmendment, { planId, request }),
   approveAmendment: (amendmentHash) =>

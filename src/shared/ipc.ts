@@ -1128,3 +1128,26 @@ export interface StoredSpawnPlan {
   warnings?: string[]
 }
 // end w13/planner-schema
+// w14/orch-scoped — APPEND-ONLY: the orchestrator is scoped per Space.
+// Plans, blackboard tasks, and runs carry the space they were created in;
+// list queries accept an optional spaceRoot filter (no arg = unfiltered,
+// so every pre-w14 caller keeps its old behavior).
+export interface RunSummary {
+  spaceRoot: string
+}
+export interface BusCreateTaskInput {
+  /** Space the task belongs to; tasks without one are visible in every space. */
+  spaceRoot?: string
+}
+export interface BusTaskFilter {
+  spaceRoot?: string
+}
+export interface PlannerBridge {
+  listOpen(
+    spaceRoot?: string
+  ): Promise<{ plans: StoredSpawnPlan[]; amendments: StoredPlanAmendment[] }>
+}
+export interface MorzRunApi {
+  listRuns(spaceRoot?: string): Promise<RunSummary[]>
+}
+// end w14/orch-scoped

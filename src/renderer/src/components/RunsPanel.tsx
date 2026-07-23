@@ -10,7 +10,7 @@ import type { RunSummary } from '@shared/ipc'
 import type { MorzNotifyApi } from '@shared/notify'
 import type { AgentRunState, RunState, RunStatus } from '@shared/spawn-plan'
 import { colors } from '@/lib/tokens'
-import { getRunApi, subscribeRuns, useRunsStore } from '@/store/runsStore'
+import { getRunApi, subscribeRuns, useRunsStore, useSpaceRuns } from '@/store/runsStore'
 
 const TERMINAL_RUN_STATES: readonly RunState[] = ['done', 'aborted']
 
@@ -65,8 +65,10 @@ function notifyFailure(runId: string, action: string, error: unknown): string {
 }
 
 export function RunsPanel(): JSX.Element {
-  const { available, loading, error, runs, statuses, selectedRunId, ingest, selectRun, setError } =
+  const { available, loading, error, statuses, selectedRunId, ingest, selectRun, setError } =
     useRunsStore()
+  // w14/orch-scoped — the panel sees only the active space's runs
+  const runs = useSpaceRuns()
   const [action, setAction] = useState<'stop' | 'cleanup' | null>(null)
 
   useEffect(() => subscribeRuns(), [])

@@ -310,17 +310,27 @@ export function getRunStatus(runId: string): RunStatus | null {
 
 export type { RunSummary }
 
-export function listRuns(): RunSummary[] {
+// w14/orch-scoped — RunSummary carries spaceRoot (orch_runs.space_root existed
+// since w5); listRuns(spaceRoot) filters to one space. No arg = unfiltered.
+export function listRuns(spaceRoot?: string): RunSummary[] {
+  const where = spaceRoot ? 'WHERE space_root = ?' : ''
+  const params = spaceRoot ? [spaceRoot] : []
   return (
     open()
-      .prepare('SELECT run_id, run_tag, goal, state, created_at FROM orch_runs ORDER BY created_at, run_id')
-      .all() as Pick<RunRow, 'run_id' | 'run_tag' | 'goal' | 'state' | 'created_at'>[]
+      .prepare(
+        `SELECT run_id, run_tag, goal, state, created_at, space_root FROM orch_runs ${where} ORDER BY created_at, run_id`
+      )
+      .all(...params) as Pick<
+      RunRow,
+      'run_id' | 'run_tag' | 'goal' | 'state' | 'created_at' | 'space_root'
+    >[]
   ).map((r) => ({
     runId: r.run_id,
     runTag: r.run_tag,
     goal: r.goal,
     state: r.state,
-    createdAt: r.created_at
+    createdAt: r.created_at,
+    spaceRoot: r.space_root
   }))
 }
 

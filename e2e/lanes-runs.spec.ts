@@ -92,6 +92,36 @@ test('pill bar shows CLI panes and dispatched agents but excludes plain shells',
 
   const { app, page } = await launchMorz()
   try {
+    // w14/orch-scoped — the Runs tab shows only the ACTIVE space's runs, so
+    // make the fixture space active first (seed-verify-retry, space-tabs
+    // pattern: the old page's persist flush can wipe the seed during reload).
+    let seeded = false
+    for (let attempt = 0; attempt < 3 && !seeded; attempt += 1) {
+      await page.evaluate((root) => {
+        localStorage.setItem(
+          'morz.spaces',
+          JSON.stringify({
+            version: 2,
+            state: {
+              spaces: [{ id: 'lanes-fixture', name: 'lanes-fixture', root, agents: [] }],
+              activeSpaceId: 'lanes-fixture',
+              initialized: true
+            }
+          })
+        )
+      }, spaceRoot)
+      await page.reload({ waitUntil: 'domcontentloaded' })
+      try {
+        await expect(
+          page.getByRole('tablist', { name: 'Spaces' }).getByRole('tab', { name: 'lanes-fixture' })
+        ).toHaveAttribute('aria-selected', 'true', { timeout: 5_000 })
+        seeded = true
+      } catch {
+        // persist race wiped the seed — reseed on the fresh page and retry
+      }
+    }
+    expect(seeded, 'seeded fixture space survived reload').toBe(true)
+
     await expect(page.getByText(/No active/)).toBeVisible()
     await expect(page.getByTestId('agent-pill')).toHaveCount(0)
 
