@@ -1,10 +1,46 @@
 import { useMemo } from 'react'
 import { create } from 'zustand'
-import type { MorzRunApi, RunSummary } from '@shared/ipc'
+import { persist } from 'zustand/middleware'
+import type { MorzRunApi, RunHistoryPolicy, RunSummary } from '@shared/ipc'
 import type { RunStatus } from '@shared/spawn-plan'
 import { selectActiveSpaceRoot, useSpaceStore } from './spaceStore'
 
+export type { RunHistoryPolicy } from '@shared/ipc'
+
 const LIVE_RUN_STATES = new Set<RunSummary['state']>(['dispatching', 'running', 'merging'])
+const RUNS_SETTINGS_KEY = 'morz.runs.settings.v1'
+const LEGACY_HISTORY_POLICY_KEY = 'morz.runs.history-policy.v1'
+
+export const RUN_HISTORY_POLICIES: readonly {
+  value: RunHistoryPolicy
+  label: string
+}[] = [
+  { value: 'forever', label: 'Keep forever' },
+  { value: 'launch', label: 'Clear on launch' },
+  { value: 'last-5', label: 'Keep last 5' }
+]
+
+function isRunHistoryPolicy(value: unknown): value is RunHistoryPolicy {
+  return RUN_HISTORY_POLICIES.some((policy) => policy.value === value)
+}
+
+function migrateLegacyHistoryPolicy(): RunHistoryPolicy {
+  if (typeof window === 'undefined') return 'forever'
+  try {
+    if (window.localStorage.getItem(RUNS_SETTINGS_KEY) !== null) return 'forever'
+    const legacy = window.localStorage.getItem(LEGACY_HISTORY_POLICY_KEY)
+    if (!isRunHistoryPolicy(legacy)) return 'forever'
+    window.localStorage.setItem(
+      RUNS_SETTINGS_KEY,
+      JSON.stringify({ state: { historyPolicy: legacy }, version: 1 })
+    )
+    window.localStorage.removeItem(LEGACY_HISTORY_POLICY_KEY)
+    return legacy
+  } catch {
+    // Storage can be unavailable in hardened renderer contexts; fail to the safest retention policy.
+    return 'forever'
+  }
+}
 
 interface RunsState {
   available: boolean
@@ -13,8 +49,11 @@ interface RunsState {
   runs: RunSummary[]
   statuses: Record<string, RunStatus>
   selectedRunId: string | null
+  historyPolicy: RunHistoryPolicy
   ingest(status: RunStatus): void
   selectRun(runId: string): void
+  evictRuns(runIds: readonly string[]): void
+  setHistoryPolicy(policy: RunHistoryPolicy): void
   setError(error: string | null): void
 }
 
@@ -41,27 +80,73 @@ async function loadStatus(runId: string): Promise<void> {
   }
 }
 
-export const useRunsStore = create<RunsState>()((set) => ({
-  available: true,
-  loading: true,
-  error: null,
-  runs: [],
-  statuses: {},
-  selectedRunId: null,
-  ingest: (status) =>
-    set((state) => ({
-      statuses: { ...state.statuses, [status.runId]: status },
-      runs: state.runs.map((run) =>
-        run.runId === status.runId ? { ...run, state: status.state } : run
-      ),
-      error: null
-    })),
-  selectRun: (runId) => {
-    set({ selectedRunId: runId, error: null })
-    void loadStatus(runId)
-  },
-  setError: (error) => set({ error })
-}))
+export const useRunsStore = create<RunsState>()(
+  persist(
+    (set) => ({
+      available: true,
+      loading: true,
+      error: null,
+      runs: [],
+      statuses: {},
+      selectedRunId: null,
+      historyPolicy: migrateLegacyHistoryPolicy(),
+      ingest: (status) =>
+        set((state) => ({
+          statuses: { ...state.statuses, [status.runId]: status },
+          runs: state.runs.map((run) =>
+            run.runId === status.runId ? { ...run, state: status.state } : run
+          ),
+          error: null
+        })),
+      selectRun: (runId) => {
+        set({ selectedRunId: runId, error: null })
+        void loadStatus(runId)
+      },
+      evictRuns: (runIds) =>
+        set((state) => {
+          if (runIds.length === 0) return state
+          const cleared = new Set(runIds)
+          const runs = state.runs.filter((run) => !cleared.has(run.runId))
+          const statuses = { ...state.statuses }
+          for (const runId of cleared) delete statuses[runId]
+          return {
+            runs,
+            statuses,
+            selectedRunId:
+              state.selectedRunId && !cleared.has(state.selectedRunId)
+                ? state.selectedRunId
+                : (runs[0]?.runId ?? null)
+          }
+        }),
+      setHistoryPolicy: (historyPolicy) => {
+        if (isRunHistoryPolicy(historyPolicy)) set({ historyPolicy })
+      },
+      setError: (error) => set({ error })
+    }),
+    {
+      name: RUNS_SETTINGS_KEY,
+      version: 1,
+      partialize: (state) => ({ historyPolicy: state.historyPolicy }),
+      merge: (persisted, current) => {
+        const stored = persisted as Partial<RunsState> | undefined
+        return {
+          ...current,
+          historyPolicy: isRunHistoryPolicy(stored?.historyPolicy)
+            ? stored.historyPolicy
+            : current.historyPolicy
+        }
+      }
+    }
+  )
+)
+
+// Snapshot after synchronous persistence hydration. Changes made during this
+// session take effect on the next renderer launch, matching the control copy.
+const launchHistoryPolicy = useRunsStore.getState().historyPolicy
+
+export function getLaunchRunHistoryPolicy(): RunHistoryPolicy {
+  return launchHistoryPolicy
+}
 
 /** Pull summaries newest-first, select the newest run, and hydrate its detail. */
 export async function hydrateRuns(): Promise<void> {

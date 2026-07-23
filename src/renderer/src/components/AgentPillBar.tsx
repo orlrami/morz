@@ -56,6 +56,7 @@ function detectedCli(info: PaneInfo): CliId | null {
 /* w11/lanes-runs — active lanes, dispatched agents, and detected CLI panes. */
 export function AgentPillBar(): JSX.Element {
   const lanes = useLaneStore((state) => state.lanes)
+  const runs = useRunsStore((state) => state.runs)
   const statuses = useRunsStore((state) => state.statuses)
   const [paneInfo, setPaneInfo] = useState<PaneInfo[]>([])
 
@@ -86,6 +87,9 @@ export function AgentPillBar(): JSX.Element {
   }, [])
 
   const agents = useMemo<AgentPill[]>(() => {
+    // w14/runs-clear — a stale status event cannot resurrect agents whose run
+    // has been cleared from the visible history collection.
+    const visibleRunIds = new Set(runs.map((run) => run.runId))
     const agentIds = new Set<string>()
     const paneIds = new Set<string>()
     const pills: AgentPill[] = lanes.map((lane) => ({
@@ -101,6 +105,7 @@ export function AgentPillBar(): JSX.Element {
     }
 
     for (const status of Object.values(statuses)) {
+      if (!visibleRunIds.has(status.runId)) continue
       for (const [agentId, state] of Object.entries(status.agents)) {
         if (!ACTIVE_RUN_STATES.has(state) || agentIds.has(agentId)) continue
         const detail = status.agentsDetail?.[agentId]
@@ -131,7 +136,7 @@ export function AgentPillBar(): JSX.Element {
       agentIds.add(info.paneId)
     }
     return pills
-  }, [lanes, paneInfo, statuses])
+  }, [lanes, paneInfo, runs, statuses])
 
   if (agents.length === 0) {
     return (

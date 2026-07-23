@@ -20,6 +20,11 @@ import { VoiceSettings } from './VoiceSettings'
 import { UpdateSettings } from './UpdateSettings'
 import { ConnectionsSettings } from './ConnectionsSettings' // w11/connections
 import { useConnectionsStore } from '@/store/connectionsStore'
+import {
+  RUN_HISTORY_POLICIES,
+  useRunsStore,
+  type RunHistoryPolicy
+} from '@/store/runsStore'
 import { ReportSettings } from './ReportSettings' // w11/report-engine
 
 export type SettingsTab = 'limits' | 'connections' | 'appearance' | 'control' | 'reports'
@@ -37,6 +42,8 @@ export function SettingsPanel({ initialTab = 'limits' }: { initialTab?: Settings
   const [tab, setTab] = useState<SettingsTab>(initialTab)
   const { themeId, setTheme } = useThemeStore()
   const { connections, loading: connectionsLoading, start: startConnections } = useConnectionsStore()
+  const historyPolicy = useRunsStore((state) => state.historyPolicy)
+  const setHistoryPolicy = useRunsStore((state) => state.setHistoryPolicy)
   const usageConnections = connections.filter((connection) => connection.usage !== null)
 
   useEffect(() => startConnections(), [startConnections])
@@ -215,6 +222,32 @@ export function SettingsPanel({ initialTab = 'limits' }: { initialTab?: Settings
               Assist, don&apos;t take over. Everything here is opt-in, scoped, and reversible.
             </p>
             <div className="mt-4 space-y-2">
+              <label
+                className="flex items-center justify-between gap-3 rounded-xl border px-3 py-2.5 text-xs"
+                style={{ background: colors.panel, borderColor: 'var(--color-line)' }}
+              >
+                <span>
+                  <span className="block">Run history</span>
+                  <span className="mt-0.5 block text-[9.5px]" style={{ color: colors.quartzDim }}>
+                    Applies per space on the next app launch. Clearing keeps worktrees and branches.
+                  </span>
+                </span>
+                <select
+                  aria-label="Run history policy setting"
+                  value={historyPolicy}
+                  onChange={(event) =>
+                    setHistoryPolicy(event.target.value as RunHistoryPolicy)
+                  }
+                  className="shrink-0 rounded-md border bg-transparent px-2 py-1 text-[10.5px] outline-none focus-visible:ring-1"
+                  style={{ borderColor: 'var(--color-line-strong)', color: colors.bronzeHot }}
+                >
+                  {RUN_HISTORY_POLICIES.map((policy) => (
+                    <option key={policy.value} value={policy.value}>
+                      {policy.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
               {[
                 { label: 'Default mode for new spaces', value: 'Manual' },
                 { label: 'Orchestrator may propose plans', value: 'On — launch always needs approval' },

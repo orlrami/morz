@@ -19,7 +19,7 @@ import { app } from 'electron'
 import { join } from 'path'
 import { mkdirSync } from 'fs'
 import type { AgentId } from '../../shared/bus'
-import type { RunSummary } from '../../shared/ipc'
+import type { ClearedRun, RunHistoryPolicy, RunSummary } from '../../shared/ipc'
 import type {
   AgentRunDetail,
   AgentRunState,
@@ -54,7 +54,8 @@ function open(): Database.Database {
       plan_json  TEXT NOT NULL,
       created_at TEXT NOT NULL,
       started_at TEXT,
-      ended_at   TEXT
+      ended_at   TEXT,
+      cleared_at TEXT
     );
     CREATE TABLE IF NOT EXISTS orch_agents (
       run_id          TEXT NOT NULL,
@@ -72,6 +73,20 @@ function open(): Database.Database {
     );
     CREATE INDEX IF NOT EXISTS orch_runs_state ON orch_runs (state);
   `)
+  // w14/runs-clear — clearing is a non-destructive visibility decision, not
+  // resource cleanup. Keep the run and agent rows so cleanup(runId) can still
+  // remove an explicitly retained worktree after the run leaves history.
+  const runColumns = new Set(
+    (db.prepare('PRAGMA table_info(orch_runs)').all() as { name: string }[]).map(
+      (column) => column.name
+    )
+  )
+  if (!runColumns.has('cleared_at')) {
+    db.exec('ALTER TABLE orch_runs ADD COLUMN cleared_at TEXT')
+  }
+  db.exec(
+    'CREATE INDEX IF NOT EXISTS orch_runs_history ON orch_runs (space_root, cleared_at, state, created_at)'
+  )
   return db
 }
 
@@ -175,6 +190,7 @@ export interface RunRow {
   created_at: string
   started_at: string | null
   ended_at: string | null
+  cleared_at: string | null
 }
 
 export interface AgentRow {
@@ -310,15 +326,79 @@ export function getRunStatus(runId: string): RunStatus | null {
 
 export type { RunSummary }
 
-// w14/orch-scoped — RunSummary carries spaceRoot (orch_runs.space_root existed
-// since w5); listRuns(spaceRoot) filters to one space. No arg = unfiltered.
+/** Result returned to the UI so clearing never implies resource cleanup. */
+export type { ClearedRun } from '../../shared/ipc'
+
+function clearedRun(d: Database.Database, runId: string, clearedAt: string): ClearedRun {
+  const row = d
+    .prepare(
+      `SELECT EXISTS(
+         SELECT 1 FROM orch_agents WHERE run_id = ? AND worktree IS NOT NULL
+       ) AS has_worktrees`
+    )
+    .get(runId) as { has_worktrees: 0 | 1 }
+  return { runId, clearedAt, hasWorktrees: row.has_worktrees === 1 }
+}
+
+function clearRunInDb(d: Database.Database, runId: string): ClearedRun {
+  const run = d
+    .prepare('SELECT state, cleared_at FROM orch_runs WHERE run_id = ?')
+    .get(runId) as Pick<RunRow, 'state' | 'cleared_at'> | undefined
+  if (!run) throw new Error(`[runs] unknown run: ${runId}`)
+  if (!TERMINAL_RUN_STATES.includes(run.state)) {
+    throw new Error('[runs] only finished or stopped runs can be cleared')
+  }
+  const clearedAt = run.cleared_at ?? nowIso()
+  if (!run.cleared_at) {
+    d.prepare('UPDATE orch_runs SET cleared_at = ? WHERE run_id = ?').run(clearedAt, runId)
+  }
+  return clearedRun(d, runId, clearedAt)
+}
+
+/**
+ * w14/runs-clear — hide one terminal run from history without deleting its
+ * ledger, agents, worktrees, panes, or branches. The retained row keeps the
+ * existing cleanup(runId) path reachable for callers that still hold the id.
+ */
+export function clearRun(runId: string): ClearedRun {
+  const d = open()
+  return d.transaction(() => clearRunInDb(d, runId))()
+}
+
+/** Hide every visible terminal run in one space; never performs cleanup. */
+export function clearFinished(spaceRoot: string): ClearedRun[] {
+  const d = open()
+  return d.transaction(() => {
+    const runs = d
+      .prepare(
+        `SELECT run_id
+         FROM orch_runs
+         WHERE space_root = ?
+           AND cleared_at IS NULL
+           AND state IN ('done', 'aborted')
+         ORDER BY created_at, run_id`
+      )
+      .all(spaceRoot) as Pick<RunRow, 'run_id'>[]
+    return runs.map(({ run_id: runId }) => clearRunInDb(d, runId))
+  })()
+}
+
+// w14/orch-scoped + w14/runs-clear — per-space filter AND cleared exclusion.
+// listRuns(spaceRoot) scopes to one space; cleared runs are always hidden.
 export function listRuns(spaceRoot?: string): RunSummary[] {
-  const where = spaceRoot ? 'WHERE space_root = ?' : ''
-  const params = spaceRoot ? [spaceRoot] : []
+  const clauses = ['cleared_at IS NULL']
+  const params: string[] = []
+  if (spaceRoot) {
+    clauses.push('space_root = ?')
+    params.push(spaceRoot)
+  }
   return (
     open()
       .prepare(
-        `SELECT run_id, run_tag, goal, state, created_at, space_root FROM orch_runs ${where} ORDER BY created_at, run_id`
+        `SELECT run_id, run_tag, goal, state, created_at, space_root
+         FROM orch_runs
+         WHERE ${clauses.join(' AND ')}
+         ORDER BY created_at, run_id`
       )
       .all(...params) as Pick<
       RunRow,
@@ -340,3 +420,28 @@ export function listLiveRuns(): RunRow[] {
     .prepare(`SELECT * FROM orch_runs WHERE state IN ('dispatching', 'running', 'merging')`)
     .all() as RunRow[]
 }
+
+// w14/runs-clear — one transaction applies the launch policy within one space.
+export function applyRunHistoryPolicy(
+  spaceRoot: string,
+  policy: RunHistoryPolicy
+): ClearedRun[] {
+  if (policy === 'forever') return []
+  const d = open()
+  return d.transaction(() => {
+    const offset = policy === 'last-5' ? 'LIMIT -1 OFFSET 5' : ''
+    const runs = d
+      .prepare(
+        `SELECT run_id
+         FROM orch_runs
+         WHERE space_root = ?
+           AND cleared_at IS NULL
+           AND state IN ('done', 'aborted')
+         ORDER BY created_at DESC, run_id DESC
+         ${offset}`
+      )
+      .all(spaceRoot) as Pick<RunRow, 'run_id'>[]
+    return runs.map(({ run_id: runId }) => clearRunInDb(d, runId))
+  })()
+}
+// end w14/runs-clear

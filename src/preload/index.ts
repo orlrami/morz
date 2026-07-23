@@ -811,3 +811,24 @@ const runPaneBridge: RunPaneBridge = {
 
 contextBridge.exposeInMainWorld('morzRunPane', runPaneBridge)
 // end w13/dispatch-visible
+
+// w14/runs-clear — append-only isolated run-history bridge.
+// window.morz was snapshotted earlier, so late-wave APIs use their own key.
+import {
+  RunHistoryApi,
+  type ClearedRun,
+  type RunHistoryBridge,
+  type RunHistoryPolicy
+} from '../shared/ipc'
+
+const runHistoryBridge: RunHistoryBridge = {
+  clearRun: (runId: string): Promise<ClearedRun> =>
+    ipcRenderer.invoke(RunHistoryApi.clearRun, runId),
+  clearFinished: (spaceRoot: string): Promise<ClearedRun[]> =>
+    ipcRenderer.invoke(RunHistoryApi.clearFinished, spaceRoot),
+  applyPolicy: (spaceRoot: string, policy: RunHistoryPolicy): Promise<ClearedRun[]> =>
+    ipcRenderer.invoke(RunHistoryApi.policy, { spaceRoot, policy })
+}
+
+contextBridge.exposeInMainWorld('morzRunHistory', runHistoryBridge)
+// end w14/runs-clear
