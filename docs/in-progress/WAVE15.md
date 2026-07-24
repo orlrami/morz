@@ -46,11 +46,40 @@ Bring-your-own-tool slots — first-run AND Settings let users pick alternatives
 - Provider availability = detection (slice 3); unavailable providers shown greyed with install link.
 - **DoD:** e2e — pick lazygit → no Commit icon, lazygit boots in a pane; pick VS Code → file click spawns `code -g` (stubbed); pick CodeRabbit → Morz Reviewer module hidden and preference persisted.
 
+## Slice 6 — `w15/model-choice`
+Per-session and default model per CLI — research: [`../research/MODEL-CONFIG-RESEARCH.md`](../research/MODEL-CONFIG-RESEARCH.md); mockup: `Morz Settings.html`.
+- `ModelChoice` abstraction per connection: `{ cli, model, source: 'inherit' | 'session-flag' | 'cli-config' }`. Default **inherit** (Morz adds no flag — control philosophy).
+- Spawn wiring: lanes (`claude --model`), dispatcher (`claude/codex -m/agy --model` per agent cli), planner engines (already has claude model — unify onto this), pulse, BYO opencode (`--model provider/model`).
+- Model catalogs: static tables + `agy models` / `opencode models` refresh on connections sync.
+- `source: 'cli-config'` = diff-first write via the 0.0.2 config-writer (`~\.claude\settings.json`, `~\.codex\config.toml`, `opencode.json`) — never silent; backups + mtime-guard.
+- Settings → **Connections & Models** section per mockup: per-CLI card (status/version/applies-to chips, model select, apply-as radio, mono mechanism line), Claude fallback chain, per-space overrides.
+- **DoD:** e2e — session-flag choice appears in spawn args (stubbed spawn assert) for lane + dispatched agent; inherit adds no flag; config-write path produces a diff proposal, not a write; per-space override wins over global.
+
+## Slice 7 — `w15/start-screen`
+Launcher = home = session list (competitor synthesis #1/#2 — [`../research/COMPETITOR-UI-RESEARCH.md`](../research/COMPETITOR-UI-RESEARCH.md)); mockup: `Morz Start Screen.html`.
+- Boot lands here (after wizard on first run): brand hero + ONE composer with the **pre-flight row**: Space · Session (Plain shell default / Claude / Codex / Antigravity / OpenCode) · Model (from slice 6 catalogs, "Inherit" first) · Autonomy (Orchestrated locked unless module on) · launch button.
+- **Spawn transparency line** under the composer: the exact command that will run (`claude --model sonnet …` / "Morz adds no flag").
+- Left rail: spaces with live badges (branch, dirty, agents working, diff stats) + recent sessions per space with resume (reuses w13 sessions).
+- Empty composer + Plain shell = plain terminal — terminal-first stays true; goal text + agent CLI = lane with that model; goal + Orchestrated = straight into planner.
+- Quick cards: Ctrl-K, Plan-a-team, drop-a-folder.
+- **DoD:** e2e — boot shows start screen; plain-shell open spawns zero agents; model pick flows into the lane's spawn args; recent-session resume works from the rail.
+
+## Slice 8 — `w15/settings-ia`
+Settings information architecture per mockup nav: **Workspace** (Modules / Connections & Models / Integrations) · **Agents** (Autonomy & Permissions / Planner / Memory / Routing) · **App** (Limits & Usage / Sessions & History / Notifications / Appearance / About).
+- Migrate existing panels (limits, appearance, control, memory, routing, assistant, pulse mounts) into the new nav without behavior changes; breadcrumb in titlebar (`Settings / Section`).
+- **DoD:** every existing settings surface reachable in the new nav; e2e settings specs updated; zero orphaned panels.
+
 ## Slice 5 — `w15/review-fixes` (small, carry-over)
 Wave-14 review findings: busStore space-subscription race + unsubscribe; run-store clear idempotency (`AND cleared_at IS NULL`); pill/status stale-flicker guard (moves into dock card); planner role-text escaping + promptSeed scan; `respondPermission` behavior type guard; planTeamStore version guard.
 - **DoD:** targeted unit/e2e per fix; full suite green.
 
 ---
 
-**Wave order:** 1 → 2 depends on 1; 3 depends on 1; 4 depends on 1+3; 5 independent. Suggest agents: 2 Fable (slices 2, 4) + 3 Sol (1, 3, 5).
-**Exit:** full e2e green, rebuild + reinstall signed exe, owner dogfood pass on the new shell.
+**Wave order:** 1 first; 2, 3, 6 depend on 1; 4 depends on 1+3; 7 depends on 3+6; 8 depends on 1; 5 independent. Suggest agents: 3 Fable (slices 2, 6, 7) + 4 Sol (1, 3+8, 4, 5).
+**Exit:** full e2e green, rebuild + reinstall signed exe, owner dogfood pass on the new shell + start screen.
+
+## Adopted from competitor research (this wave)
+Pre-flight launcher row (Claude Code Desktop), launcher-as-home (opencode), spawn transparency, login-free local-first (Warp warning), no-infra-gate first prompt (Sculptor warning). PTY fidelity stays sacred (Wave warning).
+
+## Parked for 0.0.6 (from competitor research — do NOT build this wave)
+Run-rail with attention badges as a first-class left column (Warp vertical tabs / Conductor), summary/scan transcript mode, **Task Attempts** (same task → 2-3 agents → diff → keep winner), inline-on-diff reply-to-agent, squash-rebase one-click finalize, drag-to-split session compare (Crystal).
