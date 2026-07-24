@@ -13,6 +13,7 @@
 | **0.0.3** | Orchestrated v0, bring-your-own-assistant, reviewer + DAG + DoD, cost kill-switch, Daily Pulse | [0.0.3.md](0.0.3.md) |
 | **0.0.4** | Cross-agent learning memory, browser element-pick, routing, minor voice | [0.0.4.md](0.0.4.md) |
 | **0.0.5** | "Your Morz" — module registry + gated shell, first-run wizard, integration slots, fast planner default | [0.0.5.md](0.0.5.md) |
+| **0.0.5 → end** | Full remaining map: memory v2, self-closing orchestrator, parallel mastery, hardening, distribution | [REMAINING.md](REMAINING.md) |
 | Future | Remote mobile app ("Morz remote"), SaaS tier, open-source release, deep LSP | parked — see notes in each file |
 
 ## Distribution — ship as a real installable app (Windows + macOS)
