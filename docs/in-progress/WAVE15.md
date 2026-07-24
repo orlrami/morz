@@ -62,12 +62,18 @@ Launcher = home = session list (competitor synthesis #1/#2 — [`../research/COM
 - Left rail: spaces with live badges (branch, dirty, agents working, diff stats) + recent sessions per space with resume (reuses w13 sessions).
 - Empty composer + Plain shell = plain terminal — terminal-first stays true; goal text + agent CLI = lane with that model; goal + Orchestrated = straight into planner.
 - Quick cards: Ctrl-K, Plan-a-team, drop-a-folder.
-- **DoD:** e2e — boot shows start screen; plain-shell open spawns zero agents; model pick flows into the lane's spawn args; recent-session resume works from the rail.
+- **Startup behavior setting** (owner decision 2026-07-24): "On launch" preference — `straight-to-shell` (default; reopen sessions exactly as left, start screen only when nothing is open) vs `always-start-screen`. Open sessions ALWAYS win and boot the shell directly. Control lives on the start screen itself + Settings → Sessions & History.\n- Layout per approved mock v2: everything (composer/pre-flight/spaces/sessions/boot pref) in the left column, File Explorer of the selected space on the right.\n- **DoD:** e2e — fresh profile boots start screen; with a restored session the app boots the shell and never mounts the start screen; preference round-trips; plain-shell open spawns zero agents; model pick flows into the lane's spawn args; recent-session resume works from the rail.
 
 ## Slice 8 — `w15/settings-ia`
 Settings information architecture per mockup nav: **Workspace** (Modules / Connections & Models / Integrations) · **Agents** (Autonomy & Permissions / Planner / Memory / Routing) · **App** (Limits & Usage / Sessions & History / Notifications / Appearance / About).
 - Migrate existing panels (limits, appearance, control, memory, routing, assistant, pulse mounts) into the new nav without behavior changes; breadcrumb in titlebar (`Settings / Section`).
 - **DoD:** every existing settings surface reachable in the new nav; e2e settings specs updated; zero orphaned panels.
+
+## Slice 9 — `w15/context-hub`
+Manage the context files AI CLIs live off — CLAUDE.md, AGENTS.md, GEMINI.md, STATUS.md, README, `.claude/settings.json`, `.mcp.json`, `config.toml`, `opencode.json` — across every space, so no CLI ever misses context. Ships as a **module** (rail icon "Context", defaultOn ⬜).
+- **Scanner:** per space, walk known context-file locations (root + `.claude/` + docs/); build a matrix spaces × files with state: present / missing / stale (file older than last N commits touching src).
+- **Dashboard:** the matrix as the module's surface — missing = one-click "create from template", stale = highlighted with last-touched info; click opens the IDE slide-over.
+- **Templates:** starter CLAUDE.md / AGENTS.md / STATUS.md templates (project-type aware: node/python/generic); shared blocks that can propagate to multiple projects ("apply this section to N spaces" → diff-first multi-write via the config-writer, per-file approval).\n- **Status upkeep (optional per space):** Morz maintains a STATUS.md section from real data (branch, last runs, E2E state) behind approval — the same discipline as this repo's docs/in-progress/STATUS.md.\n- **Memory bridge:** approved entries from the 0.0.4 learning-memory store can be exported as a managed CLAUDE.md block (marked `<!-- morz:memory -->`), replacing prompt-prepend-only injection — the memory system becomes useful to EVERY CLI (codex/agy read the same files), not just Claude lanes. Approval-gated, diff-first, reversible.\n- **DoD:** e2e — matrix detects a missing CLAUDE.md and creates it from template via diff approval; a shared block propagates to 2 spaces as two individual diffs; memory-export block round-trips (update memory → refreshed block proposed, never auto-written); disabled module scans nothing.
 
 ## Slice 5 — `w15/review-fixes` (small, carry-over)
 Wave-14 review findings: busStore space-subscription race + unsubscribe; run-store clear idempotency (`AND cleared_at IS NULL`); pill/status stale-flicker guard (moves into dock card); planner role-text escaping + promptSeed scan; `respondPermission` behavior type guard; planTeamStore version guard.
@@ -75,11 +81,21 @@ Wave-14 review findings: busStore space-subscription race + unsubscribe; run-sto
 
 ---
 
-**Wave order:** 1 first; 2, 3, 6 depend on 1; 4 depends on 1+3; 7 depends on 3+6; 8 depends on 1; 5 independent. Suggest agents: 3 Fable (slices 2, 6, 7) + 4 Sol (1, 3+8, 4, 5).
+**Wave order:** 1 first; 2, 3, 6 depend on 1; 4 depends on 1+3; 7 depends on 3+6; 8, 9 depend on 1; 5 independent. Suggest agents: 3 Fable (slices 2, 6, 7) + 5 Sol (1, 3+8, 4, 5, 9).
 **Exit:** full e2e green, rebuild + reinstall signed exe, owner dogfood pass on the new shell + start screen.
 
 ## Adopted from competitor research (this wave)
 Pre-flight launcher row (Claude Code Desktop), launcher-as-home (opencode), spawn transparency, login-free local-first (Warp warning), no-infra-gate first prompt (Sculptor warning). PTY fidelity stays sacred (Wave warning).
 
-## Parked for 0.0.6 (from competitor research — do NOT build this wave)
-Run-rail with attention badges as a first-class left column (Warp vertical tabs / Conductor), summary/scan transcript mode, **Task Attempts** (same task → 2-3 agents → diff → keep winner), inline-on-diff reply-to-agent, squash-rebase one-click finalize, drag-to-split session compare (Crystal).
+## Parked for 0.0.6 (do NOT build this wave)
+**From competitor research:** run-rail with attention badges as a first-class left column (Warp vertical tabs / Conductor), summary/scan transcript mode, **Task Attempts** (same task → 2-3 agents → diff → keep winner), inline-on-diff reply-to-agent, squash-rebase one-click finalize, drag-to-split session compare (Crystal).
+
+**Obsidian deepening (0.0.2 integration exists: REST connect, read/search, ADR write):**
+- Two-way memory backing: the learning-memory store optionally persists into the user's vault (one note per entry, morz-tagged) instead of only %APPDATA% — vault becomes the durable brain, Morz the approval gate.
+- Context-hub bridge: managed CLAUDE.md blocks and STATUS summaries mirrored to vault notes; ADR browser UI (list/search MADR files, open in slide-over).
+- Still optional + read-mostly; every write stays no-clobber.
+
+**Hermes assistant deepening (0.0.3 BYO-assistant exists: Hermes/OpenClaw/Comet → SpawnPlan proposals):**
+- Hermes proposals get context injection from the context-hub (same CLAUDE.md/AGENTS.md the CLIs read) so its plans stop being context-blind.
+- Pluggable memory providers (Honcho/mem0, Hermes-style) behind the 0.0.4 memory store interface — external provider = another backend, same approval gates.
+- Assistant slot in Integrations (same slot model as git/review): Morz planner / Hermes / OpenClaw / Comet as the "who proposes plans" provider.
