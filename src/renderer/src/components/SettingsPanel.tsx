@@ -20,6 +20,7 @@ import { VoiceSettings } from './VoiceSettings'
 import { UpdateSettings } from './UpdateSettings'
 import { ConnectionsSettings } from './ConnectionsSettings' // w11/connections
 import { useConnectionsStore } from '@/store/connectionsStore'
+import { useModulesStore } from '@/store/modulesStore' // w15/modules-core
 import {
   RUN_HISTORY_POLICIES,
   useRunsStore,
@@ -140,6 +141,8 @@ function SectionHeader({ section }: { section: SettingsSection }): JSX.Element {
 /* Settings: live usage availability, theme importer, and control defaults migrated into wave-15 IA. */
 export function SettingsPanel({ initialTab = 'limits' }: { initialTab?: SettingsTab }): JSX.Element {
   const [tab, setTab] = useState<SettingsSectionId>(() => normalizeSettingsTab(initialTab))
+  // w15/modules-core — a disabled module owns no settings surface either.
+  const modulesEnabled = useModulesStore((s) => s.enabled)
   const { themeId, setTheme } = useThemeStore()
   const { connections, loading: connectionsLoading, start: startConnections } = useConnectionsStore()
   const historyPolicy = useRunsStore((state) => state.historyPolicy)
@@ -241,8 +244,8 @@ export function SettingsPanel({ initialTab = 'limits' }: { initialTab?: Settings
                 label="Integrations"
                 description="Agent 8 mounts bring-your-own-tool slots here. Existing local integrations remain reachable below."
               />
-              {/* // w4/obsidian */}
-              <ObsidianSettings />
+              {/* // w4/obsidian — w15/modules-core: mounts only with the module on */}
+              {modulesEnabled.obsidian && <ObsidianSettings />}
             </div>
           )}
 
@@ -265,8 +268,8 @@ export function SettingsPanel({ initialTab = 'limits' }: { initialTab?: Settings
                   </div>
                 ))}
               </div>
-              {/* // w8/voice */}
-              <VoiceSettings />
+              {/* // w8/voice — w15/modules-core */}
+              {modulesEnabled.voice && <VoiceSettings />}
             </div>
           )}
 
@@ -380,7 +383,8 @@ export function SettingsPanel({ initialTab = 'limits' }: { initialTab?: Settings
             </label>
           )}
 
-          {tab === 'notifications' && <PulseSettings />}
+          {/* w6/pulse — w15/modules-core */}
+          {tab === 'notifications' && modulesEnabled.pulse && <PulseSettings />}
 
           {tab === 'appearance' && (
             <div>
