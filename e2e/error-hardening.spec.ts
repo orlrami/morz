@@ -115,7 +115,7 @@ test.describe('Runtime error hardening', () => {
       await morz.page.getByRole('tab', { name, exact: true }).click()
     }
     await morz.page.getByRole('button', { name: 'Settings', exact: true }).click()
-    await morz.page.getByRole('button', { name: 'Workshop', exact: true }).click()
+    await morz.page.getByRole('tab', { name: 'Workshop', exact: true }).click()
 
     await expect.poll(() => registryRequests).toBeGreaterThanOrEqual(200)
     await expect.poll(async () => {
@@ -216,7 +216,7 @@ test.describe('Runtime error hardening', () => {
     mainIssues.length = 0
     morz = await launchMorz()
     observe(morz)
-    await morz.page.getByRole('button', { name: 'Workshop', exact: true }).click()
+    await morz.page.getByRole('tab', { name: 'Workshop', exact: true }).click()
 
     await expect.poll(async () => {
       const notices = await morz.page.evaluate(() => window.morz.notify?.list())

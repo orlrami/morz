@@ -76,7 +76,7 @@ test.describe.serial('Workshop catalog', () => {
   })
 
   test('renders cached rows with stars and offline status', async () => {
-    await morz.page.getByRole('button', { name: 'Workshop' }).evaluate((button: HTMLButtonElement) => button.click())
+    await morz.page.getByRole('tab', { name: 'Workshop' }).evaluate((button: HTMLButtonElement) => button.click())
     await expect(morz.page.getByRole('region', { name: 'Workshop' })).toBeAttached()
     await expect(morz.page.getByRole('heading', { name: 'Search Server' })).toBeVisible()
     await expect(morz.page.getByText('4.2k')).toBeVisible()

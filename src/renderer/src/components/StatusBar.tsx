@@ -125,12 +125,16 @@ export function StatusBar({ onOpenCommit }: StatusBarProps): JSX.Element {
           <Count color={statusColor.working} label={`${activeAgents} agent${activeAgents === 1 ? '' : 's'}`} />
         )}
 
-        {/* center group — the autonomy dial owns the middle of the bar */}
-        <div className="absolute left-1/2 -translate-x-1/2">
+        {/* center group — the autonomy dial owns the middle of the bar. It sits
+          * in flow (not absolutely positioned) so no sibling can ever overlap
+          * its hit target; the flexible spacers keep it visually centered. */}
+        <span className="flex-1" aria-hidden />
+        <div className="shrink-0">
           <ModeDialCompact />
         </div>
+        <span className="flex-1" aria-hidden />
 
-        <div className="ml-auto flex min-w-0 items-center gap-3">
+        <div className="flex min-w-0 shrink-0 items-center gap-3">
           <SessionMeter usage={snapshot?.session ?? null} />
           <RunMeter run={snapshot?.activeRun ?? null} />
           <span className="h-3 w-px" style={{ background: 'var(--color-line)' }} />

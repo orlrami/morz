@@ -5,7 +5,7 @@
  * planner:update, and remember a per-role model choice across plans.
  */
 import { expect, test } from '@playwright/test'
-import { closeMorz, launchMorz, type MorzApp } from './app'
+import { closeMorz, launchMorz, openOrchestrator, type MorzApp } from './app'
 
 interface TestAgent {
   agentId: string
@@ -103,6 +103,7 @@ test.describe('multi-agent team proposal card', () => {
     morz = await launchMorz()
     await stubTeamPlanner(morz)
     await morz.page.getByRole('radio', { name: 'Assisted', exact: true }).click()
+    await openOrchestrator(morz.page)
     await morz.page.getByRole('textbox', { name: 'Goal' }).fill('Build a Tetris game')
     await morz.page.getByRole('button', { name: 'Plan team' }).click()
     await expect(morz.page.getByTestId('team-recommendation')).toContainText(

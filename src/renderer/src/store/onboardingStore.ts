@@ -57,7 +57,10 @@ export const useOnboardingStore = create<OnboardingState>((set, get) => ({
         // shows it rather than a parallel default map (w15 integration).
         useModulesStore.getState().hydrate()
       ])
-      useModeStore.getState().setMode(snapshot.autonomy)
+      // Setup CHOOSES the dial once (save/skip below); it must never re-apply
+      // that choice on later boots — the dial persists on its own, and moving
+      // it in the status bar is the user's decision, not setup's.
+      if (!snapshot.completed) useModeStore.getState().setMode(snapshot.autonomy)
       set({
         status: 'ready',
         snapshot: { ...snapshot, modules: { ...useModulesStore.getState().enabled } },

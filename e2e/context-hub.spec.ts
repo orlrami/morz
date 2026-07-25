@@ -152,7 +152,8 @@ test.describe.serial('context hub', () => {
   test('disabled module sends zero scan IPC', async () => {
     await closeMorz(app)
     process.env.MORZ_E2E_CONTEXT_ENABLED = '0'
-    const disabled = await launchMorz()
+    // w15/modules-core — the registry gates the module; seed it off here.
+    const disabled = await launchMorz({ env: { MORZ_MODULES: 'sessions' } })
     app = disabled.app
     page = disabled.page
 

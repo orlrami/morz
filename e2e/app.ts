@@ -125,6 +125,21 @@ async function passOnboarding(page: Page): Promise<void> {
   await setup.waitFor({ state: 'hidden', timeout: 15_000 }).catch(() => undefined)
 }
 
+/**
+ * Ensure the orchestrator dock is mounted (w15/shell-layout made it dial-owned:
+ * Manual mounts nothing, Assisted starts closed behind one header chip,
+ * Orchestrated auto-opens). Safe to call when it is already open.
+ */
+export async function openOrchestrator(page: Page): Promise<void> {
+  const dock = page.locator('[aria-label="Orchestrator"]').first()
+  if (await dock.isVisible().catch(() => false)) return
+  const toggle = page.getByRole('button', { name: 'Toggle orchestrator' })
+  if (await toggle.isVisible().catch(() => false)) {
+    await toggle.click()
+    await dock.waitFor({ state: 'visible', timeout: 10_000 }).catch(() => undefined)
+  }
+}
+
 /** Enter the shell from the launcher (plain shell, no agent), if it is showing. */
 export async function passStartScreen(page: Page): Promise<void> {
   const start = page.getByTestId('start-screen')

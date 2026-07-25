@@ -85,7 +85,7 @@ test.describe.serial('IDE slide-over and Explorer panel', () => {
         value: async () => ({ canceled: false, filePaths: [root], bookmarks: [] })
       })
     }, ROOT)
-    await page.getByRole('button', { name: 'Open folder' }).click()
+    await page.getByRole('button', { name: 'Add space' }).click()
     await expect(page.getByRole('heading', { name: 'morz-ide' })).toBeVisible()
 
     await page.getByRole('button', { name: 'Toggle file explorer' }).click()

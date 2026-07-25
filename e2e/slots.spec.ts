@@ -16,7 +16,7 @@ const slotEnv = {
 async function openIntegrations(page: Page): Promise<void> {
   await page.getByRole('button', { name: 'Settings' }).click()
   await page.getByRole('button', { name: 'Integrations' }).click()
-  await expect(page.getByRole('heading', { name: 'Integrations' })).toBeVisible()
+  await expect(page.getByTestId('settings-mount-integrations')).toBeVisible()
 }
 
 async function choices(page: Page): Promise<SlotChoices> {

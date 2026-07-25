@@ -90,7 +90,7 @@ test.describe.serial('Notification center and catalog reliability', () => {
   })
 
   test('surfaces offline syncs while treating benchmark 401 as needs-key', async () => {
-    await morz.page.getByRole('button', { name: 'Workshop' }).click()
+    await morz.page.getByRole('tab', { name: 'Workshop' }).click()
 
     await expect(morz.page.getByTestId('catalog-source-mcp-registry')).toContainText('offline')
     await expect(morz.page.getByTestId('catalog-source-openrouter-benchmarks')).toContainText('needs key')
@@ -245,7 +245,7 @@ test.describe.serial('Notification center and catalog reliability', () => {
     process.env.MORZ_CATALOG_REGISTRY_URL = `${apiBaseUrl}/registry`
     process.env.MORZ_CATALOG_GITHUB_URL = `${apiBaseUrl}/github/`
     morz = await launchMorz()
-    await morz.page.getByRole('button', { name: 'Workshop' }).click()
+    await morz.page.getByRole('tab', { name: 'Workshop' }).click()
 
     await expect(morz.page.getByTestId('catalog-source-github')).toContainText('rate-limited')
     const githubNotice = await morz.page.evaluate(async () => {
