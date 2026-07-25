@@ -8,6 +8,7 @@ import {
   IconFolders,
   IconWorld,
   IconDeviceMobile,
+  IconPuzzle,
   IconSettings,
   IconSquareRoundedPlus,
   IconRobot,
@@ -34,6 +35,7 @@ import { SessionsPanel } from './SessionsPanel'
 // w6/organizer-ui
 import { OrganizerPanel } from './OrganizerPanel'
 import { ToastHost } from './Toast'
+import { ModuleDrawer } from './ModuleDrawer' // w15/modules-core
 import { IdePane } from './IdePane'
 import { ClaudeLane } from './ClaudeLane'
 import { useTerminalContextMenu } from './TerminalPane'
@@ -60,7 +62,9 @@ import {
 } from '@/store/layoutStore'
 import { getMorz, selectActiveSpaceRoot, useSpaceStore } from '@/store/spaceStore'
 import { useSessionsStore } from '@/store/sessionsStore'
+import { useModulesStore } from '@/store/modulesStore' // w15/modules-core
 import type { RunPaneBridge, RunPaneCreated, SessionSnapshot } from '@shared/ipc'
+import { MODULES, type ModuleId } from '@shared/modules'
 
 /* w13/dispatch-visible — preload bridge for dispatched agent panes. */
 function getRunPane(): RunPaneBridge | undefined {
@@ -80,6 +84,23 @@ const VIEWS: { id: CenterView; label: string; icon: typeof IconTerminal2 }[] = [
   // w11/sessions — one center-view entry; SpacesSidebar remains untouched.
   { id: 'sessions', label: 'Sessions', icon: IconHistory }
 ]
+
+/* w15/modules-core — which module owns each view; unmapped views are core.
+ * Disabled module = no tab, component not mounted, no sync registered. */
+const VIEW_MODULE: Partial<Record<CenterView, ModuleId>> = {
+  commit: 'commit',
+  review: 'review',
+  dag: 'orchestration',
+  browser: 'browser',
+  organizer: 'organizer',
+  sessions: 'sessions',
+  workshop: 'workshop'
+}
+
+function viewAllowed(view: CenterView, enabled: Record<ModuleId, boolean>): boolean {
+  const owner = VIEW_MODULE[view]
+  return !owner || enabled[owner]
+}
 
 /* Dev-only: allow ?view=commit&explorer=1 so surfaces can be screenshot-verified. */
 function initialFromUrl(): { view: CenterView; explorer: boolean } {
@@ -190,11 +211,13 @@ export function Shell(): JSX.Element {
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [explorerOpen, setExplorerOpen] = useState(initial.explorer)
   const [orchestratorOpen, setOrchestratorOpen] = useState(true) // w10/identity
+  const [moduleDrawerOpen, setModuleDrawerOpen] = useState(false) // w15/modules-core
   const [view, setView] = useState<CenterView>(initial.view)
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('limits')
   const [settingsRevision, setSettingsRevision] = useState(0)
 
   const mode = useModeStore((s) => s.mode)
+  const modulesEnabled = useModulesStore((s) => s.enabled) // w15/modules-core
   const root = useLayoutStore((s) => s.root)
   const hydrated = useLayoutStore((s) => s.hydrated)
   const panes = useLayoutStore((s) => s.panes)
@@ -220,9 +243,18 @@ export function Shell(): JSX.Element {
   )
   const sessionAgentsKey = sessionAgents.join('|')
 
-  /* w11/sessions — a space with an open pane owns exactly one live work record. */
+  /* w15/modules-core — a gated-off view falls back to terminals so a disabled
+   * module's component is never left mounted. */
+  const visibleViews = VIEWS.filter((item) => viewAllowed(item.id, modulesEnabled))
+  useEffect(() => {
+    if (!viewAllowed(view, modulesEnabled)) setView('terminals')
+  }, [modulesEnabled, view])
+
+  /* w11/sessions — a space with an open pane owns exactly one live work record.
+   * w15/modules-core: the sessions module owns this sync — off = no IPC. */
   useEffect(() => {
     const store = useSessionsStore.getState()
+    if (!modulesEnabled.sessions) return
     if (!spacesReady || !spaceRoot) {
       if (spacesReady) void store.endCurrent()
       return
@@ -233,7 +265,7 @@ export function Shell(): JSX.Element {
       title: spaceBranch || activeSpace?.name || 'Project session',
       agentsUsed: sessionAgents
     })
-  }, [activeSpace?.name, hydrated, panes.length, sessionAgentsKey, spaceBranch, spaceRoot, spacesReady])
+  }, [activeSpace?.name, hydrated, modulesEnabled.sessions, panes.length, sessionAgentsKey, spaceBranch, spaceRoot, spacesReady])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
@@ -431,14 +463,17 @@ export function Shell(): JSX.Element {
   )
 
   const paletteActions = useMemo<PaletteAction[]>(() => {
-    const actions: PaletteAction[] = VIEWS.map((item) => ({
+    // w15/modules-core — only enabled modules' views become commands
+    const actions: PaletteAction[] = VIEWS.filter((item) => viewAllowed(item.id, modulesEnabled)).map((item) => ({
       id: `view-${item.id}`,
       group: 'view',
       label: `view: ${item.label.toLowerCase()}`
     }))
 
+    if (modulesEnabled.workshop) {
+      actions.push({ id: 'view-workshop', group: 'view', label: 'view: workshop' })
+    }
     actions.push(
-      { id: 'view-workshop', group: 'view', label: 'view: workshop' },
       { id: 'view-settings', group: 'view', label: 'view: settings' },
       { id: 'toggle-explorer', group: 'view', label: 'view: toggle file explorer', hint: 'Ctrl+B' },
       { id: 'spawn-terminal', group: 'spawn', label: 'spawn: terminal pane' },
@@ -469,12 +504,22 @@ export function Shell(): JSX.Element {
       })
     }
 
-    if (window.morz?.catalog && typeof window.morz.catalog.refresh === 'function') {
+    if (modulesEnabled.workshop && window.morz?.catalog && typeof window.morz.catalog.refresh === 'function') {
       actions.push({ id: 'workshop-sync', group: 'workshop', label: 'workshop: sync catalog' })
     }
 
-    if (getRunApi()) {
+    if (modulesEnabled.orchestration && getRunApi()) {
       actions.push({ id: 'run-refresh', group: 'run', label: 'run: refresh orchestration runs' })
+    }
+
+    // w15/modules-core — module toggles: only the applicable direction is offered
+    for (const def of MODULES) {
+      const on = modulesEnabled[def.id]
+      actions.push({
+        id: `module-${on ? 'disable' : 'enable'}-${def.id}`,
+        group: 'module',
+        label: `module: ${on ? 'disable' : 'enable'} ${def.label.toLowerCase()}`
+      })
     }
 
     for (const theme of themes) {
@@ -486,7 +531,7 @@ export function Shell(): JSX.Element {
     }
 
     return actions
-  }, [activePaneId, activeLanes.length, mode, panes])
+  }, [activePaneId, activeLanes.length, mode, modulesEnabled, panes])
 
   const openSettings = useCallback((tab: SettingsTab, focusMemory = false): void => {
     setSettingsTab(tab)
@@ -503,10 +548,19 @@ export function Shell(): JSX.Element {
 
   const runPaletteAction = useCallback(
     (id: string): void => {
+      // w15/modules-core — Ctrl-K module toggles
+      const moduleToggle = id.match(/^module-(enable|disable)-(.+)$/)
+      if (moduleToggle) {
+        const moduleId = MODULES.find((def) => def.id === moduleToggle[2])?.id
+        if (moduleId) void useModulesStore.getState().setEnabled(moduleId, moduleToggle[1] === 'enable')
+        return
+      }
+
       const centerView = id.startsWith('view-') ? id.slice('view-'.length) : ''
       if (
         centerView &&
-        [...VIEWS.map((item) => item.id), 'settings', 'workshop'].includes(centerView as CenterView)
+        [...VIEWS.map((item) => item.id), 'settings', 'workshop'].includes(centerView as CenterView) &&
+        viewAllowed(centerView as CenterView, useModulesStore.getState().enabled)
       ) {
         setView(centerView as CenterView)
         return
@@ -595,7 +649,7 @@ export function Shell(): JSX.Element {
               role="tablist"
               aria-label="Center view"
             >
-              {VIEWS.map((v) => {
+              {visibleViews.map((v) => {
                 const active = view === v.id
                 const Icon = v.icon
                 return (
@@ -624,26 +678,41 @@ export function Shell(): JSX.Element {
               })}
             </nav>
 
+            {/* w15/modules-core — the `+` affordance opens the module drawer */}
             <button
-              onClick={() => setView('workshop')}
+              onClick={() => setModuleDrawerOpen(true)}
               className="ml-auto flex cursor-pointer items-center rounded-md p-1.5 transition-colors hover:bg-[#37332B]"
-              title="Workshop — add skills, MCP servers, plugins, models"
-              aria-label="Workshop"
-              style={{ color: view === 'workshop' ? colors.bronzeHot : colors.quartzDim }}
+              title="Modules — turn Morz surfaces on and off"
+              aria-label="Modules"
+              style={{ color: moduleDrawerOpen ? colors.bronzeHot : colors.quartzDim }}
             >
-              <IconSquareRoundedPlus size={15} stroke={1.5} />
+              <IconPuzzle size={15} stroke={1.5} />
             </button>
-            {/* w10/identity — the orchestrator is a Morz system, not a generic robot. */}
-            <button
-              onClick={() => setOrchestratorOpen((open) => !open)}
-              className="flex cursor-pointer items-center rounded-md p-1.5 transition-colors hover:bg-[#37332B]"
-              title={`${orchestratorOpen ? 'Hide' : 'Show'} orchestrator`}
-              aria-label="Toggle orchestrator"
-              aria-pressed={orchestratorOpen}
-              style={{ color: orchestratorOpen ? colors.quartz : colors.quartzDim }}
-            >
-              <MorzSignal className="h-[15px] w-[21px]" goldPoint />
-            </button>
+            {modulesEnabled.workshop && (
+              <button
+                onClick={() => setView('workshop')}
+                className="flex cursor-pointer items-center rounded-md p-1.5 transition-colors hover:bg-[#37332B]"
+                title="Workshop — add skills, MCP servers, plugins, models"
+                aria-label="Workshop"
+                style={{ color: view === 'workshop' ? colors.bronzeHot : colors.quartzDim }}
+              >
+                <IconSquareRoundedPlus size={15} stroke={1.5} />
+              </button>
+            )}
+            {/* w10/identity — the orchestrator is a Morz system, not a generic robot.
+              * w15/modules-core — the whole affordance belongs to the orchestration module. */}
+            {modulesEnabled.orchestration && (
+              <button
+                onClick={() => setOrchestratorOpen((open) => !open)}
+                className="flex cursor-pointer items-center rounded-md p-1.5 transition-colors hover:bg-[#37332B]"
+                title={`${orchestratorOpen ? 'Hide' : 'Show'} orchestrator`}
+                aria-label="Toggle orchestrator"
+                aria-pressed={orchestratorOpen}
+                style={{ color: orchestratorOpen ? colors.quartz : colors.quartzDim }}
+              >
+                <MorzSignal className="h-[15px] w-[21px]" goldPoint />
+              </button>
+            )}
             <button
               onClick={() => setView('settings')}
               className="mr-2 flex cursor-pointer items-center rounded-md p-1.5 transition-colors hover:bg-[#37332B]"
@@ -705,14 +774,17 @@ export function Shell(): JSX.Element {
           {view === 'workshop' && <WorkshopPanel />}
         </main>
 
-        {orchestratorOpen && <OrchestratorPanel />}{/* w10/identity */}
+        {modulesEnabled.orchestration && orchestratorOpen && <OrchestratorPanel />}{/* w10/identity + w15/modules-core */}
 
         <FileExplorer open={explorerOpen} onClose={() => setExplorerOpen(false)} />
       </div>
 
-      <StatusBar onOpenCommit={() => setView('commit')} />
+      <StatusBar onOpenCommit={modulesEnabled.commit ? () => setView('commit') : undefined} />
 
       <ToastHost />
+
+      {/* w15/modules-core */}
+      <ModuleDrawer open={moduleDrawerOpen} onClose={() => setModuleDrawerOpen(false)} />
 
       {/* IDE editor pane — self-managed overlay; opens on ctrl-click 'open-file' events */}
       <IdePane />

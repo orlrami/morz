@@ -42,8 +42,16 @@ let launchSeq = 0
  * Launch the built app with an isolated APPDATA so tests never touch the
  * user's real %APPDATA%\Morz\morz.db. Pass a previous appDataDir to relaunch
  * against the same store (session-restore scenarios).
+ *
+ * w15/modules-core — MORZ_MODULES seeds the module enabled-map on a FRESH
+ * profile ('all' | 'none' | 'defaults' | CSV of module ids). The harness
+ * defaults to 'all' so pre-wave specs keep their surfaces; modules.spec passes
+ * its own seed via opts.env. Persisted rows always win over the seed.
  */
-export async function launchMorz(opts?: { appDataDir?: string }): Promise<MorzApp> {
+export async function launchMorz(opts?: {
+  appDataDir?: string
+  env?: Record<string, string>
+}): Promise<MorzApp> {
   if (!existsSync(MAIN_JS)) {
     throw new Error(`Missing ${MAIN_JS} — run \`npm run build\` before the E2E suite.`)
   }
@@ -58,6 +66,8 @@ export async function launchMorz(opts?: { appDataDir?: string }): Promise<MorzAp
   // resolves it) — MORZ_USER_DATA is the main-process isolation hook.
   env['APPDATA'] = appDataDir
   env['MORZ_USER_DATA'] = appDataDir
+  Object.assign(env, opts?.env)
+  env['MORZ_MODULES'] ??= 'all' // w15/modules-core (see doc comment above)
 
   const app = await _electron.launch({
     executablePath: ELECTRON_EXE,

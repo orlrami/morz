@@ -836,3 +836,43 @@ const runHistoryBridge: RunHistoryBridge = {
 
 contextBridge.exposeInMainWorld('morzRunHistory', runHistoryBridge)
 // end w14/runs-clear
+
+// w15/modules-core — append-only module registry bridge.
+import { ModulesApi, type ModuleId, type ModulesBridge } from '../shared/modules'
+
+const modulesBridge: ModulesBridge = {
+  get: (): Promise<Record<ModuleId, boolean>> => ipcRenderer.invoke(ModulesApi.get),
+  set: (id: ModuleId, on: boolean): Promise<Record<ModuleId, boolean>> =>
+    ipcRenderer.invoke(ModulesApi.set, { id, on })
+}
+
+contextBridge.exposeInMainWorld('morzModules', modulesBridge)
+
+/* E2E-only outbound IPC tap: modules.spec asserts a disabled module generates
+ * ZERO module IPC traffic. Every renderer bridge above closes over
+ * `ipcRenderer.invoke`/`send` (resolved at call time), so wrapping here records
+ * all outbound control-plane calls made after preload evaluation. */
+if (process.env.MORZ_E2E === '1') {
+  const outboundChannels: string[] = []
+  const record = (channel: unknown): void => {
+    if (typeof channel === 'string') outboundChannels.push(channel)
+  }
+  const originalInvoke = ipcRenderer.invoke.bind(ipcRenderer)
+  const originalSend = ipcRenderer.send.bind(ipcRenderer)
+  try {
+    ipcRenderer.invoke = (channel: string, ...args: unknown[]) => {
+      record(channel)
+      return originalInvoke(channel, ...args)
+    }
+    ipcRenderer.send = (channel: string, ...args: unknown[]) => {
+      record(channel)
+      originalSend(channel, ...args)
+    }
+  } catch {
+    // Tap unavailable — the spec's zero-traffic assert fails loudly instead of silently passing.
+  }
+  contextBridge.exposeInMainWorld('morzE2eIpc', {
+    calls: (): string[] => [...outboundChannels]
+  })
+}
+// end w15/modules-core

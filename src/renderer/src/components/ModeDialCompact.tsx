@@ -5,6 +5,7 @@ import { colors } from '@/lib/tokens'
 import { ORCHESTRATED_AVAILABLE, useModeStore, type MorzMode } from '@/store/modeStore'
 import { useLaneStore } from '@/store/laneStore'
 import { useLayoutStore } from '@/store/layoutStore'
+import { useModulesStore } from '@/store/modulesStore' // w15/modules-core
 import { getMorz } from '@/store/spaceStore'
 
 const MODES: { id: MorzMode; label: string; icon: typeof IconHandStop }[] = [
@@ -22,6 +23,7 @@ const MODES: { id: MorzMode; label: string; icon: typeof IconHandStop }[] = [
 export function ModeDialCompact(): JSX.Element {
   const mode = useModeStore((s) => s.mode)
   const setMode = useModeStore((s) => s.setMode)
+  const orchestrationOn = useModulesStore((s) => s.enabled.orchestration) // w15/modules-core
 
   const switchMode = (next: MorzMode): void => {
     if (next === 'manual') {
@@ -46,7 +48,8 @@ export function ModeDialCompact(): JSX.Element {
     >
       {MODES.map((m) => {
         const active = mode === m.id
-        const disabled = m.id === 'orchestrated' && !ORCHESTRATED_AVAILABLE
+        // w15/modules-core — the Orchestrated position requires the orchestration module
+        const disabled = m.id === 'orchestrated' && (!ORCHESTRATED_AVAILABLE || !orchestrationOn)
         const Icon = m.icon
         return (
           <button
@@ -56,8 +59,10 @@ export function ModeDialCompact(): JSX.Element {
             aria-checked={active}
             aria-disabled={disabled}
             aria-label={m.label}
-            title={disabled ? 'Orchestrated ships in 0.0.3' : m.label}
-            onClick={() => switchMode(m.id)}
+            title={disabled ? 'Requires the Orchestration module' : m.label}
+            onClick={() => {
+              if (!disabled) switchMode(m.id)
+            }}
             className={`relative flex h-[22px] w-9 shrink-0 items-center justify-center overflow-hidden rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-bronze-hot)] focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--color-page)] ${
               disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'
             }`}
