@@ -80,6 +80,8 @@ async function loadStatus(runId: string): Promise<void> {
   }
 }
 
+const evictedRunIds = new Set<string>()
+
 export const useRunsStore = create<RunsState>()(
   persist(
     (set) => ({
@@ -91,13 +93,16 @@ export const useRunsStore = create<RunsState>()(
       selectedRunId: null,
       historyPolicy: migrateLegacyHistoryPolicy(),
       ingest: (status) =>
-        set((state) => ({
-          statuses: { ...state.statuses, [status.runId]: status },
-          runs: state.runs.map((run) =>
-            run.runId === status.runId ? { ...run, state: status.state } : run
-          ),
-          error: null
-        })),
+        set((state) => {
+          if (evictedRunIds.has(status.runId)) return state
+          return {
+            statuses: { ...state.statuses, [status.runId]: status },
+            runs: state.runs.map((run) =>
+              run.runId === status.runId ? { ...run, state: status.state } : run
+            ),
+            error: null
+          }
+        }),
       selectRun: (runId) => {
         set({ selectedRunId: runId, error: null })
         void loadStatus(runId)
@@ -105,6 +110,7 @@ export const useRunsStore = create<RunsState>()(
       evictRuns: (runIds) =>
         set((state) => {
           if (runIds.length === 0) return state
+          for (const id of runIds) evictedRunIds.add(id)
           const cleared = new Set(runIds)
           const runs = state.runs.filter((run) => !cleared.has(run.runId))
           const statuses = { ...state.statuses }

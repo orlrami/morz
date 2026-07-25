@@ -25,6 +25,7 @@ interface BusState {
   live: boolean
   /** Subscribe + pull the initial snapshot. Idempotent; Assisted-only callers. */
   start(): void
+  stop(): void
   respondApproval(requestId: string, approved: boolean): void
   /** Dev command: simulate lane A posting a handoff targeting `to`. */
   simulateHandoff(to: AgentId): void
@@ -74,10 +75,29 @@ export const useBusStore = create<BusState>()((set) => ({
         set({ ...scopeSnapshot(s), live: true })
       })
     }
-    void bus.snapshot(activeRoot() || undefined).then((s) => {
+    if (!spaceSub) {
+      spaceSub = useSpaceStore.subscribe((state) => {
+        const root = selectActiveSpaceRoot(state)
+        if (root === knownRoot) return
+        knownRoot = root
+        if (lastSnapshot) set(scopeSnapshot(lastSnapshot))
+        void getBus()
+          ?.snapshot(root || undefined)
+          .then((s) => {
+            lastSnapshot = s
+            set({ ...scopeSnapshot(s), live: true })
+          })
+      })
+    }
+    
+    knownRoot = activeRoot()
+    void bus.snapshot(knownRoot || undefined).then((s) => {
       lastSnapshot = s
       set({ ...scopeSnapshot(s), live: true })
     })
+  },
+  stop: () => {
+    unsubscribeBusStore()
   },
   respondApproval: (requestId, approved) => {
     getBus()?.respondApproval({ requestId, approved })
@@ -96,16 +116,12 @@ export const useBusStore = create<BusState>()((set) => ({
 // w14/orch-scoped — switching spaces swaps the whole blackboard: re-scope the
 // last known board immediately, then pull a fresh per-space snapshot.
 let knownRoot: string | null = null
-useSpaceStore.subscribe((state) => {
-  const root = selectActiveSpaceRoot(state)
-  if (root === knownRoot) return
-  knownRoot = root
-  if (!subscribed) return
-  if (lastSnapshot) useBusStore.setState(scopeSnapshot(lastSnapshot))
-  void getBus()
-    ?.snapshot(root || undefined)
-    .then((s) => {
-      lastSnapshot = s
-      useBusStore.setState({ ...scopeSnapshot(s), live: true })
-    })
-})
+let spaceSub: (() => void) | null = null
+
+export function unsubscribeBusStore(): void {
+  if (spaceSub) {
+    spaceSub()
+    spaceSub = null
+  }
+}
+

@@ -433,8 +433,13 @@ function respondPermission(resp: ClaudePermissionResp): void {
   pendingPermissions.delete(resp.requestId)
   const proc = procs.get(pending.agentId)
   if (!proc) return
+  let behavior = resp.behavior
+  if (behavior !== 'allow' && behavior !== 'deny') {
+    console.warn(`[claude] Invalid permission behavior ${JSON.stringify(behavior)}, treating as deny`)
+    behavior = 'deny'
+  }
   const response =
-    resp.behavior === 'allow'
+    behavior === 'allow'
       ? { behavior: 'allow', updatedInput: pending.input }
       : { behavior: 'deny', message: 'Denied by the user in Morz' }
   writeLine(proc, {
