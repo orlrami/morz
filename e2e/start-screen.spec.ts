@@ -104,6 +104,13 @@ test.describe.serial('start screen (wave 15 slice 7)', () => {
     await expect(page.getByLabel('Session', { exact: true })).toHaveValue('shell')
     await expect(page.getByLabel('Space', { exact: true })).toBeVisible()
     await expect(page.getByRole('region', { name: 'Explorer preview' })).toBeVisible()
+
+    // w16 — frameless window: the launcher must carry a drag strip so the
+    // window can be moved before entering the shell.
+    const dragRegion = await page
+      .getByTestId('start-drag-strip')
+      .evaluate((el) => getComputedStyle(el).getPropertyValue('-webkit-app-region'))
+    expect(dragRegion.trim()).toBe('drag')
   })
 
   test('a restored layout boots the shell without ever mounting the launcher', async () => {

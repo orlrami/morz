@@ -90,6 +90,14 @@ export function OnboardingScreen({
       style={{ background: colors.page }}
       aria-label="First-run setup"
     >
+      {/* Frameless window: this full-window surface covers the titlebar, so it
+       * carries its own drag strip (pattern from TitleBar.tsx). */}
+      <div
+        data-testid="onboarding-drag-strip"
+        aria-hidden
+        className="absolute inset-x-0 top-0 h-[38px]"
+        style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
+      />
       <header
         className="flex h-[68px] shrink-0 items-center justify-between border-b px-7"
         style={{ background: colors.panel, borderColor: 'var(--color-line)' }}

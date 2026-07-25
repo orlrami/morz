@@ -13,9 +13,10 @@ test.describe.serial('context hub', () => {
   test.beforeAll(async () => {
     process.env.MORZ_E2E = '1'
     process.env.MORZ_E2E_CONTEXT_ENABLED = '1'
+    // w16 — no MORZ_E2E_CONTEXT_ROOTS allowlist: spaces seeded straight into
+    // localStorage (legacy spaces, never picker-authorized) must scan fine.
     firstRoot = mkdtempSync(join(tmpdir(), 'morz-context-first-'))
     secondRoot = mkdtempSync(join(tmpdir(), 'morz-context-second-'))
-    process.env.MORZ_E2E_CONTEXT_ROOTS = JSON.stringify([firstRoot, secondRoot])
     writeFileSync(join(firstRoot, 'package.json'), '{"name":"first"}\n')
     writeFileSync(join(secondRoot, 'CLAUDE.md'), '# Second fixture\n')
 
@@ -50,7 +51,6 @@ test.describe.serial('context hub', () => {
     rmSync(firstRoot, { recursive: true, force: true })
     rmSync(secondRoot, { recursive: true, force: true })
     delete process.env.MORZ_E2E_CONTEXT_ENABLED
-    delete process.env.MORZ_E2E_CONTEXT_ROOTS
     delete process.env.MORZ_E2E
   })
 
@@ -147,6 +147,27 @@ test.describe.serial('context hub', () => {
     expect(content.match(/<!-- morz:memory -->/g)).toHaveLength(1)
     expect(content.match(/<!-- \/morz:memory -->/g)).toHaveLength(1)
     expect(content).toContain('Prefer focused tests before broad verification')
+  })
+
+  test('scan rejects roots that fail path hygiene', async () => {
+    // The picker-only allowlist is gone; scans are guarded by structural
+    // validation instead. Relative and nonexistent roots must still throw.
+    const results = await page.evaluate(async (existing) => {
+      const scanError = async (root: string): Promise<string> => {
+        try {
+          await window.morz.contextHub!.scan([{ id: 'forged', name: 'Forged', root }])
+          return 'resolved'
+        } catch (error) {
+          return error instanceof Error ? error.message : String(error)
+        }
+      }
+      return {
+        relative: await scanError('relative/path'),
+        nonexistent: await scanError(`${existing}\\does-not-exist-w16`)
+      }
+    }, firstRoot)
+    expect(results.relative).toContain('absolute')
+    expect(results.nonexistent).toContain('does not exist')
   })
 
   test('disabled module sends zero scan IPC', async () => {

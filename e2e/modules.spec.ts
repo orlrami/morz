@@ -90,6 +90,20 @@ test.describe.serial('modules: all off = core only, enable = live', () => {
     await page.getByRole('button', { name: 'Add modules' }).click()
     const drawer = page.getByTestId('module-drawer')
     await expect(drawer).toBeVisible()
+
+    // w16 regression: the drawer used to mount inside the 56px rail and render
+    // as a clipped toggle column. It must be the full 320px sheet, flush with
+    // the window's right edge, overlaying the stage — not confined to the rail.
+    const drawerBox = await drawer.boundingBox()
+    const viewport = page.viewportSize()
+    expect(drawerBox, 'drawer has no bounding box').not.toBeNull()
+    expect(drawerBox!.width, 'drawer clipped — narrower than 300px').toBeGreaterThanOrEqual(300)
+    if (viewport) {
+      expect(drawerBox!.x + drawerBox!.width).toBeGreaterThan(viewport.width - 4)
+      expect(drawerBox!.x, 'drawer sits inside the 56px rail').toBeGreaterThan(56)
+      expect(drawerBox!.height).toBeGreaterThanOrEqual(viewport.height - 4)
+    }
+
     await page.getByTestId('module-toggle-orchestration').click()
     await expect(page.getByTestId('module-toggle-orchestration')).toHaveAttribute('aria-checked', 'true')
     await page.locator('[aria-label="Close module drawer"]').click()

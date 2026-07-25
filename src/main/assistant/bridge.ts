@@ -542,7 +542,7 @@ export class AssistantBridgeService {
     const { window, view } = this.createHostedPane(provider, `Connect ${provider.name}`, footerHeight)
     try {
       const confirmUrl = 'morz-assistant://login-confirmed'
-      const footer = `<!doctype html><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">\n<style>body{margin:0;background:#171511;color:#d7cdb9;font:13px system-ui;display:flex;align-items:flex-end;height:100vh}footer{box-sizing:border-box;width:100%;height:${footerHeight}px;padding:12px 16px;display:flex;align-items:center;justify-content:space-between;border-top:1px solid #403a31}a{background:#c99552;color:#171511;padding:9px 14px;border-radius:7px;text-decoration:none;font-weight:700}</style><footer><span>Sign in above. Morz never sees your credentials.</span><a href="${confirmUrl}">Iâ€™m signed in and ready</a></footer>`
+      const footer = `<!doctype html><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">\n<style>body{margin:0;background:#171511;color:#d7cdb9;font:13px system-ui;display:flex;align-items:flex-end;height:100vh}footer{box-sizing:border-box;width:100%;height:${footerHeight}px;padding:12px 16px;display:flex;align-items:center;justify-content:space-between;border-top:1px solid #403a31}a{background:#c99552;color:#171511;padding:9px 14px;border-radius:7px;text-decoration:none;font-weight:700}</style><footer><span>Sign in above. Morz never sees your credentials.</span><a href="${confirmUrl}">I'm signed in and ready</a></footer>`
       await window.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(footer)}`)
       await view.webContents.loadURL(provider.loginUrl)
       await new Promise<void>((resolve, reject) => {

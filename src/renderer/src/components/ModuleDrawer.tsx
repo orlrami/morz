@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import { AnimatePresence, motion } from 'framer-motion'
 import { IconLock, IconX } from '@tabler/icons-react'
 import { MODULES, type ModuleId } from '@shared/modules'
@@ -51,11 +52,13 @@ export function ModuleDrawer({ open, onClose }: ModuleDrawerProps): JSX.Element 
     return () => document.removeEventListener('keydown', onKey)
   }, [onClose, open])
 
-  return (
+  // Portaled to <body>: the drawer is opened from the 56px icon rail, and an
+  // in-place `absolute inset-0` overlay would be clipped to the rail's width.
+  return createPortal(
     <AnimatePresence>
       {open && (
         <motion.div
-          className="absolute inset-0 z-40 flex justify-end"
+          className="fixed inset-0 z-40 flex justify-end"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0, transition: { duration: 0.12 } }}
@@ -100,7 +103,8 @@ export function ModuleDrawer({ open, onClose }: ModuleDrawerProps): JSX.Element 
           </motion.aside>
         </motion.div>
       )}
-    </AnimatePresence>
+    </AnimatePresence>,
+    document.body
   )
 }
 

@@ -222,12 +222,21 @@ export function StartScreen({
   return (
     <div
       data-testid="start-screen"
-      className="flex h-full min-h-0 overflow-hidden"
+      className="relative flex h-full min-h-0 overflow-hidden"
       style={{
         background:
           'radial-gradient(circle at 18% 12%, rgba(203,162,90,0.09), transparent 34%), #26241E'
       }}
     >
+      {/* Frameless window: the launcher covers the titlebar, so it carries its
+       * own drag strip (pattern from TitleBar.tsx). The top 40px is padding on
+       * both columns — no interactive element sits under it. */}
+      <div
+        data-testid="start-drag-strip"
+        aria-hidden
+        className="absolute inset-x-0 top-0 z-10 h-10"
+        style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
+      />
       <main
         className="flex min-h-0 w-[58%] min-w-[580px] flex-col border-r"
         style={{ borderColor: 'var(--color-line)' }}

@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
 import { lstat, readFile, realpath, stat } from 'node:fs/promises'
-import { isAbsolute, join, relative, resolve } from 'node:path'
+import { isAbsolute, join, normalize, relative, resolve, sep } from 'node:path'
 import { promisify } from 'node:util'
 import type { IpcMain, IpcMainInvokeEvent } from 'electron'
 import { ContextHubApi } from '../../shared/context-hub'
@@ -57,21 +57,29 @@ function validateText(value: unknown, field: string, max: number): string {
   return value.trim()
 }
 
-async function validateSpace(
-  input: ContextSpaceInput,
-  isAuthorizedRoot?: (root: string) => boolean | Promise<boolean>
-): Promise<ContextSpaceInput> {
+/*
+ * w16 — space-store roots are the authority (every space was user-picked); the
+ * scan path validates each root structurally, the same way fs:list does:
+ * absolute, no '..' traversal, exists, is a directory. Symlink and containment
+ * guards on individual context files stay (assertKnownPathSafe).
+ */
+async function validateSpace(input: ContextSpaceInput): Promise<ContextSpaceInput> {
   if (!input || typeof input !== 'object') throw new Error('Space is invalid')
   const id = validateText(input.id, 'Space id', 200)
   const name = validateText(input.name, 'Space name', 500)
   const rootInput = validateText(input.root, 'Space root', 32_768)
   if (!isAbsolute(rootInput)) throw new Error('Space root must be absolute')
-  const root = await realpath(rootInput)
+  if (normalize(rootInput).split(sep).includes('..')) {
+    throw new Error('Space root must not contain traversal segments')
+  }
+  let root: string
+  try {
+    root = await realpath(rootInput)
+  } catch {
+    throw new Error('Space root does not exist')
+  }
   const info = await stat(root)
   if (!info.isDirectory()) throw new Error('Space root must be a directory')
-  if (isAuthorizedRoot && !(await isAuthorizedRoot(root))) {
-    throw new Error('Space root is not authorized by Morz')
-  }
   return { id, name, root }
 }
 
@@ -189,11 +197,8 @@ async function scanKnownFile(
   }
 }
 
-async function scanSpace(
-  rawSpace: ContextSpaceInput,
-  isAuthorizedRoot?: (root: string) => boolean | Promise<boolean>
-): Promise<ContextSpaceMatrix> {
-  const space = await validateSpace(rawSpace, isAuthorizedRoot)
+async function scanSpace(rawSpace: ContextSpaceInput): Promise<ContextSpaceMatrix> {
+  const space = await validateSpace(rawSpace)
   const cutoffMs = await staleCutoff(space.root)
   return {
     ...space,
@@ -223,7 +228,6 @@ export interface ContextHubServiceOptions {
   templatesRoot?: string
   listMemories?: (space: ContextSpaceMatrix) => MemoryEntry[]
   statusSnapshot?: (space: ContextSpaceMatrix) => ContextStatusSnapshot | Promise<ContextStatusSnapshot>
-  isAuthorizedRoot?: (root: string) => boolean | Promise<boolean>
 }
 
 const TEMPLATE_FILES: Record<ContextTemplateInput['kind'], string> = {
@@ -446,9 +450,7 @@ export function createContextHubService(options: ContextHubServiceOptions = {}):
   return {
     async scan(inputs): Promise<ContextMatrix> {
       if (!Array.isArray(inputs) || inputs.length > 200) throw new Error('Spaces are invalid')
-      const scanned = await Promise.all(
-        inputs.map((space) => scanSpace(space, options.isAuthorizedRoot))
-      )
+      const scanned = await Promise.all(inputs.map((space) => scanSpace(space)))
       const uniqueIds = new Set<string>()
       for (const space of scanned) {
         if (uniqueIds.has(space.id)) throw new Error('Space ids must be unique')

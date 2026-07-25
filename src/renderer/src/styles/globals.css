@@ -76,6 +76,27 @@
   box-sizing: border-box;
 }
 
+/*
+ * w16 — native <select> popups ignore app CSS: without a dark color-scheme
+ * Chromium renders the menu white with the OS-blue highlight. color-scheme
+ * flips the native menu chrome dark; the option rule paints its rows with the
+ * app's own surface/text tokens. One global rule — never restyle per component.
+ */
+:root {
+  color-scheme: dark;
+}
+
+select,
+optgroup,
+option {
+  background-color: var(--color-panel);
+  color: var(--color-quartz);
+}
+
+option:disabled {
+  color: var(--color-quartz-faint);
+}
+
 html,
 body,
 #root {

@@ -23,6 +23,13 @@ test.describe.serial('first-run onboarding', () => {
 
       await page.getByLabel('Code review').selectOption('coderabbit')
       await expect(preview.getByText('Code review: CodeRabbit', { exact: true })).toBeVisible()
+
+      // w16 — frameless window: the setup surface must carry a drag strip so
+      // the window can be moved (interactivity above is proof clicks still land).
+      const dragRegion = await page
+        .getByTestId('onboarding-drag-strip')
+        .evaluate((el) => getComputedStyle(el).getPropertyValue('-webkit-app-region'))
+      expect(dragRegion.trim()).toBe('drag')
     } finally {
       await closeMorz(morz.app)
     }
