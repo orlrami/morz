@@ -58,9 +58,18 @@ export function CommandPalette({ open, actions, onClose, onAction }: CommandPale
   const [query, setQuery] = useState('')
   const [activeIndex, setActiveIndex] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
+  const restoreFocusRef = useRef<HTMLElement | null>(null)
 
   useEffect(() => {
-    if (!open) return
+    if (!open) {
+      // a11y (w16 review): hand focus back to whatever opened the palette
+      // (titlebar icon or the focused pane), not document.body.
+      restoreFocusRef.current?.focus?.()
+      restoreFocusRef.current = null
+      return
+    }
+    restoreFocusRef.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null
     setQuery('')
     setActiveIndex(0)
     requestAnimationFrame(() => inputRef.current?.focus())

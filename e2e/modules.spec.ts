@@ -99,7 +99,7 @@ test.describe.serial('modules: all off = core only, enable = live', () => {
     expect(drawerBox!.width, 'drawer clipped — narrower than 300px').toBeGreaterThanOrEqual(300)
     if (viewport) {
       expect(drawerBox!.x + drawerBox!.width).toBeGreaterThan(viewport.width - 4)
-      expect(drawerBox!.x, 'drawer sits inside the 56px rail').toBeGreaterThan(56)
+      expect(drawerBox!.x, 'drawer overlays the stage beyond the 56px rail').toBeGreaterThan(56)
       expect(drawerBox!.height).toBeGreaterThanOrEqual(viewport.height - 4)
     }
 

@@ -761,7 +761,10 @@ function shellCommand(command: UpdateCommand): {
 } {
   if (process.platform === 'win32') {
     if (!safeCmdPath(command.executable)) throw new Error('Updater path cannot be run safely')
-    const args = command.args.join(' ')
+    // Args are allowlist-validated upstream (no spaces/specials possible), but
+    // quote each one anyway so a future validation change can't reopen a
+    // cmd.exe word-splitting seam (review finding, w16).
+    const args = command.args.map((arg) => `"${arg}"`).join(' ')
     return {
       shell: 'cmd',
       argv: ['/d', '/v:on', '/k'],

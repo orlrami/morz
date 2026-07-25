@@ -239,7 +239,11 @@ test.describe.serial('CLI update flow', () => {
 
     const card = page.getByTestId('connection-claude')
     await expect(card).toContainText('Update available')
-    await card.getByRole('button', { name: 'Update Claude Code now' }).click()
+    const updateButton = card.getByRole('button', { name: 'Update Claude Code now' })
+    await updateButton.click()
+    // Review finding (w16): while an update is running, the button must not
+    // allow a second concurrent updater.
+    await expect(updateButton).toBeDisabled()
 
     const updatePane = page.locator('[data-pane-id^="cli-update-claude-"]')
     await expect(updatePane).toBeVisible()
