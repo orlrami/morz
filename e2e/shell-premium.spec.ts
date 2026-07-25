@@ -54,6 +54,28 @@ test.describe.serial('premium shell chrome (w15/shell-layout)', () => {
     await expect(page.getByTestId('stage-header')).toContainText('Terminals')
   })
 
+  test('native form controls render dark (w16: no white OS dropdowns)', async () => {
+    const { page } = morz
+    const styles = await page.evaluate(() => {
+      const probe = document.createElement('select')
+      const option = document.createElement('option')
+      option.textContent = 'probe'
+      probe.appendChild(option)
+      document.body.appendChild(probe)
+      const result = {
+        colorScheme: getComputedStyle(document.documentElement).colorScheme,
+        optionBackground: getComputedStyle(option).backgroundColor,
+        optionColor: getComputedStyle(option).color
+      }
+      probe.remove()
+      return result
+    })
+    expect(styles.colorScheme).toBe('dark')
+    // colors.panel #2E2B24 / colors.quartz #EEE6D9 from tokens.ts
+    expect(styles.optionBackground).toBe('rgb(46, 43, 36)')
+    expect(styles.optionColor).toBe('rgb(238, 230, 217)')
+  })
+
   test('rail renders enabled modules only; a disabled module loses icon and view', async () => {
     const { page } = morz
     const rail = page.getByTestId('icon-rail')
