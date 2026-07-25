@@ -262,6 +262,19 @@ async function codexAuthStatus(home: string): Promise<boolean | null> {
   return null
 }
 
+/**
+ * Best-effort Antigravity auth probe. Returns false when there is no evidence
+ * of configuration, null (unknown) when a config directory or env credential
+ * is present but can't be confirmed without an interactive TTY.
+ */
+async function agyAuthStatus(home: string): Promise<boolean | null> {
+  if (process.env.ANTIGRAVITY_API_KEY?.trim() || process.env.GOOGLE_API_KEY?.trim()) return null
+  for (const dir of [join(home, '.antigravity'), join(home, '.agy')]) {
+    if (await exists(dir)) return null
+  }
+  return false
+}
+
 async function authStatus(id: CliId, executable: string, home: string): Promise<boolean | null> {
   if (id === 'claude') {
     if (
@@ -283,6 +296,7 @@ async function authStatus(id: CliId, executable: string, home: string): Promise<
     if (process.env.OPENAI_API_KEY?.trim()) return null
     return codexAuthStatus(home)
   }
+  if (id === 'agy') return agyAuthStatus(home)
   return null
 }
 
