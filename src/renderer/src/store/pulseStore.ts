@@ -72,7 +72,7 @@ function openPulseSurface(brief?: PulseBrief): void {
   document.querySelector<HTMLButtonElement>('button[aria-label="Settings"]')?.click()
   requestAnimationFrame(() => {
     const control = [...document.querySelectorAll<HTMLButtonElement>('button')].find(
-      (button) => button.textContent?.trim() === 'Control'
+      (button) => button.textContent?.trim() === 'Notifications'
     )
     control?.click()
   })

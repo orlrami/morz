@@ -122,7 +122,7 @@ test.describe.serial('Learning memory', () => {
     )
     expect(restoredProposal.find((item) => item.id === proposal.id)?.state).toBe('pending')
     await morz.page.getByRole('button', { name: 'Settings' }).click()
-    await morz.page.getByRole('button', { name: 'Control' }).click()
+    await morz.page.getByRole('button', { name: 'Memory' }).click()
 
     const settings = morz.page.getByRole('region', { name: 'Learning memory' })
     await expect(settings.getByText('Pending proposals', { exact: true })).toBeVisible()

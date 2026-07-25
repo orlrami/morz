@@ -161,7 +161,7 @@ test.describe.serial('wave 8 routing', () => {
   test('settings edits and persists routing rules and the private-space toggle', async () => {
     const { page } = morz
     await page.getByRole('button', { name: 'Settings' }).click()
-    await page.getByRole('button', { name: 'Control' }).click()
+    await page.getByRole('button', { name: 'Routing' }).click()
     const settings = page.getByRole('region', { name: 'Routing settings' })
     await expect(settings).toBeVisible()
     const keywords = settings.getByLabel('Math and proofs keywords')

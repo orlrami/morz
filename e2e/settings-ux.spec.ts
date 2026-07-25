@@ -20,7 +20,7 @@ test.describe.serial('Settings UX', () => {
     const settings = page.getByRole('region', { name: 'Settings' })
     await expect(settings).toBeVisible()
 
-    const scrollArea = settings.locator('.overflow-y-auto').first()
+    const scrollArea = settings.getByTestId('settings-scroll-area')
     const content = scrollArea.locator('div').first()
     const [scrollBox, contentBox] = await Promise.all([
       scrollArea.boundingBox(),
@@ -34,8 +34,9 @@ test.describe.serial('Settings UX', () => {
       )
     ).toBeLessThanOrEqual(2)
 
-    await page.getByRole('button', { name: 'Control' }).click()
-    const lastControl = page.getByRole('button', { name: 'Check for updates' })
+    await page.setViewportSize({ width: 1600, height: 420 })
+    await page.getByRole('button', { name: 'Integrations' }).click()
+    const lastControl = page.getByRole('button', { name: 'Test read' })
     await lastControl.scrollIntoViewIfNeeded()
     await expect(lastControl).toBeVisible()
     await expect

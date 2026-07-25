@@ -492,7 +492,9 @@ export function Shell(): JSX.Element {
       { id: 'spawn-terminal', group: 'spawn', label: 'spawn: terminal pane' },
       { id: 'settings-limits', group: 'settings', label: 'settings: limits & usage' },
       { id: 'settings-appearance', group: 'settings', label: 'settings: appearance' },
-      { id: 'settings-control', group: 'settings', label: 'settings: control' },
+      { id: 'settings-autonomy', group: 'settings', label: 'settings: autonomy & permissions' },
+      { id: 'settings-connections-models', group: 'settings', label: 'settings: connections & models' },
+      { id: 'settings-notifications', group: 'settings', label: 'settings: notifications' },
       { id: 'settings-memory', group: 'settings', label: 'settings: open memory settings' }
     )
 
@@ -608,8 +610,10 @@ export function Shell(): JSX.Element {
 
       if (id === 'settings-limits') openSettings('limits')
       if (id === 'settings-appearance') openSettings('appearance')
-      if (id === 'settings-control') openSettings('control')
-      if (id === 'settings-memory') openSettings('control', true)
+      if (id === 'settings-autonomy') openSettings('autonomy-permissions')
+      if (id === 'settings-connections-models') openSettings('connections-models')
+      if (id === 'settings-notifications') openSettings('notifications')
+      if (id === 'settings-memory') openSettings('memory', true)
 
       if (id === 'workshop-sync' && window.morz?.catalog) {
         setView('workshop')

@@ -49,7 +49,7 @@ test.describe('local voice dictation', () => {
 
   async function openVoiceSettings(): Promise<void> {
     await morz.page.getByRole('button', { name: 'Settings' }).click()
-    await morz.page.getByRole('button', { name: 'Control' }).click()
+    await morz.page.getByRole('button', { name: 'Autonomy & Permissions' }).click()
     await expect(morz.page.getByRole('region', { name: 'Voice settings' })).toBeVisible()
   }
 

@@ -87,7 +87,7 @@ test.describe.serial('Morz updater', () => {
     expect(requests).toEqual([])
 
     await morz.page.getByRole('button', { name: 'Settings' }).click()
-    await morz.page.getByRole('button', { name: 'Control' }).click()
+    await morz.page.getByRole('button', { name: 'About' }).click()
     const settings = morz.page.getByRole('region', { name: 'Update settings' })
     await expect(settings).toContainText('Version 0.0.4 · Stable channel')
     await expect(settings.getByRole('button', { name: 'Check for updates' })).toBeDisabled()

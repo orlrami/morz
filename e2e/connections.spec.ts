@@ -78,14 +78,14 @@ test.describe.serial('CLI connections', () => {
     })
 
     await page.getByRole('button', { name: 'Settings', exact: true }).click()
-    await page.getByRole('button', { name: 'Connections', exact: true }).click()
+    await page.getByRole('button', { name: 'Connections & Models', exact: true }).click()
     const settings = page.getByRole('region', { name: 'CLI connections' })
     await expect(settings).toBeVisible()
     await expect(settings.getByTestId('connection-claude')).toContainText('Claude Code 9.9.9-e2e')
     await expect(settings.getByTestId('connection-claude')).toContainText('Authentication unknown')
     await expect(settings.getByTestId('connection-codex')).toContainText('Not installed')
 
-    await page.getByRole('button', { name: 'Limits & usage', exact: true }).click()
+    await page.getByRole('button', { name: 'Limits & Usage', exact: true }).click()
     await expect(page.getByRole('progressbar')).toHaveCount(0)
     await expect(page.getByText('No CLI usage data is available')).toBeVisible()
 
@@ -134,9 +134,9 @@ test.describe.serial('CLI connections', () => {
     const laterMtime = new Date(Date.now() + 5_000)
     utimesSync(olderEventPath, laterMtime, laterMtime)
 
-    await page.getByRole('button', { name: 'Connections', exact: true }).click()
+    await page.getByRole('button', { name: 'Connections & Models', exact: true }).click()
     await page.getByRole('button', { name: 'Refresh CLI connections' }).click()
-    await page.getByRole('button', { name: 'Limits & usage', exact: true }).click()
+    await page.getByRole('button', { name: 'Limits & Usage', exact: true }).click()
     const realUsage = page.getByRole('progressbar', { name: 'Claude Code usage' })
     await expect(realUsage).toHaveAttribute('aria-valuenow', '42.5')
   })
