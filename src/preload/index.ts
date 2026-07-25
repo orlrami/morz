@@ -13,6 +13,7 @@ import {
   GitApi,
   PtyApi,
   SessionApi,
+  StartScreenApi,
   type ClaudeEvent,
   type ClaudePermissionReq,
   type ClaudePermissionResp,
@@ -25,6 +26,8 @@ import {
   type MorzApi,
   type PtyRendererMsg,
   type SessionSnapshot,
+  type StartScreenBridge,
+  type StartScreenTestBridge,
   type TerminalSpawnOpts
 } from '../shared/ipc'
 // w4/handoff — bus bridge (blackboard + assisted handoff)
@@ -98,6 +101,19 @@ const api: MorzApi = {
     explain: (ruleId) => ipcRenderer.invoke('organizer:explain', ruleId),
     apply: (root, planHash) => ipcRenderer.invoke('organizer:apply', { root, planHash })
   }
+}
+
+const startScreenBridge: StartScreenBridge = {
+  getPreference: () => ipcRenderer.invoke(StartScreenApi.getPreference),
+  setPreference: (preference) => ipcRenderer.invoke(StartScreenApi.setPreference, preference)
+}
+contextBridge.exposeInMainWorld('morzStartScreen', startScreenBridge)
+
+if (process.env.MORZ_E2E_START_SCREEN_STUB === '1') {
+  const startScreenTestBridge: StartScreenTestBridge = {
+    launches: () => ipcRenderer.invoke(StartScreenApi.testLaunches)
+  }
+  contextBridge.exposeInMainWorld('morzStartScreenTest', startScreenTestBridge)
 }
 
 /* ── w4/bus + w4/handoff: ONE window.morz.bus — the board API (w4/bus) plus

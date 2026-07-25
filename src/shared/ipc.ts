@@ -12,6 +12,8 @@
 export interface TerminalSpawnOpts {
   paneId: string
   shell?: string // 'pwsh' | 'cmd' | 'wsl' | absolute path; default = user's shell
+  /** w15/start-screen — direct process arguments. Never concatenated into a shell command. */
+  argv?: string[]
   cwd?: string
   cols: number
   rows: number
@@ -59,6 +61,24 @@ export const SessionApi = {
 
 /* â”€â”€ FileService (Slice 3) â€” owner: Agent 3 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 export type Eol = 'lf' | 'crlf'
+/* ── Start screen (w15/start-screen) ─────────────────────────── */
+export type OnLaunchPreference = 'straight-to-shell' | 'always-start-screen'
+
+export const StartScreenApi = {
+  getPreference: 'start-screen:get-preference',
+  setPreference: 'start-screen:set-preference',
+  testLaunches: 'start-screen:e2e-launches'
+} as const
+
+export interface StartScreenBridge {
+  getPreference(): Promise<OnLaunchPreference>
+  setPreference(preference: OnLaunchPreference): Promise<OnLaunchPreference>
+}
+
+export interface StartScreenTestBridge {
+  launches(): Promise<TerminalSpawnOpts[]>
+}
+
 export interface FileReadResult { content: string; mtimeMs: number; eol: Eol; binary: boolean }
 export type FileSaveResult = { ok: true; mtimeMs: number } | { ok: false; conflict: true; mtimeMs: number }
 export interface FileChangedMsg { path: string; kind: 'changed' | 'deleted'; mtimeMs: number }

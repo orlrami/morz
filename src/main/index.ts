@@ -34,7 +34,8 @@ import {
   journalAppend,
   journalDelete,
   journalEntries,
-  registerSessionIpc
+  registerSessionIpc,
+  registerStartScreenIpc
 } from './store/db'
 import { registerFileIpc } from './services/file-service'
 import { registerFsIpc } from './services/fs-service'
@@ -120,6 +121,7 @@ interface SpawnJournal {
 
 let ptyHost: UtilityProcess | null = null
 let hostGeneration = 0
+const e2eStartScreenLaunches: TerminalSpawnOpts[] = []
 let reqId = 0
 const pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>()
 let restartTimestamps: number[] = []
@@ -348,7 +350,20 @@ function descendantCliImage(shellPid: number, byParent: Map<number, ProcRow[]>):
 }
 
 function registerPtyIpc(): void {
-  ipcMain.handle(PtyApi.spawn, (_e, opts: TerminalSpawnOpts) => hostRequest('spawn', opts))
+  ipcMain.handle(PtyApi.spawn, (_e, opts: TerminalSpawnOpts) => {
+    if (
+      process.env.MORZ_E2E_START_SCREEN_STUB === '1' &&
+      opts.env?.MORZ_START_SCREEN_LAUNCH === '1'
+    ) {
+      e2eStartScreenLaunches.push({
+        ...opts,
+        argv: opts.argv ? [...opts.argv] : undefined,
+        env: undefined
+      })
+      return { ok: true }
+    }
+    return hostRequest('spawn', opts)
+  })
   ipcMain.handle(PtyApi.list, () => hostRequest<string[]>('list'))
   // w11/lanes-runs — intersect the durable spawn journal with the host's live
   // pane set. This fails closed: malformed/stale rows never reach the renderer.
@@ -604,6 +619,7 @@ app.whenReady().then(() => {
   startBus()
   registerPtyIpc()
   registerSessionIpc()
+  registerStartScreenIpc()
   registerFileIpc(ipcMain)
   registerFsIpc(ipcMain)
   registerGitIpc()
@@ -859,6 +875,18 @@ app.whenReady().then(() => registerPlannerEngineIpc())
  * pending panes to any window that (re)loads — covering tray-resident dispatch
  * and mid-run window reloads. */
 import { RunPaneApi, type RunPaneCreated } from '../shared/ipc'
+import { StartScreenApi } from '../shared/ipc'
+
+if (process.env.MORZ_E2E_START_SCREEN_STUB === '1') {
+  app.whenReady().then(() => {
+    ipcMain.handle(StartScreenApi.testLaunches, () =>
+      e2eStartScreenLaunches.map((launch) => ({
+        ...launch,
+        argv: launch.argv ? [...launch.argv] : undefined
+      }))
+    )
+  })
+}
 
 const attachedAgentPanes = new Set<string>()
 const agentPaneWaiters = new Map<string, ((attached: boolean) => void)[]>()

@@ -13,6 +13,9 @@ export const SESSION_GUID = randomUUID()
 
 const SCROLLBACK_MAX_CHARS = 200_000
 const INPUT_COMMAND_MAX_CHARS = 512 // w4/finish
+const MAX_DIRECT_ARGS = 64
+const MAX_DIRECT_ARG_CHARS = 16_000
+const MAX_DIRECT_ARGS_CHARS = 32_000
 
 /* ── ANSI stripper (stateful — escape sequences split across chunks) ── */
 // CSI, OSC (BEL or ST terminated), DCS/SOS/PM/APC, single-char escapes.
@@ -79,6 +82,26 @@ export function resolveShell(shell: string | undefined, realPath: string): strin
   }
 }
 
+function directArgs(value: unknown): string[] | null {
+  if (value === undefined) return []
+  if (!Array.isArray(value) || value.length > MAX_DIRECT_ARGS) return null
+  let total = 0
+  const args: string[] = []
+  for (const candidate of value) {
+    if (
+      typeof candidate !== 'string' ||
+      candidate.includes('\0') ||
+      candidate.length > MAX_DIRECT_ARG_CHARS
+    ) {
+      return null
+    }
+    total += candidate.length
+    if (total > MAX_DIRECT_ARGS_CHARS) return null
+    args.push(candidate)
+  }
+  return args
+}
+
 /* ── pane bookkeeping ── */
 interface Pane {
   paneId: string
@@ -127,14 +150,17 @@ export class PtyManager {
       return { ok: true } // idempotent — reattach path
     }
     const file = resolveShell(opts.shell, this.realPath)
+    const requestedArgs = directArgs(opts.argv)
+    if (!requestedArgs) return { ok: false, error: 'invalid process arguments' }
     const cwd = opts.cwd ?? process.env.USERPROFILE ?? 'C:\\'
     const env = buildChildEnv(this.realPath, SESSION_GUID, opts.env)
     // OSC-133 block-mark hook (default ON, env kill-switch)
     const hookOff =
+      opts.argv !== undefined ||
       process.env.MORZ_NO_SHELL_HOOK === '1' || opts.env?.MORZ_NO_SHELL_HOOK === '1'
     const hook = hookOff ? null : buildShellHook(file, env)
     if (hook?.env) Object.assign(env, hook.env)
-    const args = hook?.args ?? []
+    const args = opts.argv !== undefined ? requestedArgs : (hook?.args ?? [])
     const base = {
       name: 'xterm-256color',
       cols: opts.cols,
