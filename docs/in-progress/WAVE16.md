@@ -1,4 +1,4 @@
-# Wave 16 — 0.0.5.1 "Polish & Fix" (pre-0.0.6)
+# Wave 16 — 0.1.5 "Polish & Fix" (pre-0.0.6)
 
 *Owner's first dogfood pass on 0.0.5 (2026-07-25). Everything here ships as one patch wave; 0.0.6 stays the memory release. Screenshots in the session; root causes verified in code before scoping.*
 
@@ -11,7 +11,7 @@
 | 3 | First-run/setup window can't be moved | Onboarding + Start surfaces cover the titlebar drag region (frameless window) | Add a `-webkit-app-region: drag` strip (with no-drag on interactive children) to OnboardingScreen + StartScreen tops |
 | 4 | Native dropdowns render white/OS-blue | Native `<select>` popup ignores app CSS | `color-scheme: dark` at `:root` + styled `<option>` (panel bg / quartz text); audit every select (model pickers, planner engine, slots, history policy) |
 | 5 | Claude version shows 2.1.187, real is 2.1.200 | Connections detection cached; no re-probe | Re-probe versions on boot + a Refresh action in Connections & Models; show "detected just now" timestamp |
-| 6 | Version string still 0.0.4 | never bumped | Bump `package.json` to **0.0.5**; installer becomes `morz-0.0.5-setup.exe` |
+| 6 | Version string still 0.0.4 | never bumped | Bump `package.json` to **0.1.5**; installer becomes `morz-0.1.5-setup.exe` |
 | 7 | "I'm signed in and ready" mojibake (assistant bridge footer) | pre-existing UTF-8 double-encode in `src/main/assistant/bridge.ts` | Fix the string |
 
 ## P1 — features (same wave)
@@ -32,4 +32,4 @@
 BYO-API planner (0.0.6) · procedural learning (0.0.6) · Obsidian/Hermes deepening (0.0.6) · run-rail/attention badges + Task Attempts (0.0.8) · ORCH-AUDIT auto-done loop (0.0.7).
 
 ## Suggested split
-Small enough for 4 agents (or lead does P0 directly): A = P0 1-7 (surgical) · B = 8+5 update/refresh (connections) · C = 9+10+11 (palette, motion, voice removal) · D = 12+13 (planner roster + memory bootstrap). Exit: full suite green → `morz-0.0.5-setup.exe` → dogfood.
+Small enough for 4 agents (or lead does P0 directly): A = P0 1-7 (surgical) · B = 8+5 update/refresh (connections) · C = 9+10+11 (palette, motion, voice removal) · D = 12+13 (planner roster + memory bootstrap). Exit: full suite green → `morz-0.1.5-setup.exe` → dogfood.
