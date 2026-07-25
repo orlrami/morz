@@ -26,6 +26,7 @@ import {
   type RunHistoryPolicy
 } from '@/store/runsStore'
 import { ReportSettings } from './ReportSettings' // w11/report-engine
+import { useOnboardingStore } from '@/store/onboardingStore'
 
 export type SettingsTab = 'limits' | 'connections' | 'appearance' | 'control' | 'reports'
 
@@ -44,6 +45,7 @@ export function SettingsPanel({ initialTab = 'limits' }: { initialTab?: Settings
   const { connections, loading: connectionsLoading, start: startConnections } = useConnectionsStore()
   const historyPolicy = useRunsStore((state) => state.historyPolicy)
   const setHistoryPolicy = useRunsStore((state) => state.setHistoryPolicy)
+  const openSetup = useOnboardingStore((state) => state.openSetup)
   const usageConnections = connections.filter((connection) => connection.usage !== null)
 
   useEffect(() => startConnections(), [startConnections])
@@ -162,7 +164,32 @@ export function SettingsPanel({ initialTab = 'limits' }: { initialTab?: Settings
           </div>
         )}
 
-        {tab === 'connections' && <ConnectionsSettings />}
+        {tab === 'connections' && (
+          <div className="mx-auto w-full max-w-[640px]">
+            <ConnectionsSettings />
+            <section
+              className="mt-4 flex items-center justify-between gap-4 rounded-xl border p-4"
+              style={{ background: colors.panel, borderColor: 'var(--color-line)' }}
+            >
+              <div>
+                <h3 className="text-xs font-semibold" style={{ fontFamily: 'var(--font-display)' }}>
+                  First-run setup
+                </h3>
+                <p className="mt-1 text-[10px]" style={{ color: colors.quartzDim }}>
+                  Revisit detected tools, modules, launch defaults, and autonomy.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={openSetup}
+                className="shrink-0 cursor-pointer rounded-lg border px-3 py-2 text-[10px] font-semibold"
+                style={{ borderColor: 'rgba(203,162,90,0.42)', color: colors.bronzeHot }}
+              >
+                Run setup again
+              </button>
+            </section>
+          </div>
+        )}
 
         {tab === 'appearance' && (
           <div className="mx-auto w-full max-w-[560px]">

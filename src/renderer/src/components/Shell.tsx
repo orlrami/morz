@@ -60,7 +60,9 @@ import {
 } from '@/store/layoutStore'
 import { getMorz, selectActiveSpaceRoot, useSpaceStore } from '@/store/spaceStore'
 import { useSessionsStore } from '@/store/sessionsStore'
+import { useOnboardingStore } from '@/store/onboardingStore'
 import type { RunPaneBridge, RunPaneCreated, SessionSnapshot } from '@shared/ipc'
+import type { ModuleId } from '@shared/modules'
 
 /* w13/dispatch-visible — preload bridge for dispatched agent panes. */
 function getRunPane(): RunPaneBridge | undefined {
@@ -80,6 +82,16 @@ const VIEWS: { id: CenterView; label: string; icon: typeof IconTerminal2 }[] = [
   // w11/sessions — one center-view entry; SpacesSidebar remains untouched.
   { id: 'sessions', label: 'Sessions', icon: IconHistory }
 ]
+
+const VIEW_MODULE: Partial<Record<CenterView, ModuleId>> = {
+  commit: 'commit',
+  review: 'review',
+  dag: 'orchestration',
+  browser: 'browser',
+  organizer: 'organizer',
+  sessions: 'sessions',
+  workshop: 'workshop'
+}
 
 /* Dev-only: allow ?view=commit&explorer=1 so surfaces can be screenshot-verified. */
 function initialFromUrl(): { view: CenterView; explorer: boolean } {
@@ -195,6 +207,11 @@ export function Shell(): JSX.Element {
   const [settingsRevision, setSettingsRevision] = useState(0)
 
   const mode = useModeStore((s) => s.mode)
+  const modules = useOnboardingStore((state) => state.snapshot.modules)
+  const visibleViews = useMemo(
+    () => VIEWS.filter((item) => !VIEW_MODULE[item.id] || modules[VIEW_MODULE[item.id]!]),
+    [modules]
+  )
   const root = useLayoutStore((s) => s.root)
   const hydrated = useLayoutStore((s) => s.hydrated)
   const panes = useLayoutStore((s) => s.panes)
@@ -219,6 +236,11 @@ export function Shell(): JSX.Element {
     [activeLanes.length, activeSpace?.agents]
   )
   const sessionAgentsKey = sessionAgents.join('|')
+
+  useEffect(() => {
+    const required = VIEW_MODULE[view]
+    if (required && !modules[required]) setView('terminals')
+  }, [modules, view])
 
   /* w11/sessions — a space with an open pane owns exactly one live work record. */
   useEffect(() => {
@@ -431,14 +453,13 @@ export function Shell(): JSX.Element {
   )
 
   const paletteActions = useMemo<PaletteAction[]>(() => {
-    const actions: PaletteAction[] = VIEWS.map((item) => ({
+    const actions: PaletteAction[] = visibleViews.map((item) => ({
       id: `view-${item.id}`,
       group: 'view',
       label: `view: ${item.label.toLowerCase()}`
     }))
 
     actions.push(
-      { id: 'view-workshop', group: 'view', label: 'view: workshop' },
       { id: 'view-settings', group: 'view', label: 'view: settings' },
       { id: 'toggle-explorer', group: 'view', label: 'view: toggle file explorer', hint: 'Ctrl+B' },
       { id: 'spawn-terminal', group: 'spawn', label: 'spawn: terminal pane' },
@@ -447,6 +468,9 @@ export function Shell(): JSX.Element {
       { id: 'settings-control', group: 'settings', label: 'settings: control' },
       { id: 'settings-memory', group: 'settings', label: 'settings: open memory settings' }
     )
+    if (modules.workshop) {
+      actions.push({ id: 'view-workshop', group: 'view', label: 'view: workshop' })
+    }
 
     if (activePaneId && panes.some((pane) => pane.paneId === activePaneId)) {
       actions.push(
@@ -469,11 +493,11 @@ export function Shell(): JSX.Element {
       })
     }
 
-    if (window.morz?.catalog && typeof window.morz.catalog.refresh === 'function') {
+    if (modules.workshop && window.morz?.catalog && typeof window.morz.catalog.refresh === 'function') {
       actions.push({ id: 'workshop-sync', group: 'workshop', label: 'workshop: sync catalog' })
     }
 
-    if (getRunApi()) {
+    if (modules.orchestration && getRunApi()) {
       actions.push({ id: 'run-refresh', group: 'run', label: 'run: refresh orchestration runs' })
     }
 
@@ -486,7 +510,7 @@ export function Shell(): JSX.Element {
     }
 
     return actions
-  }, [activePaneId, activeLanes.length, mode, panes])
+  }, [activePaneId, activeLanes.length, mode, modules.orchestration, modules.workshop, panes, visibleViews])
 
   const openSettings = useCallback((tab: SettingsTab, focusMemory = false): void => {
     setSettingsTab(tab)
@@ -595,7 +619,7 @@ export function Shell(): JSX.Element {
               role="tablist"
               aria-label="Center view"
             >
-              {VIEWS.map((v) => {
+              {visibleViews.map((v) => {
                 const active = view === v.id
                 const Icon = v.icon
                 return (
@@ -624,26 +648,30 @@ export function Shell(): JSX.Element {
               })}
             </nav>
 
-            <button
-              onClick={() => setView('workshop')}
-              className="ml-auto flex cursor-pointer items-center rounded-md p-1.5 transition-colors hover:bg-[#37332B]"
-              title="Workshop — add skills, MCP servers, plugins, models"
-              aria-label="Workshop"
-              style={{ color: view === 'workshop' ? colors.bronzeHot : colors.quartzDim }}
-            >
-              <IconSquareRoundedPlus size={15} stroke={1.5} />
-            </button>
+            {modules.workshop && (
+              <button
+                onClick={() => setView('workshop')}
+                className="ml-auto flex cursor-pointer items-center rounded-md p-1.5 transition-colors hover:bg-[#37332B]"
+                title="Workshop — add skills, MCP servers, plugins, models"
+                aria-label="Workshop"
+                style={{ color: view === 'workshop' ? colors.bronzeHot : colors.quartzDim }}
+              >
+                <IconSquareRoundedPlus size={15} stroke={1.5} />
+              </button>
+            )}
             {/* w10/identity — the orchestrator is a Morz system, not a generic robot. */}
-            <button
-              onClick={() => setOrchestratorOpen((open) => !open)}
-              className="flex cursor-pointer items-center rounded-md p-1.5 transition-colors hover:bg-[#37332B]"
-              title={`${orchestratorOpen ? 'Hide' : 'Show'} orchestrator`}
-              aria-label="Toggle orchestrator"
-              aria-pressed={orchestratorOpen}
-              style={{ color: orchestratorOpen ? colors.quartz : colors.quartzDim }}
-            >
-              <MorzSignal className="h-[15px] w-[21px]" goldPoint />
-            </button>
+            {modules.orchestration && (
+              <button
+                onClick={() => setOrchestratorOpen((open) => !open)}
+                className="flex cursor-pointer items-center rounded-md p-1.5 transition-colors hover:bg-[#37332B]"
+                title={`${orchestratorOpen ? 'Hide' : 'Show'} orchestrator`}
+                aria-label="Toggle orchestrator"
+                aria-pressed={orchestratorOpen}
+                style={{ color: orchestratorOpen ? colors.quartz : colors.quartzDim }}
+              >
+                <MorzSignal className="h-[15px] w-[21px]" goldPoint />
+              </button>
+            )}
             <button
               onClick={() => setView('settings')}
               className="mr-2 flex cursor-pointer items-center rounded-md p-1.5 transition-colors hover:bg-[#37332B]"
@@ -688,29 +716,31 @@ export function Shell(): JSX.Element {
               </div>
             </>
           )}
-          {view === 'commit' && <CommitPanel />}
-          {view === 'review' && <ReviewerPanel />}
-          {view === 'dag' && <DagView />}
-          {view === 'browser' && <BrowserPanel />}
+          {view === 'commit' && modules.commit && <CommitPanel />}
+          {view === 'review' && modules.review && <ReviewerPanel />}
+          {view === 'dag' && modules.orchestration && <DagView />}
+          {view === 'browser' && modules.browser && <BrowserPanel />}
           {view === 'remote' && <RemotePanel />}
-          {view === 'organizer' && <OrganizerPanel />}
+          {view === 'organizer' && modules.organizer && <OrganizerPanel />}
           {/* w11/sessions */}
-          {view === 'sessions' && <SessionsPanel />}
+          {view === 'sessions' && modules.sessions && <SessionsPanel />}
           {view === 'settings' && (
             <SettingsPanel
               key={settingsRevision} // w11/settings-ux: reset only for an explicit settings open
               initialTab={settingsTab}
             />
           )}
-          {view === 'workshop' && <WorkshopPanel />}
+          {view === 'workshop' && modules.workshop && <WorkshopPanel />}
         </main>
 
-        {orchestratorOpen && <OrchestratorPanel />}{/* w10/identity */}
+        {modules.orchestration && orchestratorOpen && <OrchestratorPanel />}{/* w10/identity */}
 
         <FileExplorer open={explorerOpen} onClose={() => setExplorerOpen(false)} />
       </div>
 
-      <StatusBar onOpenCommit={() => setView('commit')} />
+      <StatusBar onOpenCommit={() => {
+        if (modules.commit) setView('commit')
+      }} />
 
       <ToastHost />
 

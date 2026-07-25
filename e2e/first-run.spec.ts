@@ -12,6 +12,7 @@ test.describe.serial('first-run onboarding', () => {
 
       const preview = page.getByRole('region', { name: 'Live preview' })
       await expect(preview.getByRole('tab', { name: 'Waves' })).toHaveCount(0)
+      await expect(page.getByRole('radio', { name: 'Orchestrated' })).toBeDisabled()
 
       await page.getByRole('checkbox', { name: 'Enable Orchestration' }).click()
       await expect(preview.getByRole('tab', { name: 'Waves' })).toBeVisible()
@@ -19,6 +20,9 @@ test.describe.serial('first-run onboarding', () => {
 
       await page.getByLabel('Default model for Claude Code').selectOption('sonnet')
       await expect(preview.getByText('claude --model sonnet', { exact: true })).toBeVisible()
+
+      await page.getByLabel('Code review').selectOption('coderabbit')
+      await expect(preview.getByText('Code review: CodeRabbit', { exact: true })).toBeVisible()
     } finally {
       await closeMorz(morz.app)
     }

@@ -153,7 +153,12 @@ function normalizeSnapshot(value: unknown, completedOverride?: boolean): Onboard
 
   const rawModules = isRecord(value.modules) ? value.modules : {}
   const modules = Object.fromEntries(
-    MODULES.map((module) => [module.id, rawModules[module.id] === true])
+    MODULES.map((module) => [
+      module.id,
+      typeof rawModules[module.id] === 'boolean'
+        ? rawModules[module.id] === true
+        : fallback.modules[module.id]
+    ])
   ) as Record<ModuleId, boolean>
 
   const rawModels = isRecord(value.models) ? value.models : {}

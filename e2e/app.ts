@@ -79,10 +79,17 @@ export async function launchMorz(opts?: {
   await page.bringToFront()
   await installCollector(page)
   if (opts?.skipOnboarding !== false) {
-    const skip = page.getByRole('button', { name: /Skip.+start minimal/i })
-    if (await skip.isVisible().catch(() => false)) {
-      await skip.click()
-      await page.getByRole('tab', { name: 'Terminals', exact: true }).waitFor()
+    const setup = page.getByRole('heading', { name: 'Make Morz yours' })
+    const terminals = page.getByRole('tab', { name: 'Terminals', exact: true })
+    await Promise.any([setup.waitFor(), terminals.waitFor()])
+    if (await setup.isVisible().catch(() => false)) {
+      const moduleToggles = page.getByRole('checkbox', { name: /^Enable / })
+      for (let index = 0; index < await moduleToggles.count(); index += 1) {
+        const toggle = moduleToggles.nth(index)
+        if ((await toggle.getAttribute('aria-checked')) !== 'true') await toggle.click()
+      }
+      await page.getByRole('button', { name: 'Open Morz' }).click()
+      await terminals.waitFor()
     }
   }
   return { app, page, appDataDir }
