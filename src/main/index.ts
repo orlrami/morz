@@ -41,7 +41,7 @@ import { registerFileIpc } from './services/file-service'
 import { registerFsIpc } from './services/fs-service'
 import { registerGitIpc } from './services/git-service'
 import { registerEditorIpc } from './services/editor-detect'
-import { registerClaudeIpc } from './adapters/claude'
+import { registerClaudeIpc, restartLiveClaudeSessions } from './adapters/claude'
 import { notify, registerNotifyCenter } from './services/notify-center'
 // w4/mcp — bus pipe server + tool handlers (SqliteBoardPort = the real board)
 import { startPipeServer, type BusPipeServer } from './bus/pipe-server'
@@ -158,6 +158,7 @@ function startPtyHost(): void {
       case 'exit': {
         // pane gone → its journal row no longer represents a live child
         const paneId = msg.paneId as string
+        handleCliUpdateExit(paneId, typeof msg.exitCode === 'number' ? msg.exitCode : -1)
         for (const row of journalEntries('pty-spawn')) {
           if ((row.payload as SpawnJournal | null)?.paneId === paneId) journalDelete(row.id)
         }
@@ -840,8 +841,17 @@ app.whenReady().then(() => {
 })
 
 // w11/connections — append-only CLI detection and usage registration.
-import { registerConnectionsIpc } from './services/connections'
-app.whenReady().then(() => registerConnectionsIpc())
+import { handleCliUpdateExit, registerConnectionsIpc } from './services/connections'
+app.whenReady().then(() =>
+  registerConnectionsIpc({
+    spawnPane: (opts) => hostRequest<{ ok: boolean; error?: string }>('spawn', opts),
+    writePane: (paneId, data) => ptyHost?.postMessage({ type: 'write', paneId, data }),
+    killPane: (paneId) => hostRequest('kill', { paneId }).catch(() => undefined),
+    announcePane: (info) => announceAgentPane(info),
+    waitForAttach: (paneId, timeoutMs) => waitForPaneAttach(paneId, timeoutMs),
+    restartClaudeSessions: () => restartLiveClaudeSessions()
+  })
+)
 
 // w15/integration-slots
 import { registerSlotsIpc } from './services/slots'

@@ -10,11 +10,26 @@
 
 export type CliId = 'claude' | 'codex' | 'agy' | 'opencode'
 
+export interface CliUpdateState {
+  /** True only when the CLI/package manager reported a newer version. */
+  available: boolean
+  /** Version reported by the CLI's own diagnostic/update-check output. */
+  latestVersion: string | null
+  /** Human-readable command shown beside the explicit update action. */
+  command: string
+}
+
 export interface CliConnection {
   id: CliId
   label: string // "Claude Code", "Codex", "Antigravity", "OpenCode"
   installed: boolean // resolved on PATH
   version: string | null
+  /** Epoch ms of the most recent probe attempt. */
+  detectedAt: number
+  /** A failed probe kept the last known version; never present it as fresh. */
+  versionStale: boolean
+  /** Null unless a newer version was reported and a safe updater is known. */
+  update: CliUpdateState | null
   /** Logged in / usable (best-effort probe; null = unknown). */
   authed: boolean | null
   /** Plan or account tier if the CLI exposes it (e.g. "Max", "Pro"); else null. */
@@ -28,12 +43,14 @@ export interface CliConnection {
 export const ConnectionsApi = {
   list: 'connections:list', // () => Promise<CliConnection[]>  detect all
   refresh: 'connections:refresh', // () => Promise<CliConnection[]>  re-probe
+  update: 'connections:update', // (CliId) => Promise<{ paneId: string }> explicit user action
   changed: 'connections:changed' // push → CliConnection[]
 } as const
 
 export interface MorzConnectionsApi {
   list(): Promise<CliConnection[]>
   refresh(): Promise<CliConnection[]>
+  update(id: CliId): Promise<{ paneId: string }>
   onChanged(cb: (conns: CliConnection[]) => void): () => void
 }
 

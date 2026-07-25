@@ -1,10 +1,12 @@
 import { spawn, type ChildProcess } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
 import { access, open, opendir, readFile, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { delimiter, extname, join } from 'node:path'
 import { app, BrowserWindow, ipcMain } from 'electron'
 import { parse as parseToml } from 'smol-toml'
+import type { RunPaneCreated, TerminalSpawnOpts } from '../../shared/ipc'
 import {
   ConnectionsApi,
   cliOfExecutable,
@@ -13,6 +15,7 @@ import {
 } from '../../shared/connections'
 // w15/model-choice — catalog refresh piggybacks on connections sync.
 import { refreshModelCatalogs } from './model-choice'
+import { dismissNotice, notify, registerNotifyAction } from './notify-center'
 
 const PROBE_TIMEOUT_MS = 5_000
 const REFRESH_INTERVAL_MS = 60_000
@@ -34,6 +37,22 @@ const CLI_SPECS: ReadonlyArray<{ id: CliId; executable: string; label: string }>
 interface CommandResult {
   ok: boolean
   output: string
+  fullOutput: string
+}
+
+interface UpdateCommand {
+  executable: string
+  args: string[]
+  display: string
+}
+
+export interface ConnectionsRuntime {
+  spawnPane(opts: TerminalSpawnOpts): Promise<{ ok: boolean; error?: string }>
+  writePane(paneId: string, data: string): void
+  killPane(paneId: string): Promise<unknown>
+  announcePane(info: RunPaneCreated): void
+  waitForAttach(paneId: string, timeoutMs: number): Promise<boolean>
+  restartClaudeSessions(): { total: number; resumed: number; plain: number }
 }
 
 interface ClaudeTelemetry {
@@ -45,19 +64,22 @@ let registered = false
 let cache: CliConnection[] | null = null
 let probeInFlight: Promise<CliConnection[]> | null = null
 let refreshTimer: NodeJS.Timeout | null = null
+const updateCommands = new Map<CliId, UpdateCommand>()
+const updatePanes = new Map<string, { id: CliId; label: string }>()
 
 function connectionHome(): string {
   return homedir()
 }
 
-function cleanOutput(value: string): string {
+function cleanOutputLines(value: string): string[] {
   return value
     .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
     .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '')
     .split(/\r?\n/)
     .map((line) => line.trim())
-    .find(Boolean)
-    ?.slice(0, 160) ?? ''
+    .filter(Boolean)
+    .map((line) => line.slice(0, 500))
+    .slice(0, 200)
 }
 
 function runFile(
@@ -75,7 +97,7 @@ function runFile(
         windowsVerbatimArguments
       })
     } catch {
-      resolve({ ok: false, output: '' })
+      resolve({ ok: false, output: '', fullOutput: '' })
       return
     }
 
@@ -86,7 +108,8 @@ function runFile(
       if (settled) return
       settled = true
       clearTimeout(timeout)
-      resolve({ ok, output: cleanOutput(output) })
+      const lines = cleanOutputLines(output)
+      resolve({ ok, output: lines[0] ?? '', fullOutput: lines.join('\n') })
     }
     const terminate = (): void => {
       if (settled) return
@@ -149,21 +172,21 @@ async function runCli(executable: string, args: readonly string[]): Promise<Comm
   if (process.platform !== 'win32' || (extension !== '.cmd' && extension !== '.bat')) {
     return runFile(executable, args)
   }
-  if (!safeCmdPath(executable) || args.some((arg) => !/^--?[a-z-]+$/i.test(arg))) {
-    return { ok: false, output: '' }
+  if (!safeCmdPath(executable) || args.some((arg) => !/^[-@/a-z0-9=._]+$/i.test(arg))) {
+    return { ok: false, output: '', fullOutput: '' }
   }
   const command = `call "${executable}" ${args.join(' ')}`
   const commandProcessor = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'cmd.exe')
   return runFile(commandProcessor, ['/d', '/s', '/c', command], true)
 }
 
-async function resolveExecutable(id: CliId, executable: string): Promise<string | null> {
+async function resolveOnPath(executable: string): Promise<string | null> {
   if (process.platform === 'win32') {
     const whereExe = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'where.exe')
     const result = await runFile(whereExe, [executable])
     if (!result.ok) return null
     // runFile intentionally returns only the first non-empty line.
-    return cliOfExecutable(result.output) === id ? result.output : null
+    return result.output
   }
 
   const pathValue = process.env.PATH ?? ''
@@ -172,12 +195,17 @@ async function resolveExecutable(id: CliId, executable: string): Promise<string 
     const candidate = join(dir, executable)
     try {
       await access(candidate, constants.X_OK)
-      if (cliOfExecutable(candidate) === id) return candidate
+      return candidate
     } catch {
       // Continue through PATH. A missing or non-executable entry is not fatal.
     }
   }
   return null
+}
+
+async function resolveExecutable(id: CliId, executable: string): Promise<string | null> {
+  const resolved = await resolveOnPath(executable)
+  return resolved && cliOfExecutable(resolved) === id ? resolved : null
 }
 
 async function exists(path: string): Promise<boolean> {
@@ -522,14 +550,137 @@ async function claudeTelemetry(home: string): Promise<ClaudeTelemetry> {
   return { model, usage }
 }
 
-async function detectConnection(spec: (typeof CLI_SPECS)[number]): Promise<CliConnection> {
+function versionToken(value: string): string | null {
+  return value.match(/\bv?(\d+(?:\.\d+){1,3}(?:[-+][0-9a-z.-]+)?)/i)?.[1] ?? null
+}
+
+function latestVersionFromOutput(value: string): string | null {
+  const patterns = [
+    /update available(?:\s+(?:to|version))?\s*[:=-]?\s*v?(\d+(?:\.\d+){1,3}(?:[-+][0-9a-z.-]+)?)/i,
+    /latest version\s*[:=-]\s*v?(\d+(?:\.\d+){1,3}(?:[-+][0-9a-z.-]+)?)/i,
+    /last update attempt\s*:\s*success\s*(?:->|\u2192)\s*v?(\d+(?:\.\d+){1,3}(?:[-+][0-9a-z.-]+)?)/i
+  ]
+  for (const pattern of patterns) {
+    const match = value.match(pattern)
+    if (match?.[1]) return match[1]
+  }
+  return null
+}
+
+function compareVersions(left: string, right: string): number {
+  const parts = (value: string): number[] =>
+    value.split(/[+-]/, 1)[0].split('.').map((part) => Number.parseInt(part, 10) || 0)
+  const a = parts(left)
+  const b = parts(right)
+  for (let index = 0; index < Math.max(a.length, b.length); index += 1) {
+    const delta = (a[index] ?? 0) - (b[index] ?? 0)
+    if (delta !== 0) return delta
+  }
+  return 0
+}
+
+function updateState(
+  id: CliId,
+  currentVersion: string,
+  latestVersion: string | null,
+  command: UpdateCommand
+): CliConnection['update'] {
+  if (!latestVersion || compareVersions(currentVersion, latestVersion) >= 0) return null
+  updateCommands.set(id, command)
+  return { available: true, latestVersion, command: command.display }
+}
+
+function parseJsonOutput(value: string): unknown {
+  const start = value.indexOf('{')
+  const end = value.lastIndexOf('}')
+  if (start < 0 || end < start) throw new Error('Command output did not include JSON')
+  return JSON.parse(value.slice(start, end + 1)) as unknown
+}
+
+async function npmCodexUpdate(
+  currentVersion: string
+): Promise<CliConnection['update']> {
+  const npm = await resolveOnPath('npm')
+  if (!npm) return null
+  const installed = await runCli(npm, ['ls', '-g', '@openai/codex', '--depth=0', '--json'])
+  let installedVersion: string | null = null
+  try {
+    const parsed = parseJsonOutput(installed.fullOutput) as {
+      dependencies?: Record<string, { version?: unknown }>
+    }
+    const version = parsed.dependencies?.['@openai/codex']?.version
+    installedVersion = typeof version === 'string' ? version : null
+  } catch {
+    return null
+  }
+  if (!installedVersion) return null
+  const outdated = await runCli(npm, ['outdated', '-g', '@openai/codex', '--json'])
+  let latestVersion: string | null = null
+  try {
+    const parsed = parseJsonOutput(outdated.fullOutput) as Record<string, { latest?: unknown }>
+    const latest = parsed['@openai/codex']?.latest
+    latestVersion = typeof latest === 'string' ? latest : null
+  } catch {
+    latestVersion = latestVersionFromOutput(outdated.fullOutput)
+  }
+  return updateState('codex', currentVersion, latestVersion, {
+    executable: npm,
+    args: ['update', '-g', '@openai/codex'],
+    display: 'npm update -g @openai/codex'
+  })
+}
+
+async function updateFor(
+  id: CliId,
+  executable: string,
+  versionProbe: CommandResult
+): Promise<CliConnection['update']> {
+  const currentVersion = versionToken(versionProbe.output)
+  if (!currentVersion) return null
+  if (id === 'claude') {
+    const doctor = await runCli(executable, ['doctor'])
+    const latestVersion = latestVersionFromOutput(
+      `${versionProbe.fullOutput}\n${doctor.fullOutput}`
+    )
+    return updateState('claude', currentVersion, latestVersion, {
+      executable,
+      args: ['update'],
+      display: 'claude update'
+    })
+  }
+  if (id === 'codex') return npmCodexUpdate(currentVersion)
+  if (id === 'agy') {
+    const help = await runCli(executable, ['update', '--help'])
+    if (!/\b(?:usage of update|update cli|update command)\b/i.test(help.fullOutput)) return null
+    const latestVersion = latestVersionFromOutput(`${versionProbe.fullOutput}\n${help.fullOutput}`)
+    return updateState('agy', currentVersion, latestVersion, {
+      executable,
+      args: ['update'],
+      display: 'agy update'
+    })
+  }
+  return null
+}
+
+async function detectConnection(
+  spec: (typeof CLI_SPECS)[number],
+  previous: CliConnection | undefined
+): Promise<CliConnection> {
+  const detectedAt = Date.now()
+  updateCommands.delete(spec.id)
   const executable = await resolveExecutable(spec.id, spec.executable)
   if (!executable) {
+    if (previous?.installed && previous.version) {
+      return { ...previous, detectedAt, versionStale: true, update: null }
+    }
     return {
       id: spec.id,
       label: spec.label,
       installed: false,
       version: null,
+      detectedAt,
+      versionStale: false,
+      update: null,
       authed: null,
       plan: null,
       model: null,
@@ -545,11 +696,17 @@ async function detectConnection(spec: (typeof CLI_SPECS)[number]): Promise<CliCo
     configuredModel(spec.id, home),
     spec.id === 'claude' ? claudeTelemetry(home) : Promise.resolve<ClaudeTelemetry>({ model: null, usage: null })
   ])
+  const versionFailed = !versionProbe.ok || !versionProbe.output
+  const version = versionFailed ? previous?.version ?? null : versionProbe.output
+  const update = versionFailed ? null : await updateFor(spec.id, executable, versionProbe)
   return {
     id: spec.id,
     label: spec.label,
     installed: true,
-    version: versionProbe.ok ? versionProbe.output || null : null,
+    version,
+    detectedAt,
+    versionStale: versionFailed,
+    update,
     authed,
     plan,
     model: configured ?? telemetry.model,
@@ -558,11 +715,14 @@ async function detectConnection(spec: (typeof CLI_SPECS)[number]): Promise<CliCo
 }
 
 async function detectAll(): Promise<CliConnection[]> {
-  return Promise.all(CLI_SPECS.map((spec) => detectConnection(spec)))
+  const previous = new Map((cache ?? []).map((connection) => [connection.id, connection]))
+  return Promise.all(CLI_SPECS.map((spec) => detectConnection(spec, previous.get(spec.id))))
 }
 
 function sameConnections(left: CliConnection[] | null, right: CliConnection[]): boolean {
-  return left !== null && JSON.stringify(left) === JSON.stringify(right)
+  const comparable = (connections: CliConnection[]): unknown =>
+    connections.map(({ detectedAt: _detectedAt, ...connection }) => connection)
+  return left !== null && JSON.stringify(comparable(left)) === JSON.stringify(comparable(right))
 }
 
 function broadcast(connections: CliConnection[]): void {
@@ -576,8 +736,13 @@ function probe(forceBroadcast: boolean): Promise<CliConnection[]> {
   probeInFlight = detectAll()
     .then((connections) => {
       const changed = !sameConnections(cache, connections)
+      const timestampChanged = connections.some(
+        (connection, index) => connection.detectedAt !== cache?.[index]?.detectedAt
+      )
       cache = connections
-      if (forceBroadcast || changed) broadcast(connections)
+      // Fresh timestamps are user-visible even when every other field is stable.
+      // Refresh/model-catalog work still keys off material changes below.
+      if (forceBroadcast || changed || timestampChanged) broadcast(connections)
       // w15/model-choice — refresh `agy models` / `opencode models` catalogs
       // on connections sync (best-effort; static tables stay the floor).
       if (changed) void refreshModelCatalogs().catch(() => undefined)
@@ -589,11 +754,133 @@ function probe(forceBroadcast: boolean): Promise<CliConnection[]> {
   return probeInFlight
 }
 
-export function registerConnectionsIpc(): void {
+function shellCommand(command: UpdateCommand): {
+  shell: string
+  argv: string[]
+  input: string
+} {
+  if (process.platform === 'win32') {
+    if (!safeCmdPath(command.executable)) throw new Error('Updater path cannot be run safely')
+    const args = command.args.join(' ')
+    return {
+      shell: 'cmd',
+      argv: ['/d', '/v:on', '/k'],
+      input:
+        `echo [Morz] Running: ${command.display}` +
+        ` & call "${command.executable}" ${args}` +
+        ' & set MORZ_UPDATE_EXIT=!errorlevel!' +
+        ' & exit /b !MORZ_UPDATE_EXIT!\r'
+    }
+  }
+  const quote = (value: string): string => `'${value.replace(/'/g, `'\\''`)}'`
+  return {
+    shell: '/bin/sh',
+    argv: [],
+    input:
+      `printf '\\n[Morz] Running: %s\\n' ${quote(command.display)}; ` +
+      `${quote(command.executable)} ${command.args.map(quote).join(' ')}; ` +
+      'MORZ_UPDATE_EXIT=$?; exit "$MORZ_UPDATE_EXIT"\n'
+  }
+}
+
+async function startUpdate(id: CliId, runtime: ConnectionsRuntime): Promise<{ paneId: string }> {
+  const connection = cache?.find((candidate) => candidate.id === id)
+  const command = updateCommands.get(id)
+  if (!connection?.installed || connection.versionStale || !connection.update?.available || !command) {
+    throw new Error('No verified update is available for this CLI')
+  }
+  if (id === 'opencode') throw new Error('OpenCode has no configured updater')
+
+  const paneId = `cli-update-${id}-${randomUUID().slice(0, 8)}`
+  const invocation = shellCommand(command)
+  const cwd = connectionHome()
+  const result = await runtime.spawnPane({
+    paneId,
+    shell: invocation.shell,
+    argv: invocation.argv,
+    cwd,
+    cols: 120,
+    rows: 36
+  })
+  if (!result.ok) throw new Error(result.error ?? `Could not open the ${connection.label} updater`)
+
+  runtime.announcePane({
+    paneId,
+    runId: `cli-update:${id}`,
+    agentId: `update-${id}`,
+    cwd,
+    cli: id
+  })
+  const attached = await runtime.waitForAttach(paneId, 10_000)
+  if (!attached) {
+    await runtime.killPane(paneId)
+    throw new Error('The updater pane did not become visible')
+  }
+  updatePanes.set(paneId, { id, label: connection.label })
+  runtime.writePane(paneId, invocation.input)
+  return { paneId }
+}
+
+function registerRestartAction(runtime: ConnectionsRuntime): void {
+  registerNotifyAction('restart-claude-sessions', (noticeId) => {
+    const summary = runtime.restartClaudeSessions()
+    dismissNotice(noticeId)
+    notify({
+      id: 'connections:claude-sessions-restarted',
+      level: 'success',
+      source: 'adapter',
+      title: 'Claude sessions restarted',
+      detail:
+        summary.total === 0
+          ? 'There were no live Claude sessions to restart.'
+          : `${summary.resumed} resumed with held session IDs; ${summary.plain} restarted without a resume ID.`
+    })
+  })
+}
+
+export function handleCliUpdateExit(paneId: string, exitCode: number): void {
+  const pendingUpdate = updatePanes.get(paneId)
+  if (!pendingUpdate) return
+  updatePanes.delete(paneId)
+  if (exitCode !== 0) {
+    notify({
+      id: `connections:update:${pendingUpdate.id}`,
+      level: 'error',
+      source: 'adapter',
+      title: `${pendingUpdate.label} update failed`,
+      detail: `The visible updater pane exited with code ${exitCode}.`
+    })
+    return
+  }
+  notify({
+    id: `connections:update:${pendingUpdate.id}`,
+    level: 'success',
+    source: 'adapter',
+    title: `${pendingUpdate.label} updated`,
+    detail:
+      pendingUpdate.id === 'claude'
+        ? 'Restart live Claude sessions to use the updated CLI. Sessions without a held resume ID restart plain.'
+        : 'The updater completed successfully in the visible terminal pane.',
+    actions:
+      pendingUpdate.id === 'claude'
+        ? [{ id: 'restart-claude-sessions', label: 'Restart Claude sessions' }]
+        : undefined
+  })
+  void probe(true)
+}
+
+export function registerConnectionsIpc(runtime: ConnectionsRuntime): void {
   if (registered) return
   registered = true
+  registerRestartAction(runtime)
   ipcMain.handle(ConnectionsApi.list, () => cache ?? probe(false))
   ipcMain.handle(ConnectionsApi.refresh, () => probe(true))
+  ipcMain.handle(ConnectionsApi.update, (_event, id: unknown) => {
+    if (typeof id !== 'string' || !CLI_SPECS.some((spec) => spec.id === id)) {
+      throw new Error('Unknown CLI updater')
+    }
+    return startUpdate(id as CliId, runtime)
+  })
   void probe(false)
   refreshTimer = setInterval(() => void probe(false), REFRESH_INTERVAL_MS)
   refreshTimer.unref()

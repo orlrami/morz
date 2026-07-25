@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { IconPlugConnected, IconRefresh } from '@tabler/icons-react'
 import type { CliConnection } from '@shared/connections'
 import { colors } from '@/lib/tokens'
@@ -6,6 +6,7 @@ import { useConnectionsStore } from '@/store/connectionsStore'
 
 function connectionState(connection: CliConnection): { label: string; color: string } {
   if (!connection.installed) return { label: 'Not installed', color: colors.quartzDim }
+  if (connection.versionStale) return { label: 'Stale', color: colors.warning }
   if (connection.authed === true) return { label: 'Connected', color: colors.done }
   if (connection.authed === false) return { label: 'Not logged in', color: colors.error }
   return { label: 'Authentication unknown', color: colors.bronzeHot }
@@ -15,10 +16,25 @@ function detail(value: string | null, fallback = 'Not reported'): string {
   return value?.trim() || fallback
 }
 
+function checkedAgo(detectedAt: number, now: number): string {
+  const elapsed = Math.max(0, now - detectedAt)
+  if (elapsed < 60_000) return 'checked just now'
+  const minutes = Math.floor(elapsed / 60_000)
+  if (minutes < 60) return `checked ${minutes}m ago`
+  const hours = Math.floor(minutes / 60)
+  return `checked ${hours}h ago`
+}
+
 export function ConnectionsSettings(): JSX.Element {
-  const { connections, loading, refreshing, error, start, refresh } = useConnectionsStore()
+  const { connections, loading, refreshing, updating, error, start, refresh, updateCli } =
+    useConnectionsStore()
+  const [now, setNow] = useState(() => Date.now())
 
   useEffect(() => start(), [start])
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 30_000)
+    return () => window.clearInterval(timer)
+  }, [])
 
   return (
     <section className="max-w-[640px]" aria-label="CLI connections">
@@ -88,6 +104,10 @@ export function ConnectionsSettings(): JSX.Element {
                     <p className="truncate font-mono text-[9px]" style={{ color: colors.quartzDim }}>
                       {connection.installed ? detail(connection.version, 'Version unavailable') : 'CLI not found on PATH'}
                     </p>
+                    <p className="mt-0.5 text-[8.5px]" style={{ color: connection.versionStale ? colors.warning : colors.quartzDim }}>
+                      {checkedAgo(connection.detectedAt, now)}
+                      {connection.versionStale ? ' · stale — last known version' : ''}
+                    </p>
                   </div>
                   <span
                     className="rounded-full border px-2 py-0.5 text-[8.5px] font-bold"
@@ -96,6 +116,28 @@ export function ConnectionsSettings(): JSX.Element {
                     {status.label}
                   </span>
                 </div>
+
+                {connection.update?.available && !connection.versionStale && (
+                  <div
+                    className="mt-3 flex items-center gap-2 rounded-md border px-2.5 py-2"
+                    style={{ borderColor: `${colors.bronzeHot}66`, background: `${colors.bronzeHot}0d` }}
+                  >
+                    <span className="min-w-0 flex-1 text-[9.5px] font-semibold" style={{ color: colors.bronzeHot }}>
+                      Update available
+                      {connection.update.latestVersion ? ` · ${connection.update.latestVersion}` : ''}
+                    </span>
+                    <button
+                      type="button"
+                      disabled={updating !== null}
+                      onClick={() => void updateCli(connection.id)}
+                      aria-label={`Update ${connection.label} now`}
+                      className="min-h-8 shrink-0 rounded-md border px-2.5 py-1 text-[9.5px] font-bold disabled:cursor-not-allowed disabled:opacity-45"
+                      style={{ borderColor: colors.bronzeHot, color: colors.bronzeHot }}
+                    >
+                      {updating === connection.id ? 'Opening pane…' : 'Update now'}
+                    </button>
+                  </div>
+                )}
 
                 <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2 border-t pt-2.5 text-[9.5px]" style={{ borderColor: 'var(--color-line)' }}>
                   <div className="min-w-0">
