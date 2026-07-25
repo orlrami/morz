@@ -6,6 +6,8 @@ import {
   MemoryApi,
   type MemoryEntry,
   type MemoryKind,
+  type MemoryOp,
+  type MemoryOpSnapshot,
   type MemoryProposal,
   type MemoryScope
 } from '../../shared/memory'
@@ -13,17 +15,31 @@ import { notify } from '../services/notify-center'
 import {
   MemoryInjection,
   emitMemoryChanged,
+  expireMemory,
   getMemory,
   initializeMemoryStore,
   listMemory,
+  memoryDatabase,
   removeMemory,
+  restoreMemory,
   saveMemory,
   searchMemory,
+  searchMemoryNeighbors,
   setMemoryEnabled
 } from './store'
+import {
+  classifyOpWithClaude,
+  listMemoryOpAudit,
+  reconcileCandidate,
+  recordMemoryOpAudit,
+  type MemoryCandidate,
+  type OpClassifier
+} from './opset'
 
 const MEMORY_E2E_PROPOSE = 'memory:e2e-propose'
 const MEMORY_E2E_RENDER = 'memory:e2e-render'
+const MEMORY_E2E_RECONCILE = 'memory:e2e-reconcile'
+const MEMORY_E2E_AUDIT = 'memory:e2e-audit'
 const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 const SCOPES = new Set<MemoryScope>(['global', 'project', 'space', 'agent'])
 const KINDS = new Set<MemoryKind>(['rule', 'skill', 'fact'])
@@ -66,6 +82,34 @@ function cleanProposalTitle(value: unknown): string {
   return title
 }
 
+const OP_KINDS = new Set<MemoryOp['kind']>(['add', 'update', 'delete', 'noop'])
+
+function normalizeOpSnapshot(value: unknown, field: string): MemoryOpSnapshot {
+  if (!value || typeof value !== 'object') throw new Error(`Invalid ${field}`)
+  const input = value as Record<string, unknown>
+  return {
+    title: cleanProposalTitle(input.title),
+    body: cleanText(input.body, `${field} body`, 50_000, true)
+  }
+}
+
+function normalizeOp(value: unknown): MemoryOp | undefined {
+  if (value === undefined || value === null) return undefined
+  if (typeof value !== 'object') throw new Error('Invalid proposal op')
+  const input = value as Record<string, unknown>
+  if (!OP_KINDS.has(input.kind as MemoryOp['kind'])) throw new Error('Invalid proposal op kind')
+  const kind = input.kind as MemoryOp['kind']
+  const op: MemoryOp = { kind }
+  if (input.targetId !== undefined) op.targetId = cleanSlug(input.targetId, 'op targetId')
+  if (input.old !== undefined) op.old = normalizeOpSnapshot(input.old, 'op old')
+  if (input.next !== undefined) op.next = normalizeOpSnapshot(input.next, 'op next')
+  if (input.reason !== undefined) op.reason = cleanText(input.reason, 'op reason', 500).trim()
+  if ((kind === 'update' || kind === 'delete') && (!op.targetId || !op.old)) {
+    throw new Error(`A ${kind} op requires targetId and old content`)
+  }
+  return op
+}
+
 function normalizeProposal(value: unknown, stateOverride?: MemoryProposal['state']): MemoryProposal {
   if (!value || typeof value !== 'object') throw new Error('Invalid memory proposal')
   const input = value as Record<string, unknown>
@@ -102,7 +146,8 @@ function normalizeProposal(value: unknown, stateOverride?: MemoryProposal['state
     },
     evidence: input.evidence.map((line) => cleanText(line, 'proposal evidence', 1_000).trim()),
     ts: cleanIso(input.ts),
-    state: requestedState as MemoryProposal['state']
+    state: requestedState as MemoryProposal['state'],
+    op: normalizeOp(input.op)
   }
 }
 
@@ -122,6 +167,7 @@ function serializeStoredProposal(stored: StoredProposal): string {
     ['evidence', proposal.evidence],
     ['ts', proposal.ts],
     ['state', proposal.state],
+    ...(proposal.op ? ([['op', proposal.op]] as [string, unknown][]) : []),
     ['applied', applied]
   ]
   const frontmatter = fields.map(([key, value]) => `${key}: ${JSON.stringify(value)}`).join('\n')
@@ -154,7 +200,7 @@ function parseStoredProposal(path: string): StoredProposal {
   const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(source)
   if (!match) throw new Error('Missing proposal frontmatter')
   const metadata: Record<string, unknown> = Object.create(null) as Record<string, unknown>
-  const allowed = new Set(['id', 'entry', 'evidence', 'ts', 'state', 'applied'])
+  const allowed = new Set(['id', 'entry', 'evidence', 'ts', 'state', 'op', 'applied'])
   for (const line of match[1].split(/\r?\n/)) {
     const separator = line.indexOf(':')
     if (separator <= 0) throw new Error('Invalid proposal frontmatter')
@@ -194,14 +240,67 @@ function readStoredProposals(reportInvalid = false): StoredProposal[] {
     b.proposal.ts.localeCompare(a.proposal.ts) || a.proposal.id.localeCompare(b.proposal.id))
 }
 
+/*
+ * w15/memory-opset — approved proposals apply per their op. UPDATE/DELETE
+ * soft-expire the target (kept + restorable) instead of deleting; every
+ * applied op lands in the SQLite audit table. Re-runs after a crash are safe:
+ * expire is a no-op on expired rows and saveMemory overwrites in place (a
+ * retried apply may duplicate an audit row, which is preferable to losing one).
+ */
+function applyApprovedProposal(proposal: MemoryProposal): void {
+  const now = new Date().toISOString()
+  const op: MemoryOp = proposal.op ?? { kind: 'add' }
+  const source = `proposal:${proposal.id}`
+  const db = memoryDatabase()
+
+  if (op.kind === 'update' || op.kind === 'delete') {
+    const target = op.targetId ? getMemory(op.targetId) : null
+    if (target) expireMemory(target.id, proposal.entry.sourceRunId)
+  }
+  if (op.kind === 'delete') {
+    recordMemoryOpAudit(db, {
+      op: 'delete',
+      memoryId: op.targetId ?? proposal.entry.id,
+      targetId: op.targetId,
+      old: op.old,
+      reason: op.reason,
+      source,
+      ts: now
+    })
+    return
+  }
+
+  // An update whose replacement reuses the target id would overwrite the
+  // expired row's file; give the successor its own id so both rows survive.
+  const entryId = op.kind === 'update' && op.targetId === proposal.entry.id
+    ? `${proposal.entry.id}-${Date.now().toString(36)}`
+    : proposal.entry.id
+  const saved = saveMemory({
+    ...proposal.entry,
+    id: entryId,
+    validAt: proposal.entry.validAt ?? now,
+    createdAt: now,
+    updatedAt: now
+  })
+  recordMemoryOpAudit(db, {
+    op: op.kind === 'update' ? 'update' : 'add',
+    memoryId: saved.id,
+    targetId: op.targetId,
+    old: op.old,
+    next: { title: saved.title, body: saved.body },
+    reason: op.reason,
+    source,
+    ts: now
+  })
+}
+
 function initializeProposalStore(): void {
   if (proposalsInitialized || proposalsInitializing) return
   proposalsInitializing = true
   try {
     for (const stored of readStoredProposals(true)) {
       if (stored.proposal.state !== 'approved' || stored.applied) continue
-      const now = new Date().toISOString()
-      saveMemory({ ...stored.proposal.entry, createdAt: now, updatedAt: now })
+      applyApprovedProposal(stored.proposal)
       writeStoredProposal({ ...stored, applied: true })
     }
     proposalsInitialized = true
@@ -248,6 +347,58 @@ export function proposeMemory(value: unknown): MemoryProposal {
   return guarded('propose', () => proposeMemoryUnsafe(value))
 }
 
+let opClassifierOverride: OpClassifier | null | undefined
+
+/** Test seam. `null` forces the deterministic heuristic; undefined = default. */
+export function setMemoryOpClassifier(classifier: OpClassifier | null | undefined): void {
+  opClassifierOverride = classifier
+}
+
+function defaultOpClassifier(): OpClassifier | null {
+  if (opClassifierOverride !== undefined) return opClassifierOverride
+  // No LLM under e2e or when explicitly disabled — reconcileCandidate falls
+  // back to the deterministic heuristic (and on any classifier failure).
+  if (process.env.MORZ_E2E === '1' || process.env.MORZ_MEMORY_CLASSIFIER === 'off') return null
+  return classifyOpWithClaude
+}
+
+function activeSameScope(candidate: MemoryCandidate): MemoryEntry[] {
+  return listMemory(candidate.scope, candidate.scopeRef)
+    .filter((entry) => !entry.expiredAt)
+}
+
+function ftsNeighbors(candidate: MemoryCandidate): MemoryEntry[] {
+  // OR-ranked retrieval that already excludes soft-expired rows.
+  return searchMemoryNeighbors(`${candidate.title} ${candidate.body.slice(0, 300)}`, 10)
+    .filter((entry) => entry.scope === candidate.scope && entry.scopeRef === candidate.scopeRef)
+}
+
+/*
+ * w15/memory-opset — the reconciled write path for every candidate memory
+ * (learner proposals, manual adds). Candidate → exact-hash pre-dedup → top-k
+ * same-scope FTS retrieval → ADD/UPDATE/DELETE/NOOP (one batched LLM call max,
+ * never on a lane-launch path). NOOP returns state 'rejected' WITHOUT writing
+ * a proposal card; everything else stages a pending card carrying the op.
+ */
+export async function proposeMemoryReconciled(value: unknown): Promise<MemoryProposal> {
+  initializeProposalStore()
+  const proposal = normalizeProposal(value, 'pending')
+  const op = await reconcileCandidate(proposal.entry, {
+    sameScope: activeSameScope,
+    neighbors: ftsNeighbors,
+    classify: defaultOpClassifier()
+  })
+  if (op.kind === 'noop') {
+    return { ...proposal, op, state: 'rejected' }
+  }
+  return guarded('propose', () => {
+    const staged: MemoryProposal = { ...proposal, op }
+    writeStoredProposal({ proposal: staged, applied: false })
+    emitMemoryChanged()
+    return staged
+  })
+}
+
 export function resolveMemoryProposal(idValue: unknown, approvedValue: unknown): MemoryProposal {
   initializeProposalStore()
   const id = cleanSlug(idValue, 'proposal id')
@@ -271,13 +422,12 @@ export function resolveMemoryProposal(idValue: unknown, approvedValue: unknown):
   }
 
   // Persist intent first. If the process exits before materialization, startup
-  // sees approved+unapplied and completes the same saveMemory path.
+  // sees approved+unapplied and completes the same apply path.
   writeStoredProposal({ proposal: resolved, applied: false })
   // Never roll approval intent back on an ambiguous failure: saveMemory can
   // fail after its atomic Markdown rename (for example while updating FTS).
   // Leaving approved+unapplied lets startup recovery retry idempotently.
-  const now = new Date().toISOString()
-  saveMemory({ ...resolved.entry, createdAt: now, updatedAt: now })
+  applyApprovedProposal(resolved)
   writeStoredProposal({ proposal: resolved, applied: true })
   emitMemoryChanged()
   return resolved
@@ -318,9 +468,23 @@ export function registerMemoryIpc(): void {
       const { id, approved } = payload as Record<string, unknown>
       return resolveMemoryProposal(id, approved)
     }))
+  ipcMain.handle(MemoryApi.restore, (_event, id: unknown) => guarded('restore', () => {
+    const restored = restoreMemory(id)
+    recordMemoryOpAudit(memoryDatabase(), {
+      op: 'restore',
+      memoryId: restored.id,
+      next: { title: restored.title, body: restored.body },
+      source: 'settings',
+      ts: new Date().toISOString()
+    })
+    return restored
+  }))
 
   if (process.env.MORZ_E2E === '1') {
     ipcMain.handle(MEMORY_E2E_PROPOSE, (_event, proposal: unknown) => proposeMemory(proposal))
+    ipcMain.handle(MEMORY_E2E_RECONCILE, (_event, proposal: unknown) =>
+      proposeMemoryReconciled(proposal))
+    ipcMain.handle(MEMORY_E2E_AUDIT, () => listMemoryOpAudit(memoryDatabase()))
     ipcMain.handle(MEMORY_E2E_RENDER, (_event, opts: unknown) => guarded('e2e-render', () => {
       if (!opts || typeof opts !== 'object') throw new Error('Invalid render options')
       const input = opts as Record<string, unknown>

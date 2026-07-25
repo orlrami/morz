@@ -18,6 +18,13 @@ import {
   type MemoryScope
 } from '../../shared/memory'
 import { notify } from '../services/notify-center'
+import {
+  ensureMemoryAuditTable,
+  expireEntry,
+  migrateMemoryFtsSchema,
+  renderInjectionLines,
+  restoreEntry
+} from './opset'
 
 const SCOPES = new Set<MemoryScope>(['global', 'project', 'space', 'agent'])
 const KINDS = new Set<MemoryKind>(['rule', 'skill', 'fact'])
@@ -98,6 +105,13 @@ function normalizeEntry(value: unknown, existing?: MemoryEntry | null): MemoryEn
   if (typeof input.enabled !== 'boolean') throw new Error('enabled must be a boolean')
   const scope = input.scope as MemoryScope
   const now = new Date().toISOString()
+  const optionalTimestamp = (field: 'validAt' | 'invalidAt' | 'expiredAt'): string | undefined =>
+    input[field] === undefined || input[field] === null || input[field] === ''
+      ? undefined
+      : cleanTimestamp(input[field], field)
+  const sourceRunId = input.sourceRunId === undefined || input.sourceRunId === null || input.sourceRunId === ''
+    ? undefined
+    : cleanString(input.sourceRunId, 'sourceRunId', 200).trim()
   return {
     id: validateId(input.id),
     scope,
@@ -108,7 +122,12 @@ function normalizeEntry(value: unknown, existing?: MemoryEntry | null): MemoryEn
     origin: input.origin as MemoryEntry['origin'],
     createdAt: existing?.createdAt ?? cleanTimestamp(input.createdAt ?? now, 'createdAt'),
     updatedAt: existing ? now : cleanTimestamp(input.updatedAt ?? now, 'updatedAt'),
-    enabled: input.enabled
+    enabled: input.enabled,
+    // w15/memory-opset — bi-temporal fields survive round-trips untouched.
+    validAt: optionalTimestamp('validAt'),
+    invalidAt: optionalTimestamp('invalidAt'),
+    expiredAt: optionalTimestamp('expiredAt'),
+    sourceRunId
   }
 }
 
@@ -139,7 +158,10 @@ function serialize(entry: MemoryEntry): string {
     ['origin', entry.origin],
     ['createdAt', entry.createdAt],
     ['updatedAt', entry.updatedAt],
-    ['enabled', entry.enabled]
+    ['enabled', entry.enabled],
+    ...(['validAt', 'invalidAt', 'expiredAt', 'sourceRunId'] as const)
+      .filter((key) => entry[key] !== undefined)
+      .map((key) => [key, entry[key]] as [keyof MemoryEntry, unknown])
   ]
   const frontmatter = fields.map(([key, value]) => `${key}: ${JSON.stringify(value)}`).join('\n')
   return `---\n${frontmatter}\n---\n${entry.body}`
@@ -159,7 +181,8 @@ function parseMemoryFile(path: string): MemoryEntry {
   if (!match) throw new Error('Missing memory frontmatter')
   const metadata: Record<string, unknown> = Object.create(null) as Record<string, unknown>
   const allowed = new Set([
-    'id', 'scope', 'scopeRef', 'kind', 'title', 'origin', 'createdAt', 'updatedAt', 'enabled'
+    'id', 'scope', 'scopeRef', 'kind', 'title', 'origin', 'createdAt', 'updatedAt', 'enabled',
+    'validAt', 'invalidAt', 'expiredAt', 'sourceRunId'
   ])
   for (const line of match[1].split(/\r?\n/)) {
     const separator = line.indexOf(':')
@@ -222,15 +245,29 @@ function readAllEntries(reportInvalid = false): MemoryEntry[] {
   return entries
 }
 
+const INDEX_INSERT = `
+  INSERT INTO memory_fts (id, title, body, valid_at, invalid_at, created_at, expired_at, source_run_id)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+`
+
+function indexValues(entry: MemoryEntry): unknown[] {
+  return [
+    entry.id,
+    entry.title,
+    entry.body,
+    entry.validAt ?? entry.createdAt,
+    entry.invalidAt ?? null,
+    entry.createdAt,
+    entry.expiredAt ?? null,
+    entry.sourceRunId ?? null
+  ]
+}
+
 function replaceIndex(entry: MemoryEntry): void {
   const store = database()
   store.transaction(() => {
     store.prepare('DELETE FROM memory_fts WHERE id = ?').run(entry.id)
-    store.prepare('INSERT INTO memory_fts (id, title, body) VALUES (?, ?, ?)').run(
-      entry.id,
-      entry.title,
-      entry.body
-    )
+    store.prepare(INDEX_INSERT).run(...indexValues(entry))
   })()
 }
 
@@ -239,8 +276,8 @@ function rebuildIndex(): void {
   const entries = readAllEntries(true)
   store.transaction(() => {
     store.prepare('DELETE FROM memory_fts').run()
-    const insert = store.prepare('INSERT INTO memory_fts (id, title, body) VALUES (?, ?, ?)')
-    for (const entry of entries) insert.run(entry.id, entry.title, entry.body)
+    const insert = store.prepare(INDEX_INSERT)
+    for (const entry of entries) insert.run(...indexValues(entry))
   })()
 }
 
@@ -251,10 +288,18 @@ export function initializeMemoryStore(): void {
     const root = memoryRoot()
     mkdirSync(root, { recursive: true })
     for (const scope of SCOPES) mkdirSync(join(root, scope), { recursive: true })
+    // w15/memory-opset — bi-temporal columns via rename-copy-drop (see opset.ts);
+    // the markdown re-index below backfills the temporal values.
+    migrateMemoryFtsSchema(database())
     database().exec(`
-      CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts
-      USING fts5(id UNINDEXED, title, body, tokenize = 'unicode61');
+      CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
+        id UNINDEXED, title, body,
+        valid_at UNINDEXED, invalid_at UNINDEXED, created_at UNINDEXED,
+        expired_at UNINDEXED, source_run_id UNINDEXED,
+        tokenize = 'unicode61'
+      );
     `)
+    ensureMemoryAuditTable(database())
     rebuildIndex()
     initialized = true
   } finally {
@@ -331,10 +376,12 @@ export function setMemoryEnabled(idValue: unknown, enabled: unknown): MemoryEntr
   return saveMemory({ ...entry, enabled })
 }
 
-function ftsQuery(value: unknown): string | null {
+function ftsQuery(value: unknown, mode: 'AND' | 'OR' = 'AND'): string | null {
   if (typeof value !== 'string') throw new Error('Search query must be a string')
   const tokens = value.normalize('NFKC').match(/[\p{L}\p{N}]+/gu)?.slice(0, 12) ?? []
-  return tokens.length ? tokens.map((token) => `"${token.replace(/"/g, '""')}"`).join(' AND ') : null
+  return tokens.length
+    ? tokens.map((token) => `"${token.replace(/"/g, '""')}"`).join(` ${mode} `)
+    : null
 }
 
 export function searchMemory(query: unknown, limitValue?: unknown): MemoryEntry[] {
@@ -346,10 +393,41 @@ export function searchMemory(query: unknown, limitValue?: unknown): MemoryEntry[
     : typeof limitValue === 'number' && Number.isInteger(limitValue)
       ? Math.min(100, Math.max(1, limitValue))
       : (() => { throw new Error('Invalid search limit') })()
+  // Soft-expired rows stay indexed for audit but never surface in search.
   const rows = database()
-    .prepare('SELECT id FROM memory_fts WHERE memory_fts MATCH ? ORDER BY bm25(memory_fts) LIMIT ?')
+    .prepare('SELECT id FROM memory_fts WHERE memory_fts MATCH ? AND expired_at IS NULL ORDER BY bm25(memory_fts) LIMIT ?')
     .all(queryText, limit) as { id: string }[]
   return rows.map(({ id }) => getMemory(id)).filter((entry): entry is MemoryEntry => entry !== null)
+}
+
+/**
+ * w15/memory-opset — top-k retrieval for op-set reconciliation. OR-matching
+ * (bm25-ranked), unlike the user-facing AND search: a contradicting candidate
+ * shares only some tokens with the fact it supersedes.
+ */
+export function searchMemoryNeighbors(query: unknown, limit = 10): MemoryEntry[] {
+  ensureInitialized()
+  const queryText = ftsQuery(query, 'OR')
+  if (!queryText) return []
+  const rows = database()
+    .prepare('SELECT id FROM memory_fts WHERE memory_fts MATCH ? AND expired_at IS NULL ORDER BY bm25(memory_fts) LIMIT ?')
+    .all(queryText, Math.min(20, Math.max(1, limit))) as { id: string }[]
+  return rows.map(({ id }) => getMemory(id)).filter((entry): entry is MemoryEntry => entry !== null)
+}
+
+/** w15/memory-opset — UPDATE/DELETE soft-expire: row kept, auditable, restorable. */
+export function expireMemory(idValue: unknown, sourceRunId?: string): MemoryEntry {
+  const entry = getMemory(idValue)
+  if (!entry) throw new Error('Memory entry not found')
+  if (entry.expiredAt) return entry
+  return saveMemory(expireEntry(entry, new Date().toISOString(), sourceRunId))
+}
+
+export function restoreMemory(idValue: unknown): MemoryEntry {
+  const entry = getMemory(idValue)
+  if (!entry) throw new Error('Memory entry not found')
+  if (!entry.expiredAt) return entry
+  return saveMemory(restoreEntry(entry))
 }
 
 function renderInjection(opts: { projectRoot?: string; spaceId?: string; agentId?: string }): string {
@@ -359,26 +437,9 @@ function renderInjection(opts: { projectRoot?: string; spaceId?: string; agentId
     ...(opts.spaceId ? listMemory('space', opts.spaceId) : []),
     ...(opts.agentId ? listMemory('agent', opts.agentId) : [])
   ]
-  const seen = new Set<string>()
-  const priority: Record<MemoryKind, number> = { rule: 0, skill: 1, fact: 2 }
-  const entries = chain
-    .filter((entry) => entry.enabled && !seen.has(entry.id) && seen.add(entry.id))
-    .sort((a, b) => priority[a.kind] - priority[b.kind]
-      || b.updatedAt.localeCompare(a.updatedAt)
-      || a.id.localeCompare(b.id))
-  if (entries.length === 0) return ''
-
-  let rendered = '## How the user works\n'
-  for (const entry of entries) {
-    // The shared contract deliberately injects the one-line title. The body
-    // remains the durable explanation in Markdown without crowding prompts.
-    const line = `- **${entry.kind}:** ${entry.title}\n`
-    const remaining = INJECTION_BUDGET - rendered.length
-    if (remaining <= 0) break
-    if (line.length <= remaining) rendered += line
-    else break // entries are newest-first, so the oldest entries fall away
-  }
-  return rendered.trimEnd()
+  // w15/memory-opset — pure renderer handles dedup, priority, the budget, and
+  // validity windows for superseded facts ("used X until <date>").
+  return renderInjectionLines(chain, INJECTION_BUDGET)
 }
 
 export const MemoryInjection: MemoryInjectionContract = {

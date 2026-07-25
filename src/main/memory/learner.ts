@@ -267,7 +267,9 @@ export function createMemoryLearner(options: MemoryLearnerOptions): MemoryLearne
       proposalId: staged.id,
       ts: now().toISOString()
     })
-    options.onProposal?.({ proposal: staged })
+    // w15/memory-opset — reconciliation may resolve the candidate as NOOP
+    // (state 'rejected', no stored card); only real cards notify the user.
+    if (staged.state === 'pending') options.onProposal?.({ proposal: staged })
     return staged
   }
 
