@@ -68,19 +68,19 @@ async function validateSpace(input: ContextSpaceInput): Promise<ContextSpaceInpu
   const id = validateText(input.id, 'Space id', 200)
   const name = validateText(input.name, 'Space name', 500)
   const rootInput = validateText(input.root, 'Space root', 32_768)
+  // w16 integration — D's shared validator (also used by the memory bootstrap)
+  // carries A's decision: structural validation only, no per-root authority.
+  const root = await validateContextRoot(rootInput)
+  return { id, name, root }
+}
+
+/** Shared scanner boundary for context-hub and memory bootstrap. */
+export async function validateContextRoot(rootInput: string): Promise<string> {
   if (!isAbsolute(rootInput)) throw new Error('Space root must be absolute')
-  if (normalize(rootInput).split(sep).includes('..')) {
-    throw new Error('Space root must not contain traversal segments')
-  }
-  let root: string
-  try {
-    root = await realpath(rootInput)
-  } catch {
-    throw new Error('Space root does not exist')
-  }
+  const root = await realpath(rootInput)
   const info = await stat(root)
   if (!info.isDirectory()) throw new Error('Space root must be a directory')
-  return { id, name, root }
+  return root
 }
 
 function candidatePath(root: string, relativePath: string): string {
@@ -98,7 +98,7 @@ function isContained(root: string, path: string): boolean {
   return fromRoot === '' || (!fromRoot.startsWith('..') && !isAbsolute(fromRoot))
 }
 
-async function assertKnownPathSafe(root: string, pathInput: string): Promise<void> {
+export async function assertKnownPathSafe(root: string, pathInput: string): Promise<void> {
   const path = resolve(pathInput)
   if (!isContained(root, path) || path === root) {
     throw new Error('Context path escaped its Space root')

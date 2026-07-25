@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import type { MorzConnectionsApi } from '../src/shared/connections'
 import { closeMorz, launchMorz, type MorzApp } from './app'
 
 test.describe.serial('Orchestrator planner engine', () => {
@@ -13,6 +14,32 @@ test.describe.serial('Orchestrator planner engine', () => {
   test.afterAll(async () => {
     if (morz) await closeMorz(morz.app)
     delete process.env.MORZ_E2E
+  })
+
+  test('engine options mirror the detected connections roster', async () => {
+    const connections = await morz.page.evaluate(() =>
+      (window as unknown as { morzConnections: MorzConnectionsApi }).morzConnections.list()
+    )
+    const installed = new Map(connections.map((connection) => [connection.id, connection.installed]))
+    const selector = morz.page.getByRole('combobox', { name: 'Planner engine' })
+    const expected: Array<[string, boolean]> = [
+      ['fast', installed.get('claude') === true || installed.get('codex') === true],
+      ['claude', installed.get('claude') === true],
+      ['codex', installed.get('codex') === true],
+      ['opencode', installed.get('opencode') === true],
+      ['local', installed.get('agy') === true]
+    ]
+
+    for (const [value, detected] of expected) {
+      const option = selector.locator(`option[value="${value}"]`)
+      await expect(option).toHaveCount(1)
+      if (detected) {
+        await expect(option).toBeEnabled()
+      } else {
+        await expect(option).toBeDisabled()
+        await expect(option).toHaveAttribute('title', 'not detected on PATH')
+      }
+    }
   })
 
   test('selecting Codex routes planning to the Codex adapter stub and persists', async () => {
@@ -54,7 +81,7 @@ test.describe.serial('Orchestrator planner engine', () => {
   })
 })
 
-test('live Claude, Codex, and local planners each produce a valid SpawnPlan', async () => {
+test('live Claude, Codex, OpenCode, and local planners each produce a valid SpawnPlan', async () => {
   test.skip(process.env.MORZ_LIVE_PLANNER !== '1', 'Set MORZ_LIVE_PLANNER=1 for the live CLI gate.')
   test.setTimeout(900_000)
   delete process.env.MORZ_E2E
@@ -62,9 +89,13 @@ test('live Claude, Codex, and local planners each produce a valid SpawnPlan', as
   try {
     await morz.page.getByRole('radio', { name: 'Orchestrated' }).click()
     const requested = process.env.MORZ_LIVE_PLANNER_ENGINE
-    const engines = requested === 'claude' || requested === 'codex' || requested === 'local'
+    const engines =
+      requested === 'claude' ||
+      requested === 'codex' ||
+      requested === 'opencode' ||
+      requested === 'local'
       ? [requested]
-      : ['claude', 'codex', 'local'] as const
+      : ['claude', 'codex', 'opencode', 'local'] as const
     for (const engine of engines) {
       await morz.page.getByRole('combobox', { name: 'Planner engine' }).selectOption(engine)
       await morz.page

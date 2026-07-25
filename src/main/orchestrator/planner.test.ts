@@ -1,11 +1,17 @@
 import assert from 'node:assert/strict'
+import { DatabaseSync } from 'node:sqlite'
 import { test } from 'node:test'
+import type Database from 'better-sqlite3'
+import type { PlannerEngine } from '../../shared/ipc'
 import type { SpawnPlan } from '../../shared/spawn-plan'
 import {
+  buildOpenCodePlannerArgs,
   extractSpawnPlanBlock,
+  normalizePlannerEngine,
   parseClaudeStreamOutput,
   planGoal,
   planGoalWithEngine,
+  PlannerEngineStore,
   validateSpawnPlan
 } from './planner'
 import { assertPlanEditAllowed, hashSpawnPlan } from './plan-store'
@@ -40,6 +46,79 @@ function fenced(plan: unknown): string {
 test('extractSpawnPlanBlock accepts exactly one JSON fence and rejects prose wrappers', () => {
   assert.deepEqual(extractSpawnPlanBlock(fenced(basePlan)), basePlan)
   assert.throws(() => extractSpawnPlanBlock(`Here is the plan:\n${fenced(basePlan)}`), /exactly/)
+})
+
+test('OpenCode planner uses the documented non-interactive run command and strict JSON extraction', async () => {
+  assert.deepEqual(
+    buildOpenCodePlannerArgs('Plan this', ['--model', 'anthropic/claude-sonnet-4-5']),
+    ['run', '--model', 'anthropic/claude-sonnet-4-5', 'Plan this']
+  )
+
+  const engines: PlannerEngine[] = []
+  const result = await planGoalWithEngine(
+    'Ship the planner',
+    'C:\\Projects\\morz-planner',
+    'opencode',
+    {
+      createId: () => '00000000-0000-4000-8000-000000000001',
+      now: () => '2026-07-14T12:00:00.000Z',
+      runEngine: async (engine) => {
+        engines.push(engine)
+        return fenced(basePlan)
+      }
+    }
+  )
+
+  assert.deepEqual(engines, ['opencode'])
+  assert.equal(result.engine, 'opencode')
+  await assert.rejects(
+    planGoalWithEngine('Ship the planner', 'C:\\Projects\\morz-planner', 'opencode', {
+      runEngine: async () => `Here is the plan:\n${fenced(basePlan)}`
+    }),
+    /exactly one json block/
+  )
+})
+
+test('planner engine normalization accepts OpenCode and rejects unknown engines', () => {
+  assert.equal(normalizePlannerEngine('opencode'), 'opencode')
+  assert.throws(() => normalizePlannerEngine('openai'), /opencode/)
+})
+
+test('planner engine migration is rename-copy-drop and preserves the saved w15 engine', () => {
+  const db = new DatabaseSync(':memory:')
+  try {
+    db.exec(`
+      CREATE TABLE orchestrator_planner_settings (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        engine TEXT NOT NULL CHECK (engine IN ('fast', 'claude', 'codex', 'local')),
+        claude_model TEXT NOT NULL DEFAULT 'sonnet' CHECK (claude_model IN ('sonnet', 'opus', 'fable')),
+        updated_at TEXT NOT NULL
+      );
+      INSERT INTO orchestrator_planner_settings (id, engine, claude_model, updated_at)
+      VALUES (1, 'local', 'opus', '2026-07-20T00:00:00.000Z');
+    `)
+    const store = new PlannerEngineStore(db as unknown as Database.Database)
+    assert.equal(store.get(), 'local')
+    assert.equal(store.set('opencode'), 'opencode')
+    store.close()
+
+    const schema = db
+      .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'orchestrator_planner_settings'")
+      .get() as { sql: string }
+    const tables = db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'orchestrator_planner_settings_%'")
+      .all()
+    const row = db
+      .prepare('SELECT engine, claude_model FROM orchestrator_planner_settings WHERE id = 1')
+      .get() as { engine: string; claude_model: string }
+
+    assert.match(schema.sql, /'opencode'/)
+    assert.deepEqual(tables, [])
+    assert.equal(row.engine, 'opencode')
+    assert.equal(row.claude_model, 'opus')
+  } finally {
+    db.close()
+  }
 })
 
 test('validateSpawnPlan accepts the shared contract and rejects unsafe planner fields', () => {

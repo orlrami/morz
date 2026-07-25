@@ -4,6 +4,10 @@ import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync
 import { basename, dirname, join } from 'path'
 import {
   MemoryApi,
+  type MemoryBootstrapApplyResult,
+  type MemoryBootstrapReview,
+  type MemoryBootstrapReviewItem,
+  type MemoryBootstrapSpace,
   type MemoryEntry,
   type MemoryKind,
   type MemoryOp,
@@ -35,6 +39,7 @@ import {
   type MemoryCandidate,
   type OpClassifier
 } from './opset'
+import { scanBootstrapMarkdown, splitMarkdownCandidates } from './bootstrap'
 
 const MEMORY_E2E_PROPOSE = 'memory:e2e-propose'
 const MEMORY_E2E_RENDER = 'memory:e2e-render'
@@ -47,6 +52,13 @@ const STATES = new Set<MemoryProposal['state']>(['pending', 'approved', 'rejecte
 let registered = false
 let proposalsInitialized = false
 let proposalsInitializing = false
+let activeBootstrapReview:
+  | {
+      review: MemoryBootstrapReview
+      items: Map<string, MemoryBootstrapReviewItem>
+      appliedIds: Set<string>
+    }
+  | null = null
 
 interface StoredProposal {
   proposal: MemoryProposal
@@ -124,6 +136,9 @@ function normalizeProposal(value: unknown, stateOverride?: MemoryProposal['state
   const scopeRef = scope === 'global'
     ? undefined
     : cleanText(entry.scopeRef, 'proposal scopeRef', 2_000)
+  const source = entry.source === undefined || entry.source === null || entry.source === ''
+    ? undefined
+    : cleanText(entry.source, 'proposal source', 32_768).trim()
   if (scope === 'global' && entry.scopeRef !== undefined && entry.scopeRef !== null && entry.scopeRef !== '') {
     throw new Error('Global proposal cannot have a scopeRef')
   }
@@ -142,7 +157,8 @@ function normalizeProposal(value: unknown, stateOverride?: MemoryProposal['state
       title: cleanProposalTitle(entry.title),
       body: cleanText(entry.body, 'proposal body', 50_000, true),
       origin: entry.origin as MemoryEntry['origin'],
-      enabled: entry.enabled
+      enabled: entry.enabled,
+      source
     },
     evidence: input.evidence.map((line) => cleanText(line, 'proposal evidence', 1_000).trim()),
     ts: cleanIso(input.ts),
@@ -380,7 +396,7 @@ function ftsNeighbors(candidate: MemoryCandidate): MemoryEntry[] {
  * never on a lane-launch path). NOOP returns state 'rejected' WITHOUT writing
  * a proposal card; everything else stages a pending card carrying the op.
  */
-export async function proposeMemoryReconciled(value: unknown): Promise<MemoryProposal> {
+export async function previewMemoryReconciled(value: unknown): Promise<MemoryProposal> {
   initializeProposalStore()
   const proposal = normalizeProposal(value, 'pending')
   const op = await reconcileCandidate(proposal.entry, {
@@ -391,11 +407,16 @@ export async function proposeMemoryReconciled(value: unknown): Promise<MemoryPro
   if (op.kind === 'noop') {
     return { ...proposal, op, state: 'rejected' }
   }
+  return { ...proposal, op }
+}
+
+export async function proposeMemoryReconciled(value: unknown): Promise<MemoryProposal> {
+  const preview = await previewMemoryReconciled(value)
+  if (preview.op?.kind === 'noop') return preview
   return guarded('propose', () => {
-    const staged: MemoryProposal = { ...proposal, op }
-    writeStoredProposal({ proposal: staged, applied: false })
+    writeStoredProposal({ proposal: preview, applied: false })
     emitMemoryChanged()
-    return staged
+    return preview
   })
 }
 
@@ -431,6 +452,123 @@ export function resolveMemoryProposal(idValue: unknown, approvedValue: unknown):
   writeStoredProposal({ proposal: resolved, applied: true })
   emitMemoryChanged()
   return resolved
+}
+
+function normalizeBootstrapSpaces(value: unknown): MemoryBootstrapSpace[] {
+  if (!Array.isArray(value) || value.length > 100) throw new Error('Invalid memory bootstrap spaces')
+  const roots = new Set<string>()
+  return value.map((raw) => {
+    if (!raw || typeof raw !== 'object') throw new Error('Invalid memory bootstrap space')
+    const input = raw as Record<string, unknown>
+    const space = {
+      id: cleanText(input.id, 'bootstrap space id', 200).trim(),
+      name: cleanText(input.name, 'bootstrap space name', 500).trim(),
+      root: cleanText(input.root, 'bootstrap space root', 32_768).trim()
+    }
+    const key = process.platform === 'win32' ? space.root.toLowerCase() : space.root
+    if (roots.has(key)) throw new Error('Duplicate memory bootstrap space root')
+    roots.add(key)
+    return space
+  })
+}
+
+export async function buildMemoryBootstrapReview(value: unknown): Promise<MemoryBootstrapReview> {
+  const spaces = normalizeBootstrapSpaces(value)
+  const scan = await scanBootstrapMarkdown(spaces)
+  const allCandidates = scan.documents.flatMap((document) =>
+    splitMarkdownCandidates(document).map((candidate) => ({
+      candidate,
+      sourceFile: document.path
+    }))
+  )
+  const truncations = [...scan.truncations]
+  const candidates = allCandidates.slice(0, 1_000)
+  if (allCandidates.length > candidates.length) {
+    truncations.push(`${allCandidates.length - candidates.length} sections skipped after the 1000-candidate cap`)
+  }
+
+  const ts = new Date().toISOString()
+  const items: MemoryBootstrapReviewItem[] = []
+  for (const { candidate, sourceFile } of candidates) {
+    const proposal = await previewMemoryReconciled({
+      id: `bootstrap-${candidate.id}`,
+      entry: candidate,
+      evidence: [`Imported from ${candidate.source ?? 'unknown source'}`],
+      ts,
+      state: 'pending'
+    })
+    items.push({
+      id: proposal.id,
+      sourceFile,
+      source: candidate.source ?? 'Unknown source',
+      proposal
+    })
+  }
+
+  const grouped = new Map<string, MemoryBootstrapReviewItem[]>()
+  for (const item of items) {
+    const group = grouped.get(item.sourceFile) ?? []
+    group.push(item)
+    grouped.set(item.sourceFile, group)
+  }
+  const review: MemoryBootstrapReview = {
+    reviewId: randomUUID(),
+    counts: {
+      filesScanned: scan.filesScanned,
+      filesRead: scan.filesRead,
+      candidates: items.length,
+      adds: items.filter((item) => item.proposal.op?.kind === 'add').length,
+      updates: items.filter((item) => item.proposal.op?.kind === 'update').length,
+      deletes: items.filter((item) => item.proposal.op?.kind === 'delete').length,
+      noops: items.filter((item) => item.proposal.op?.kind === 'noop').length
+    },
+    groups: [...grouped.entries()].map(([source, groupItems]) => ({
+      source,
+      items: groupItems
+    })),
+    truncations
+  }
+  activeBootstrapReview = {
+    review,
+    items: new Map(items.map((item) => [item.id, item])),
+    appliedIds: new Set()
+  }
+  return review
+}
+
+export function applyMemoryBootstrap(
+  reviewIdValue: unknown,
+  selectedIdsValue: unknown
+): MemoryBootstrapApplyResult {
+  const reviewId = cleanText(reviewIdValue, 'bootstrap review id', 200).trim()
+  if (!Array.isArray(selectedIdsValue) || selectedIdsValue.length > 1_000) {
+    throw new Error('Invalid memory bootstrap selection')
+  }
+  const active = activeBootstrapReview
+  if (!active || active.review.reviewId !== reviewId) {
+    throw new Error('Memory bootstrap review is no longer active')
+  }
+  const selectedIds = [...new Set(selectedIdsValue.map((id) => cleanSlug(id, 'bootstrap item id')))]
+  const selected = selectedIds.map((id) => {
+    const item = active.items.get(id)
+    if (!item) throw new Error('Memory bootstrap selection contains an unknown item')
+    return item
+  })
+
+  let applied = 0
+  let skipped = 0
+  for (const item of selected) {
+    if (item.proposal.op?.kind === 'noop' || active.appliedIds.has(item.id)) {
+      skipped += 1
+      continue
+    }
+    const staged = proposeMemory(item.proposal)
+    resolveMemoryProposal(staged.id, true)
+    active.appliedIds.add(item.id)
+    applied += 1
+  }
+  activeBootstrapReview = null
+  return { applied, skipped }
 }
 
 export function registerMemoryIpc(): void {
@@ -479,6 +617,14 @@ export function registerMemoryIpc(): void {
     })
     return restored
   }))
+  ipcMain.handle(MemoryApi.bootstrap, (_event, spaces: unknown) =>
+    guarded('bootstrap', () => buildMemoryBootstrapReview(spaces)))
+  ipcMain.handle(MemoryApi.applyBootstrap, (_event, payload: unknown) =>
+    guarded('apply-bootstrap', () => {
+      if (!payload || typeof payload !== 'object') throw new Error('Invalid memory bootstrap apply payload')
+      const input = payload as Record<string, unknown>
+      return applyMemoryBootstrap(input.reviewId, input.selectedIds)
+    }))
 
   if (process.env.MORZ_E2E === '1') {
     ipcMain.handle(MEMORY_E2E_PROPOSE, (_event, proposal: unknown) => proposeMemory(proposal))

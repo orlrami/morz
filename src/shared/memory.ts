@@ -48,6 +48,8 @@ export interface MemoryEntry {
   expiredAt?: string
   /** Provenance: the run/lane that produced this fact. */
   sourceRunId?: string
+  /** File provenance for bootstrap imports (`absolute-path#heading`). */
+  source?: string
 }
 
 /*
@@ -106,6 +108,46 @@ export interface MemoryProposal {
   op?: MemoryOp
 }
 
+export interface MemoryBootstrapSpace {
+  id: string
+  name: string
+  root: string
+}
+
+export interface MemoryBootstrapCounts {
+  filesScanned: number
+  filesRead: number
+  candidates: number
+  adds: number
+  updates: number
+  deletes: number
+  noops: number
+}
+
+export interface MemoryBootstrapReviewItem {
+  id: string
+  sourceFile: string
+  source: string
+  proposal: MemoryProposal
+}
+
+export interface MemoryBootstrapReviewGroup {
+  source: string
+  items: MemoryBootstrapReviewItem[]
+}
+
+export interface MemoryBootstrapReview {
+  reviewId: string
+  counts: MemoryBootstrapCounts
+  groups: MemoryBootstrapReviewGroup[]
+  truncations: string[]
+}
+
+export interface MemoryBootstrapApplyResult {
+  applied: number
+  skipped: number
+}
+
 export const MemoryApi = {
   list: 'memory:list', // (scope?: MemoryScope, scopeRef?: string) => Promise<MemoryEntry[]>
   get: 'memory:get', // (id) => Promise<MemoryEntry | null>
@@ -119,6 +161,8 @@ export const MemoryApi = {
   resolveProposal: 'memory:resolve-proposal', // ({id, approved}) => Promise<MemoryProposal>
   /** w15/memory-opset — un-expire a soft-expired row (undo for UPDATE/DELETE). */
   restore: 'memory:restore', // (id) => Promise<MemoryEntry>
+  bootstrap: 'memory:bootstrap',
+  applyBootstrap: 'memory:apply-bootstrap',
   changed: 'memory:changed' // push → void (store or proposals changed)
 } as const
 
@@ -144,5 +188,7 @@ export interface MorzMemoryApi {
   proposals(): Promise<MemoryProposal[]>
   resolveProposal(id: string, approved: boolean): Promise<MemoryProposal>
   restore(id: string): Promise<MemoryEntry>
+  bootstrap(spaces: MemoryBootstrapSpace[]): Promise<MemoryBootstrapReview>
+  applyBootstrap(reviewId: string, selectedIds: string[]): Promise<MemoryBootstrapApplyResult>
   onChanged(cb: () => void): () => void
 }
