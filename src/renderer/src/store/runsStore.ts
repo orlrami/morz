@@ -3,6 +3,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { MorzRunApi, RunHistoryPolicy, RunSummary } from '@shared/ipc'
 import type { RunStatus } from '@shared/spawn-plan'
+import { useModulesStore } from './modulesStore' // w15/modules-core
 import { selectActiveSpaceRoot, useSpaceStore } from './spaceStore'
 
 export type { RunHistoryPolicy } from '@shared/ipc'
@@ -150,6 +151,8 @@ export function getLaunchRunHistoryPolicy(): RunHistoryPolicy {
 
 /** Pull summaries newest-first, select the newest run, and hydrate its detail. */
 export async function hydrateRuns(): Promise<void> {
+  // w15/modules-core — run sync belongs to the orchestration module
+  if (!useModulesStore.getState().enabled.orchestration) return
   const api = getRunApi()
   if (!api) {
     useRunsStore.setState({ available: false, loading: false, error: null, runs: [] })
@@ -212,6 +215,8 @@ export function subscribeRuns(): () => void {
   // component's cleanup silently unsubscribe the others.
   if (!liveSubscription) {
     const unsubscribe = api.onRunChanged((status) => {
+      // w15/modules-core — pushes for a disabled orchestration module are dropped
+      if (!useModulesStore.getState().enabled.orchestration) return
       const known = useRunsStore.getState().runs.some((run) => run.runId === status.runId)
       useRunsStore.getState().ingest(status)
       if (!known) void hydrateRuns()
@@ -231,3 +236,8 @@ export function subscribeRuns(): () => void {
     }
   }
 }
+
+// w15/modules-core — enabling orchestration at runtime hydrates without a restart.
+useModulesStore.subscribe((state, previous) => {
+  if (state.enabled.orchestration && !previous.enabled.orchestration) void hydrateRuns()
+})

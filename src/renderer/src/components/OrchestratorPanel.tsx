@@ -14,6 +14,7 @@ import type {
 import { colors } from '@/lib/tokens'
 import { staggerContainer, staggerItem } from '@/lib/springs'
 import { useModeStore } from '@/store/modeStore'
+import { useModulesStore } from '@/store/modulesStore' // w15/modules-core
 import { useBusStore, getBus } from '@/store/busStore'
 import { useLaneStore } from '@/store/laneStore'
 import { selectActiveSpace, selectActiveSpaceRoot, useSpaceStore } from '@/store/spaceStore'
@@ -240,6 +241,7 @@ function getPlannerEngine(): PlannerEngineBridge | undefined {
 
 function PlannerFlow(): JSX.Element {
   const spaceRoot = useSpaceStore(selectActiveSpaceRoot)
+  const voiceOn = useModulesStore((s) => s.enabled.voice) // w15/modules-core
   const [goal, setGoal] = useState('')
   const goalComposerRef = useRef<HTMLTextAreaElement>(null)
   // w12/orch-engine
@@ -429,13 +431,16 @@ function PlannerFlow(): JSX.Element {
               '--tw-ring-color': colors.bronze
             } as React.CSSProperties}
           />
-          <VoiceInput
-            onText={(text) =>
-              setGoal((current) =>
-                [current.trimEnd(), text.trim()].filter(Boolean).join(' ').slice(0, 100_000)
-              )
-            }
-          />
+          {/* w15/modules-core — dictation belongs to the voice module */}
+          {voiceOn && (
+            <VoiceInput
+              onText={(text) =>
+                setGoal((current) =>
+                  [current.trimEnd(), text.trim()].filter(Boolean).join(' ').slice(0, 100_000)
+                )
+              }
+            />
+          )}
         </div>
         {/* w12/orch-engine */}
         <select

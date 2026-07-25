@@ -7,6 +7,7 @@ import type {
 } from '@shared/ipc'
 import type { MorzNotifyApi, NotifyItem } from '@shared/notify'
 import { useModeStore } from './modeStore'
+import { useModulesStore } from './modulesStore' // w15/modules-core
 import { selectActiveSpaceRoot, useSpaceStore } from './spaceStore'
 
 interface PulseState {
@@ -191,7 +192,19 @@ useSpaceStore.subscribe((state, previous) => {
   if (selectActiveSpaceRoot(state) !== selectActiveSpaceRoot(previous)) void syncContext()
 })
 
-queueMicrotask(() => void usePulseStore.getState().initialize())
+/* w15/modules-core — Pulse sync/listeners register ONLY while the pulse module
+ * is enabled: disabled = zero pulse IPC. Enabling later initializes live. */
+queueMicrotask(() => {
+  void useModulesStore
+    .getState()
+    .hydrate()
+    .then(() => {
+      if (useModulesStore.getState().enabled.pulse) void usePulseStore.getState().initialize()
+    })
+})
+useModulesStore.subscribe((state, previous) => {
+  if (state.enabled.pulse && !previous.enabled.pulse) void usePulseStore.getState().initialize()
+})
 
 export function latestPulseBrief(snapshot: PulseSnapshot | null): PulseBrief | null {
   return snapshot?.briefs[0] ?? null

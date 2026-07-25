@@ -20,6 +20,7 @@ import { VoiceSettings } from './VoiceSettings'
 import { UpdateSettings } from './UpdateSettings'
 import { ConnectionsSettings } from './ConnectionsSettings' // w11/connections
 import { useConnectionsStore } from '@/store/connectionsStore'
+import { useModulesStore } from '@/store/modulesStore' // w15/modules-core
 import {
   RUN_HISTORY_POLICIES,
   useRunsStore,
@@ -42,6 +43,7 @@ export function SettingsPanel({ initialTab = 'limits' }: { initialTab?: Settings
   const [tab, setTab] = useState<SettingsTab>(initialTab)
   const { themeId, setTheme } = useThemeStore()
   const { connections, loading: connectionsLoading, start: startConnections } = useConnectionsStore()
+  const modulesEnabled = useModulesStore((state) => state.enabled) // w15/modules-core
   const historyPolicy = useRunsStore((state) => state.historyPolicy)
   const setHistoryPolicy = useRunsStore((state) => state.setHistoryPolicy)
   const usageConnections = connections.filter((connection) => connection.usage !== null)
@@ -266,12 +268,15 @@ export function SettingsPanel({ initialTab = 'limits' }: { initialTab?: Settings
                 </div>
               ))}
             </div>
-            {/* // w4/obsidian */}<ObsidianSettings />
+            {/* // w4/obsidian — w15/modules-core: mounts only with the module on */}
+            {modulesEnabled.obsidian && <ObsidianSettings />}
             {/* w6/assistant */}<AssistantSettings />
-            {/* w6/pulse */}<PulseSettings />
+            {/* w6/pulse — w15/modules-core */}
+            {modulesEnabled.pulse && <PulseSettings />}
             <MemorySettings /> {/* // w8/memory-core */}
             {/* w8/routing */}<RoutingSettings />
-            {/* // w8/voice */}<VoiceSettings />
+            {/* // w8/voice — w15/modules-core */}
+            {modulesEnabled.voice && <VoiceSettings />}
             {/* // w9/installer */}<UpdateSettings />
           </div>
         )}
