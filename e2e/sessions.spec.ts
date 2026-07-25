@@ -65,7 +65,7 @@ test.describe.serial('per-project session history (w11/sessions)', () => {
     await expect(secondPanel).not.toContainText('alpha-work')
 
     const firstSpaceAgain = page.locator(`[data-space-name="${firstName}"]`)
-    await firstSpaceAgain.getByRole('button', { name: `Activate ${firstName}` }).click()
+    await firstSpaceAgain.getByRole('tab').click()
     await expect(firstSpaceAgain).toHaveAttribute('data-active', 'true')
     const firstPanelAgain = page.getByRole('region', { name: 'Session history' })
     const resumedFirstLive = firstPanelAgain.locator('[data-session-live="true"]')
