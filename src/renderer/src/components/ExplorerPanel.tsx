@@ -8,7 +8,7 @@ import {
   IconX
 } from '@tabler/icons-react'
 import type { FsEntry, GitFile } from '@shared/ipc'
-import { emit } from '@/lib/app-events'
+import { openFile as openFileThroughSlot } from '@/lib/open-file' // w15/integration-slots
 import { colors } from '@/lib/tokens'
 import { getMorz, selectActiveSpace, selectActiveSpaceRoot, useSpaceStore } from '@/store/spaceStore'
 
@@ -122,8 +122,10 @@ export function ExplorerPanel({ open, onClose }: ExplorerPanelProps): JSX.Elemen
     [childrenByPath, load]
   )
 
+  /* w15/integration-slots — the editor slot decides where a file opens: the
+   * in-app IDE slide-over, or VS Code / Cursor via `-g file:line`. */
   const openFile = useCallback((path: string): void => {
-    emit('open-file', { path })
+    void openFileThroughSlot(path)
   }, [])
 
   if (!open) return null
@@ -141,13 +143,13 @@ export function ExplorerPanel({ open, onClose }: ExplorerPanelProps): JSX.Elemen
         style={{ borderColor: 'var(--color-line)' }}
       >
         <IconFolderOpen size={14} stroke={1.5} style={{ color: colors.bronzeHot }} />
-        <span
+        <h2
           className="truncate text-xs font-semibold"
           style={{ fontFamily: 'var(--font-display)', color: colors.quartz }}
           title={root}
         >
           {space?.name ?? 'Explorer'}
-        </span>
+        </h2>
         <button
           type="button"
           onClick={onClose}

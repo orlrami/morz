@@ -86,9 +86,13 @@ test.describe.serial('IDE slide-over and Explorer panel', () => {
       })
     }, ROOT)
     await page.getByRole('button', { name: 'Add space' }).click()
-    await expect(page.getByRole('heading', { name: 'morz-ide' })).toBeVisible()
+    // The added space appears as a titlebar space tab; the Explorer header
+    // carries the same name once the panel is open.
+    const spaceName = ROOT.replace(/[\\/]+$/, '').split(/[\\/]/).pop() as string
+    await expect(page.getByRole('tab', { name: new RegExp(spaceName) }).first()).toBeVisible()
 
     await page.getByRole('button', { name: 'Toggle file explorer' }).click()
+    await expect(page.getByRole('heading', { name: spaceName })).toBeVisible()
 
     const explorer = page.getByRole('complementary', { name: 'File explorer' })
     await expect(explorer).toBeVisible()
