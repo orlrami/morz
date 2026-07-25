@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { AnimatePresence, motion } from 'framer-motion'
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import { IconLock, IconX } from '@tabler/icons-react'
 import { MODULES, type ModuleId } from '@shared/modules'
 import { colors } from '@/lib/tokens'
@@ -34,6 +34,7 @@ interface ModuleDrawerProps {
  * `module: enable/disable <name>` actions.
  */
 export function ModuleDrawer({ open, onClose }: ModuleDrawerProps): JSX.Element {
+  const reduceMotion = useReducedMotion() // w16/polish-motion — IdePane pattern
   const enabled = useModulesStore((state) => state.enabled)
   const setEnabled = useModulesStore((state) => state.setEnabled)
   const mode = useModeStore((state) => state.mode)
@@ -56,8 +57,8 @@ export function ModuleDrawer({ open, onClose }: ModuleDrawerProps): JSX.Element 
         <motion.div
           className="absolute inset-0 z-40 flex justify-end"
           initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0, transition: { duration: 0.12 } }}
+          animate={{ opacity: 1, transition: { duration: reduceMotion ? 0 : 0.12 } }}
+          exit={{ opacity: 0, transition: { duration: reduceMotion ? 0 : 0.12 } }}
           style={{ background: 'rgba(20,18,12,0.45)' }}
           onClick={onClose}
         >
@@ -66,8 +67,8 @@ export function ModuleDrawer({ open, onClose }: ModuleDrawerProps): JSX.Element 
             aria-label="Modules"
             data-testid="module-drawer"
             initial={{ x: 40, opacity: 0 }}
-            animate={{ x: 0, opacity: 1, transition: springs.float }}
-            exit={{ x: 24, opacity: 0, transition: { duration: 0.12 } }}
+            animate={{ x: 0, opacity: 1, transition: reduceMotion ? { duration: 0 } : springs.float }}
+            exit={{ x: 24, opacity: 0, transition: { duration: reduceMotion ? 0 : 0.12 } }}
             className="flex h-full w-[320px] flex-col border-l shadow-2xl"
             style={{ background: colors.panel, borderColor: 'var(--color-line-strong)' }}
             onClick={(event) => event.stopPropagation()}

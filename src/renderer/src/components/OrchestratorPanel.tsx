@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { AnimatePresence, motion } from 'framer-motion'
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import { IconClipboardList, IconFlask, IconHandStop, IconSparkles } from '@tabler/icons-react'
 import type { Message, Part, Task, TaskState } from '@shared/bus'
 import type {
@@ -12,7 +12,7 @@ import type {
   StoredSpawnPlan
 } from '@shared/ipc'
 import { colors } from '@/lib/tokens'
-import { staggerContainer, staggerItem } from '@/lib/springs'
+import { springs, staggerContainer, staggerItem } from '@/lib/springs'
 import { useModeStore } from '@/store/modeStore'
 import { useBusStore, getBus } from '@/store/busStore'
 import { useLaneStore } from '@/store/laneStore'
@@ -43,14 +43,20 @@ const STATE_ORDER: TaskState[] = ['working', 'blocked', 'accepted', 'proposed', 
 
 export function OrchestratorPanel(): JSX.Element {
   const mode = useModeStore((s) => s.mode)
+  /* w16/polish-motion — the dock slides in from the right (Shell wraps the
+   * mount in AnimatePresence, so the exit plays too). Transform-only. */
+  const reduceMotion = useReducedMotion()
   return (
-    <aside
+    <motion.aside
+      initial={{ x: 32, opacity: 0 }}
+      animate={{ x: 0, opacity: 1, transition: reduceMotion ? { duration: 0 } : springs.panel }}
+      exit={{ x: 24, opacity: 0, transition: { duration: reduceMotion ? 0 : 0.12 } }}
       className="flex w-[330px] shrink-0 flex-col overflow-hidden border-l"
       style={{ background: colors.panel, borderColor: 'var(--color-line)' }}
       aria-label="Orchestrator"
     >
       {mode === 'manual' ? <ManualNotice /> : <LiveBlackboard showPlanner />}{/* w8/routing */}
-    </aside>
+    </motion.aside>
   )
 }
 
