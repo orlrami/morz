@@ -45,13 +45,14 @@ test.describe.serial('real space management (w9/spaces)', () => {
     morz = await launchMorz()
     const { page, appDataDir } = morz
 
-    await page.getByRole('button', { name: 'Open folder' }).click()
+    await page.getByRole('button', { name: 'Add space' }).click()
     const space = page.locator(`[data-space-name="${fixtureName}"]`)
     await expect(space).toBeVisible()
 
-    await space.getByRole('button', { name: `Activate ${fixtureName}` }).click()
+    await space.getByRole('tab').click()
     await expect(space).toHaveAttribute('data-active', 'true')
-    await expect(space).toContainText('spaces-fixture')
+    // w15/shell-layout — branch surfaces in the statusbar left group now
+    await expect(page.locator('footer')).toContainText('spaces-fixture')
 
     await page.getByRole('button', { name: 'Toggle file explorer' }).click()
     const explorer = page.getByRole('complementary', { name: 'File explorer' })
@@ -85,7 +86,7 @@ test.describe.serial('real space management (w9/spaces)', () => {
 
     const seedSpace = page.locator('[data-space-name="morz"]')
     if (await seedSpace.count()) {
-      await seedSpace.getByRole('button', { name: 'Activate morz' }).click()
+      await seedSpace.getByRole('tab').click()
       const seedLaneButton = page
         .locator(`section[data-pane-id="${PANE_1}"]`)
         .getByRole('button', { name: 'Start Claude here' })
@@ -101,7 +102,7 @@ test.describe.serial('real space management (w9/spaces)', () => {
     const closeLaneButtons = page.getByRole('button', { name: 'Close lane' })
     while (await closeLaneButtons.count()) await closeLaneButtons.first().click()
 
-    await space.getByRole('button', { name: `Activate ${fixtureName}` }).click()
+    await space.getByRole('tab').click()
 
     await space.click({ button: 'right' })
     await page.getByRole('menuitem', { name: `Rename ${fixtureName}` }).click()
@@ -123,10 +124,8 @@ test.describe.serial('real space management (w9/spaces)', () => {
     rmSync(fixtureRoot, { recursive: true, force: true })
     morz = await launchMorz({ appDataDir })
     const unavailableSpace = morz.page.locator(`[data-space-name="${fixtureName}-renamed"]`)
-    await expect(unavailableSpace).toHaveAttribute('title', `${fixtureRoot} is unavailable`)
-    await expect(
-      unavailableSpace.getByRole('button', { name: `Activate ${fixtureName}-renamed` })
-    ).toBeDisabled()
+    await expect(unavailableSpace).toHaveAttribute('title', `${fixtureRoot} (unavailable)`)
+    await expect(unavailableSpace.getByRole('tab')).toBeDisabled()
 
     await unavailableSpace.click({ button: 'right' })
     morz.page.once('dialog', (dialog) => dialog.accept())
@@ -163,12 +162,11 @@ test.describe.serial('real space management (w9/spaces)', () => {
       { validRoot: migrationRoot, missingRoot: join(migrationRoot, 'missing-agent-worktree') }
     )
     await morz.page.reload()
-    const migrated = morz.page.locator('[data-space-name="Legacy custom space"]')
+    // w15/shell-layout — the spaces sidebar is gone; the titlebar tab is the
+    // migrated space's surface now (live agents render in the dock card).
+    const migrated = morz.page.locator('[data-space-tab="Legacy custom space"]')
     await expect(migrated).toHaveAttribute('data-active', 'true')
     await expect(migrated).not.toContainText('valid-agent')
     await expect(migrated).not.toContainText('stale-agent')
-    await expect(
-      morz.page.getByRole('complementary', { name: 'Spaces sidebar' })
-    ).toContainText('No agents running here yet')
   })
 })

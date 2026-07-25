@@ -79,7 +79,7 @@ test.describe.serial('visible session controls and morz resume (w13/sessions-vis
     morz = await launchMorz()
     let { page, appDataDir } = morz
 
-    await page.getByRole('button', { name: 'Open folder' }).click()
+    await page.getByRole('button', { name: 'Add space' }).click()
     await expect(page.locator(`[data-space-name="${basename(spaceRoot)}"]`)).toHaveAttribute('data-active', 'true')
     await page.getByRole('tab', { name: 'Sessions' }).click()
 
@@ -153,7 +153,7 @@ test.describe.serial('visible session controls and morz resume (w13/sessions-vis
     morz = await launchMorz()
     const { page } = morz
 
-    await page.getByRole('button', { name: 'Open folder' }).click()
+    await page.getByRole('button', { name: 'Add space' }).click()
     await expect(page.locator(`[data-space-name="${basename(noNativeSpaceRoot)}"]`)).toHaveAttribute('data-active', 'true')
     await page.getByRole('tab', { name: 'Sessions' }).click()
 

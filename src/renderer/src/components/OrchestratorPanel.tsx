@@ -18,6 +18,7 @@ import { useModulesStore } from '@/store/modulesStore' // w15/modules-core
 import { useBusStore, getBus } from '@/store/busStore'
 import { useLaneStore } from '@/store/laneStore'
 import { selectActiveSpace, selectActiveSpaceRoot, useSpaceStore } from '@/store/spaceStore'
+import { AgentPillBar } from './AgentPillBar'
 import { ApprovalChip } from './ApprovalChip'
 import { AmendmentCard, PlanCard } from './PlanCard'
 import { RunsPanel } from './RunsPanel'
@@ -130,6 +131,10 @@ function LiveBlackboard({ showPlanner }: { showPlanner: boolean }): JSX.Element 
   return (
     <>
       <Header subtitle={section === 'runs' ? 'live runs' : subtitle} spaceName={activeSpaceName} />
+
+      {/* w15/shell-layout — live agents live in the dock now (pill bar moved
+       * here from the old strip under the titlebar; statusbar keeps the count) */}
+      <AgentPillBar />
 
       <div
         className="grid grid-cols-2 border-b p-1"

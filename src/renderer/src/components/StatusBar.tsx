@@ -3,6 +3,7 @@ import { useEffect } from 'react'
 import { colors, statusColor } from '@/lib/tokens'
 import { useCostStore } from '@/store/costStore'
 import { useLaneStore } from '@/store/laneStore'
+import { useLayoutStore } from '@/store/layoutStore'
 import { subscribeRuns, useRunsStore } from '@/store/runsStore'
 import { useSpaceStore } from '@/store/spaceStore'
 import type { CostRunMeter, CostUsageTotals } from '@shared/ipc'
@@ -14,8 +15,9 @@ interface StatusBarProps {
 }
 
 /*
- * Bottom status bar: live branch, fleet counts, cost/token usage, notices,
- * and the control dial. Unknown usage stays explicitly unknown.
+ * Bottom status bar (w15 premium), three groups: left context (branch/dirty,
+ * panes · lanes, live-agents count) — CENTER the autonomy dial — right cost
+ * and token meters + notification bell. Unknown usage stays explicitly unknown.
  */
 export function StatusBar({ onOpenCommit }: StatusBarProps): JSX.Element {
   const snapshot = useCostStore((state) => state.snapshot)
@@ -24,8 +26,13 @@ export function StatusBar({ onOpenCommit }: StatusBarProps): JSX.Element {
   const resume = useCostStore((state) => state.resume)
   const stop = useCostStore((state) => state.stop)
   const lanes = useLaneStore((state) => state.lanes)
+  const panes = useLayoutStore((state) => state.panes)
   const statuses = useRunsStore((state) => state.statuses)
-  const activeRoot = useSpaceStore((state) => state.spaces[0]?.root ?? '')
+  /* w15/shell-layout — track the ACTIVE space (the old spaces[0] pick predates
+   * real space switching and shows the wrong branch after a tab change). */
+  const activeRoot = useSpaceStore(
+    (state) => state.spaces.find((s) => s.id === state.activeSpaceId)?.root ?? ''
+  )
   const git = useSpaceStore((state) => state.gitByRoot[activeRoot])
 
   useEffect(() => startCostMeter(), [startCostMeter])
@@ -34,8 +41,7 @@ export function StatusBar({ onOpenCommit }: StatusBarProps): JSX.Element {
   const agentStates = Object.values(statuses).flatMap((status) => Object.values(status.agents))
   const activeAgents =
     lanes.length + agentStates.filter((state) => ['spawning', 'running', 'review'].includes(state)).length
-  const blockedAgents = agentStates.filter((state) => state === 'blocked' || state === 'rate-limited').length
-  const doneAgents = agentStates.filter((state) => state === 'done').length
+  const dirty = (git?.files.length ?? 0) > 0
   const branchLabel = git
     ? `${git.branch ?? 'detached'}${git.ahead ? ` ↑${git.ahead}` : ''}${git.behind ? ` ↓${git.behind}` : ''}`
     : 'Branch unavailable'
@@ -69,7 +75,7 @@ export function StatusBar({ onOpenCommit }: StatusBarProps): JSX.Element {
       )}
 
       <footer
-        className="flex h-7 shrink-0 items-center gap-4 border-t px-3.5 text-[11px]"
+        className="relative flex h-7 shrink-0 items-center gap-4 border-t px-3.5 text-[11px]"
         style={{
           background: colors.panel,
           borderColor: 'var(--color-line)',
@@ -80,23 +86,37 @@ export function StatusBar({ onOpenCommit }: StatusBarProps): JSX.Element {
           className="flex cursor-pointer items-center gap-1 font-mono text-[10.5px] hover:brightness-125"
           style={{ color: colors.quartzDim }}
           onClick={onOpenCommit}
-          title="Open commit panel"
+          title={dirty ? 'Open commit panel (working tree dirty)' : 'Open commit panel'}
         >
           <IconGitBranch size={11} stroke={1.5} />
           {branchLabel}
+          {dirty && (
+            <span
+              className="size-1.5 rounded-full"
+              style={{ background: statusColor.working }}
+              aria-label="Working tree dirty"
+            />
+          )}
         </button>
-        <Count color={statusColor.working} label={`${activeAgents} active`} />
-        <Count color={statusColor.blocked} label={`${blockedAgents} blocked`} />
-        <Count color={statusColor.done} label={`${doneAgents} done`} />
+        <span className="whitespace-nowrap font-mono text-[10px]" data-testid="fleet-count">
+          {panes.length} pane{panes.length === 1 ? '' : 's'} · {lanes.length} lane
+          {lanes.length === 1 ? '' : 's'}
+        </span>
+        {activeAgents > 0 && (
+          <Count color={statusColor.working} label={`${activeAgents} agent${activeAgents === 1 ? '' : 's'}`} />
+        )}
+
+        {/* center group — the autonomy dial owns the middle of the bar */}
+        <div className="absolute left-1/2 -translate-x-1/2">
+          <ModeDialCompact />
+        </div>
 
         <div className="ml-auto flex min-w-0 items-center gap-3">
-          {/* w6/errors: persistent background notices */}
-          <NotificationCenter />
-          {/* end w6/errors */}
           <SessionMeter usage={snapshot?.session ?? null} />
           <RunMeter run={snapshot?.activeRun ?? null} />
           <span className="h-3 w-px" style={{ background: 'var(--color-line)' }} />
-          <ModeDialCompact />
+          {/* w6/errors: persistent background notices */}
+          <NotificationCenter />
         </div>
       </footer>
     </>

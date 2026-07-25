@@ -1,25 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { motion } from 'framer-motion'
-import {
-  IconTerminal2,
-  IconGitCommit,
-  IconShieldCheck,
-  IconTopologyStar3,
-  IconFolders,
-  IconWorld,
-  IconDeviceMobile,
-  IconPuzzle,
-  IconSettings,
-  IconSquareRoundedPlus,
-  IconRobot,
-  IconColumns,
-  IconX,
-  IconHistory
-} from '@tabler/icons-react'
+import { IconTerminal2, IconRobot, IconColumns, IconX } from '@tabler/icons-react'
 import { TitleBar } from './TitleBar'
 import { MorzSignal } from './Brand'
-import { SpacesSidebar } from './SpacesSidebar'
-import { AgentPillBar } from './AgentPillBar'
+import { IconRail, type RailView } from './IconRail'
 import { OrchestratorPanel } from './OrchestratorPanel'
 import { StatusBar } from './StatusBar'
 import { CommandPalette, type PaletteAction } from './CommandPalette'
@@ -28,14 +11,12 @@ import { CommitPanel } from './CommitPanel'
 import { ReviewerPanel } from './ReviewerPanel'
 import { DagView } from './DagView'
 import { BrowserPanel } from './BrowserPanel'
-import { RemotePanel } from './RemotePanel'
 import { SettingsPanel, type SettingsTab } from './SettingsPanel'
 import { WorkshopPanel } from './WorkshopPanel'
 import { SessionsPanel } from './SessionsPanel'
 // w6/organizer-ui
 import { OrganizerPanel } from './OrganizerPanel'
 import { ToastHost } from './Toast'
-import { ModuleDrawer } from './ModuleDrawer' // w15/modules-core
 import { IdePane } from './IdePane'
 import { ClaudeLane } from './ClaudeLane'
 import { useTerminalContextMenu } from './TerminalPane'
@@ -43,10 +24,11 @@ import { serializeTerminal, useTerminal, whenTerminalAttached } from '@/hooks/us
 import { emit, off, on } from '@/lib/app-events'
 import { isEditableTarget } from '@/lib/keyboard'
 import { colors } from '@/lib/tokens'
-import { springs } from '@/lib/springs'
 import { themes, useThemeStore } from '@/lib/themes'
 import { useCatalogStore } from '@/store/catalogStore'
 import { claudeAllowed, useModeStore } from '@/store/modeStore'
+import { useModulesStore } from '@/store/modulesStore'
+import { MODULES, type ModuleId } from '@shared/modules'
 import { useLaneStore } from '@/store/laneStore'
 import { getRunApi, hydrateRuns } from '@/store/runsStore'
 import {
@@ -62,31 +44,33 @@ import {
 } from '@/store/layoutStore'
 import { getMorz, selectActiveSpaceRoot, useSpaceStore } from '@/store/spaceStore'
 import { useSessionsStore } from '@/store/sessionsStore'
-import { useModulesStore } from '@/store/modulesStore' // w15/modules-core
 import type { RunPaneBridge, RunPaneCreated, SessionSnapshot } from '@shared/ipc'
-import { MODULES, type ModuleId } from '@shared/modules'
 
 /* w13/dispatch-visible — preload bridge for dispatched agent panes. */
 function getRunPane(): RunPaneBridge | undefined {
   return (window as unknown as { morzRunPane?: RunPaneBridge }).morzRunPane
 }
 
-type CenterView = 'terminals' | 'commit' | 'review' | 'dag' | 'browser' | 'remote' | 'organizer' | 'sessions' | 'settings' | 'workshop'
+type CenterView = RailView
 
-const VIEWS: { id: CenterView; label: string; icon: typeof IconTerminal2 }[] = [
-  { id: 'terminals', label: 'Terminals', icon: IconTerminal2 },
-  { id: 'commit', label: 'Commit', icon: IconGitCommit },
-  { id: 'review', label: 'Review', icon: IconShieldCheck },
-  { id: 'dag', label: 'Waves', icon: IconTopologyStar3 },
-  { id: 'browser', label: 'Browser', icon: IconWorld },
-  { id: 'remote', label: 'Remote', icon: IconDeviceMobile },
-  { id: 'organizer', label: 'Organizer', icon: IconFolders },
-  // w11/sessions — one center-view entry; SpacesSidebar remains untouched.
-  { id: 'sessions', label: 'Sessions', icon: IconHistory }
+/* w15/shell-layout — Remote parked; the icon rail owns view icons now. */
+const VIEWS: { id: CenterView; label: string }[] = [
+  { id: 'terminals', label: 'Terminals' },
+  { id: 'commit', label: 'Commit' },
+  { id: 'review', label: 'Review' },
+  { id: 'dag', label: 'Waves' },
+  { id: 'browser', label: 'Browser' },
+  { id: 'organizer', label: 'Organizer' },
+  { id: 'sessions', label: 'Sessions' }
 ]
 
-/* w15/modules-core — which module owns each view; unmapped views are core.
- * Disabled module = no tab, component not mounted, no sync registered. */
+const VIEW_TITLES: Record<CenterView, string> = {
+  ...Object.fromEntries(VIEWS.map((v) => [v.id, v.label])),
+  settings: 'Settings',
+  workshop: 'Workshop'
+} as Record<CenterView, string>
+
+/* Views owned by a module — a disabled module's view falls back to terminals. */
 const VIEW_MODULE: Partial<Record<CenterView, ModuleId>> = {
   commit: 'commit',
   review: 'review',
@@ -95,11 +79,6 @@ const VIEW_MODULE: Partial<Record<CenterView, ModuleId>> = {
   organizer: 'organizer',
   sessions: 'sessions',
   workshop: 'workshop'
-}
-
-function viewAllowed(view: CenterView, enabled: Record<ModuleId, boolean>): boolean {
-  const owner = VIEW_MODULE[view]
-  return !owner || enabled[owner]
 }
 
 /* Dev-only: allow ?view=commit&explorer=1 so surfaces can be screenshot-verified. */
@@ -205,19 +184,19 @@ function layoutFromSnapshot(snap: SessionSnapshot | null): LayoutNode | null {
   return null
 }
 
-/* Morz shell: titlebar / (sidebar | pill-bar + center view | orchestrator) / statusbar. */
+/* Morz shell (w15 premium): titlebar / (icon rail | stage | explorer | dock) / statusbar. */
 export function Shell(): JSX.Element {
   const initial = initialFromUrl()
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [explorerOpen, setExplorerOpen] = useState(initial.explorer)
-  const [orchestratorOpen, setOrchestratorOpen] = useState(true) // w10/identity
-  const [moduleDrawerOpen, setModuleDrawerOpen] = useState(false) // w15/modules-core
+  /* Orchestrator dock is dial-owned: Manual mounts nothing, Assisted starts
+   * closed behind the one header chip, Orchestrated auto-opens. */
+  const [orchOpen, setOrchOpen] = useState(false)
   const [view, setView] = useState<CenterView>(initial.view)
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('limits')
   const [settingsRevision, setSettingsRevision] = useState(0)
 
   const mode = useModeStore((s) => s.mode)
-  const modulesEnabled = useModulesStore((s) => s.enabled) // w15/modules-core
   const root = useLayoutStore((s) => s.root)
   const hydrated = useLayoutStore((s) => s.hydrated)
   const panes = useLayoutStore((s) => s.panes)
@@ -242,16 +221,27 @@ export function Shell(): JSX.Element {
     [activeLanes.length, activeSpace?.agents]
   )
   const sessionAgentsKey = sessionAgents.join('|')
+  const modulesEnabled = useModulesStore((s) => s.enabled)
 
-  /* w15/modules-core — a gated-off view falls back to terminals so a disabled
-   * module's component is never left mounted. */
-  const visibleViews = VIEWS.filter((item) => viewAllowed(item.id, modulesEnabled))
+  /* w15/shell-layout — module map hydrates once (bridge or interim defaults). */
   useEffect(() => {
-    if (!viewAllowed(view, modulesEnabled)) setView('terminals')
+    void useModulesStore.getState().hydrate()
+  }, [])
+
+  /* Dial owns the dock: Orchestrated auto-opens, Manual/Assisted reset closed. */
+  useEffect(() => {
+    setOrchOpen(mode === 'orchestrated')
+  }, [mode])
+
+  /* A disabled module takes its view with it. */
+  useEffect(() => {
+    const owner = VIEW_MODULE[view]
+    if (owner && !modulesEnabled[owner]) setView('terminals')
   }, [modulesEnabled, view])
 
   /* w11/sessions — a space with an open pane owns exactly one live work record.
-   * w15/modules-core: the sessions module owns this sync — off = no IPC. */
+   * w15/modules-core — the sessions module owns this: disabled means no record
+   * is ever written, not merely a hidden view. */
   useEffect(() => {
     const store = useSessionsStore.getState()
     if (!modulesEnabled.sessions) return
@@ -265,7 +255,16 @@ export function Shell(): JSX.Element {
       title: spaceBranch || activeSpace?.name || 'Project session',
       agentsUsed: sessionAgents
     })
-  }, [activeSpace?.name, hydrated, modulesEnabled.sessions, panes.length, sessionAgentsKey, spaceBranch, spaceRoot, spacesReady])
+  }, [
+    activeSpace?.name,
+    hydrated,
+    modulesEnabled.sessions,
+    panes.length,
+    sessionAgentsKey,
+    spaceBranch,
+    spaceRoot,
+    spacesReady
+  ])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
@@ -463,8 +462,12 @@ export function Shell(): JSX.Element {
   )
 
   const paletteActions = useMemo<PaletteAction[]>(() => {
-    // w15/modules-core — only enabled modules' views become commands
-    const actions: PaletteAction[] = VIEWS.filter((item) => viewAllowed(item.id, modulesEnabled)).map((item) => ({
+    // w15/modules-core — the palette only drives surfaces that actually exist:
+    // a disabled module's view is not a command.
+    const actions: PaletteAction[] = VIEWS.filter((item) => {
+      const owner = VIEW_MODULE[item.id]
+      return !owner || modulesEnabled[owner]
+    }).map((item) => ({
       id: `view-${item.id}`,
       group: 'view',
       label: `view: ${item.label.toLowerCase()}`
@@ -473,6 +476,16 @@ export function Shell(): JSX.Element {
     if (modulesEnabled.workshop) {
       actions.push({ id: 'view-workshop', group: 'view', label: 'view: workshop' })
     }
+
+    // w15/modules-core — every module is toggleable by name from the palette.
+    for (const def of MODULES) {
+      actions.push({
+        id: `module-toggle-${def.id}`,
+        group: 'settings',
+        label: `module: ${modulesEnabled[def.id] ? 'disable' : 'enable'} ${def.label.toLowerCase()}`
+      })
+    }
+
     actions.push(
       { id: 'view-settings', group: 'view', label: 'view: settings' },
       { id: 'toggle-explorer', group: 'view', label: 'view: toggle file explorer', hint: 'Ctrl+B' },
@@ -504,22 +517,12 @@ export function Shell(): JSX.Element {
       })
     }
 
-    if (modulesEnabled.workshop && window.morz?.catalog && typeof window.morz.catalog.refresh === 'function') {
+    if (window.morz?.catalog && typeof window.morz.catalog.refresh === 'function') {
       actions.push({ id: 'workshop-sync', group: 'workshop', label: 'workshop: sync catalog' })
     }
 
-    if (modulesEnabled.orchestration && getRunApi()) {
+    if (getRunApi()) {
       actions.push({ id: 'run-refresh', group: 'run', label: 'run: refresh orchestration runs' })
-    }
-
-    // w15/modules-core — module toggles: only the applicable direction is offered
-    for (const def of MODULES) {
-      const on = modulesEnabled[def.id]
-      actions.push({
-        id: `module-${on ? 'disable' : 'enable'}-${def.id}`,
-        group: 'module',
-        label: `module: ${on ? 'disable' : 'enable'} ${def.label.toLowerCase()}`
-      })
     }
 
     for (const theme of themes) {
@@ -548,19 +551,10 @@ export function Shell(): JSX.Element {
 
   const runPaletteAction = useCallback(
     (id: string): void => {
-      // w15/modules-core — Ctrl-K module toggles
-      const moduleToggle = id.match(/^module-(enable|disable)-(.+)$/)
-      if (moduleToggle) {
-        const moduleId = MODULES.find((def) => def.id === moduleToggle[2])?.id
-        if (moduleId) void useModulesStore.getState().setEnabled(moduleId, moduleToggle[1] === 'enable')
-        return
-      }
-
       const centerView = id.startsWith('view-') ? id.slice('view-'.length) : ''
       if (
         centerView &&
-        [...VIEWS.map((item) => item.id), 'settings', 'workshop'].includes(centerView as CenterView) &&
-        viewAllowed(centerView as CenterView, useModulesStore.getState().enabled)
+        [...VIEWS.map((item) => item.id), 'settings', 'workshop'].includes(centerView as CenterView)
       ) {
         setView(centerView as CenterView)
         return
@@ -568,6 +562,14 @@ export function Shell(): JSX.Element {
 
       if (id === 'toggle-explorer') {
         setExplorerOpen((open) => !open)
+        return
+      }
+
+      // w15/modules-core — palette parity with the module drawer.
+      if (id.startsWith('module-toggle-')) {
+        const moduleId = id.slice('module-toggle-'.length) as ModuleId
+        const store = useModulesStore.getState()
+        void store.setEnabled(moduleId, !store.enabled[moduleId])
         return
       }
 
@@ -629,105 +631,54 @@ export function Shell(): JSX.Element {
       <TitleBar onOpenPalette={() => setPaletteOpen(true)} />
 
       <div className="relative flex min-h-0 flex-1">
-        <SpacesSidebar />
+        <IconRail
+          view={view}
+          onSelectView={setView}
+          explorerOpen={explorerOpen}
+          onToggleExplorer={() => setExplorerOpen((v) => !v)}
+        />
 
         <main className="flex min-h-0 min-w-0 flex-1 flex-col">
-          <div className="flex items-center border-b" style={{ borderColor: 'var(--color-line)', background: colors.page }}>
-            {/* explorer toggle + view switcher share the strip above the panes */}
-            <button
-              onClick={() => setExplorerOpen((v) => !v)}
-              className="ml-2 flex cursor-pointer items-center gap-1 rounded-md p-1.5 transition-colors hover:bg-[#37332B]"
-              title="Toggle file explorer (Ctrl+B)"
-              aria-label="Toggle file explorer"
-              style={{ color: explorerOpen ? colors.bronzeHot : colors.quartzDim }}
+          {/* stage header: crumb + view title left, dial-gated orchestrator chip right */}
+          <div
+            className="flex h-10 shrink-0 items-center gap-2 border-b px-3"
+            style={{ borderColor: 'var(--color-line)', background: colors.page }}
+            data-testid="stage-header"
+          >
+            <span className="truncate text-[11px]" style={{ color: colors.quartzDim }}>
+              {activeSpace?.name ?? 'no space'}
+            </span>
+            <span aria-hidden style={{ color: colors.quartzFaint }}>
+              /
+            </span>
+            <span
+              className="text-[12px] font-semibold"
+              style={{ color: colors.quartz, fontFamily: 'var(--font-display)' }}
             >
-              <IconFolders size={15} stroke={1.5} />
-            </button>
+              {VIEW_TITLES[view]}
+            </span>
 
-            <nav
-              className="ml-1 flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto py-1.5 [&::-webkit-scrollbar]:hidden"
-              role="tablist"
-              aria-label="Center view"
-            >
-              {visibleViews.map((v) => {
-                const active = view === v.id
-                const Icon = v.icon
-                return (
-                  <button
-                    key={v.id}
-                    role="tab"
-                    aria-selected={active}
-                    onClick={() => setView(v.id)}
-                    className="relative flex shrink-0 cursor-pointer items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] font-medium"
-                    style={{ color: active ? colors.quartz : colors.quartzDim, fontFamily: 'var(--font-display)' }}
-                  >
-                    {active && (
-                      <motion.span
-                        layoutId="center-view-pill"
-                        transition={springs.layout}
-                        className="absolute inset-0 rounded-lg border"
-                        style={{ background: colors.card, borderColor: 'var(--color-line-strong)' }}
-                      />
-                    )}
-                    <span className="relative flex items-center gap-1.5">
-                      <Icon size={13} stroke={1.5} />
-                      {v.label}
-                    </span>
-                  </button>
-                )
-              })}
-            </nav>
-
-            {/* w15/modules-core — the `+` affordance opens the module drawer */}
-            <button
-              onClick={() => setModuleDrawerOpen(true)}
-              className="ml-auto flex cursor-pointer items-center rounded-md p-1.5 transition-colors hover:bg-[#37332B]"
-              title="Modules — turn Morz surfaces on and off"
-              aria-label="Modules"
-              style={{ color: moduleDrawerOpen ? colors.bronzeHot : colors.quartzDim }}
-            >
-              <IconPuzzle size={15} stroke={1.5} />
-            </button>
-            {modulesEnabled.workshop && (
+            {mode !== 'manual' && (
               <button
-                onClick={() => setView('workshop')}
-                className="flex cursor-pointer items-center rounded-md p-1.5 transition-colors hover:bg-[#37332B]"
-                title="Workshop — add skills, MCP servers, plugins, models"
-                aria-label="Workshop"
-                style={{ color: view === 'workshop' ? colors.bronzeHot : colors.quartzDim }}
-              >
-                <IconSquareRoundedPlus size={15} stroke={1.5} />
-              </button>
-            )}
-            {/* w10/identity — the orchestrator is a Morz system, not a generic robot.
-              * w15/modules-core — the whole affordance belongs to the orchestration module. */}
-            {modulesEnabled.orchestration && (
-              <button
-                onClick={() => setOrchestratorOpen((open) => !open)}
-                className="flex cursor-pointer items-center rounded-md p-1.5 transition-colors hover:bg-[#37332B]"
-                title={`${orchestratorOpen ? 'Hide' : 'Show'} orchestrator`}
+                onClick={() => setOrchOpen((open) => !open)}
+                className="ml-auto flex cursor-pointer items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10.5px] font-semibold transition-colors hover:bg-[#37332B]"
+                title={`${orchOpen ? 'Hide' : 'Show'} orchestrator`}
                 aria-label="Toggle orchestrator"
-                aria-pressed={orchestratorOpen}
-                style={{ color: orchestratorOpen ? colors.quartz : colors.quartzDim }}
+                aria-pressed={orchOpen}
+                style={{
+                  borderColor: 'var(--color-line-strong)',
+                  color: orchOpen ? colors.quartz : colors.quartzDim,
+                  fontFamily: 'var(--font-display)'
+                }}
               >
-                <MorzSignal className="h-[15px] w-[21px]" goldPoint />
+                <MorzSignal className="h-[13px] w-[18px]" goldPoint />
+                Orchestrator
               </button>
             )}
-            <button
-              onClick={() => setView('settings')}
-              className="mr-2 flex cursor-pointer items-center rounded-md p-1.5 transition-colors hover:bg-[#37332B]"
-              title="Settings"
-              aria-label="Settings"
-              style={{ color: view === 'settings' ? colors.bronzeHot : colors.quartzDim }}
-            >
-              <IconSettings size={15} stroke={1.5} />
-            </button>
           </div>
 
           {view === 'terminals' && (
-            <>
-              <AgentPillBar />
-              <div className="flex min-h-0 flex-1" style={{ background: colors.page }}>
+            <div className="flex min-h-0 flex-1" style={{ background: colors.page }}>
                 {!hydrated && (
                   <div
                     className="flex flex-1 items-center justify-center text-[11px]"
@@ -754,14 +705,12 @@ export function Shell(): JSX.Element {
                     }
                   />
                 )}
-              </div>
-            </>
+            </div>
           )}
           {view === 'commit' && <CommitPanel />}
           {view === 'review' && <ReviewerPanel />}
           {view === 'dag' && <DagView />}
           {view === 'browser' && <BrowserPanel />}
-          {view === 'remote' && <RemotePanel />}
           {view === 'organizer' && <OrganizerPanel />}
           {/* w11/sessions */}
           {view === 'sessions' && <SessionsPanel />}
@@ -774,17 +723,15 @@ export function Shell(): JSX.Element {
           {view === 'workshop' && <WorkshopPanel />}
         </main>
 
-        {modulesEnabled.orchestration && orchestratorOpen && <OrchestratorPanel />}{/* w10/identity + w15/modules-core */}
-
+        {/* right side, in order: Explorer panel (Agent 3 fills internals), then the dock */}
         <FileExplorer open={explorerOpen} onClose={() => setExplorerOpen(false)} />
+
+        {mode !== 'manual' && orchOpen && <OrchestratorPanel />}
       </div>
 
-      <StatusBar onOpenCommit={modulesEnabled.commit ? () => setView('commit') : undefined} />
+      <StatusBar onOpenCommit={() => setView('commit')} />
 
       <ToastHost />
-
-      {/* w15/modules-core */}
-      <ModuleDrawer open={moduleDrawerOpen} onClose={() => setModuleDrawerOpen(false)} />
 
       {/* IDE editor pane — self-managed overlay; opens on ctrl-click 'open-file' events */}
       <IdePane />

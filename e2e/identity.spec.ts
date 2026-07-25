@@ -34,14 +34,19 @@ test.describe('Morz app identity', () => {
 
   test('uses the Morz Signal for the orchestrator toggle and panel header', async () => {
     const { page } = morz
+    // w15/shell-layout — the orchestrator is dial-owned: no affordance exists
+    // in Manual; the chip appears in Assisted and the dock opens from it.
+    await page.getByRole('radio', { name: 'Assisted' }).click()
     const toggle = page.getByRole('button', { name: 'Toggle orchestrator' })
-    const panel = page.getByRole('complementary', { name: 'Orchestrator' })
-
     await expect(toggle.getByTestId('morz-signal')).toBeVisible()
-    await expect(panel.getByTestId('morz-signal')).toBeVisible()
+
+    await toggle.click()
+    const panel = page.getByRole('complementary', { name: 'Orchestrator' })
+    await expect(panel.getByTestId('morz-signal').first()).toBeVisible()
     await expect(panel.getByText('Orchestrator', { exact: true })).toHaveCSS(
       'font-family',
       /Hanken Grotesk/
     )
+    await page.getByRole('radio', { name: 'Manual' }).click()
   })
 })

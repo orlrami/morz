@@ -75,6 +75,9 @@ function claudeDescendants(rootPid: number): ProcRow[] {
 
 const START_LANE = '[aria-label="Start Claude here"]'
 const LANE_PANE = 'section[aria-label^="Claude lane"]'
+/* w15/shell-layout — the orchestrator is dial-owned: Manual mounts NOTHING. */
+const ORCH_TOGGLE = '[aria-label="Toggle orchestrator"]'
+const ORCH_DOCK = 'aside[aria-label="Orchestrator"]'
 
 test.describe.serial('Manual-inert gate (Slice 6)', () => {
   let morz: MorzApp
@@ -128,6 +131,12 @@ test.describe.serial('Manual-inert gate (Slice 6)', () => {
     // (b) No lane pane mounted (session hydrate strips kind:'claude' in Manual).
     await expect(page.locator(LANE_PANE)).toHaveCount(0)
 
+    // (b2) w15/shell-layout — zero orchestrator affordances in Manual: no dock,
+    // no toggle chip, nothing labelled Orchestrator anywhere in the DOM.
+    await expect(page.locator(ORCH_TOGGLE)).toHaveCount(0)
+    await expect(page.locator(ORCH_DOCK)).toHaveCount(0)
+    await expect(page.getByText('Orchestrator', { exact: true })).toHaveCount(0)
+
     // (c) Command palette has no spawn entry.
     await page.keyboard.press('Control+k')
     const palette = page.getByRole('dialog', { name: 'Command palette' })
@@ -158,6 +167,11 @@ test.describe.serial('Manual-inert gate (Slice 6)', () => {
     await expect(page.getByRole('radio', { name: 'Assisted' })).toHaveAttribute('aria-checked', 'true')
     await expect(page.locator(START_LANE).first()).toBeVisible()
 
+    // w15/shell-layout — Assisted shows exactly ONE orchestrator control (the
+    // stage-header chip) and the dock stays closed until it is clicked.
+    await expect(page.locator(ORCH_TOGGLE)).toHaveCount(1)
+    await expect(page.locator(ORCH_DOCK)).toHaveCount(0)
+
     // Start a lane (pane mounts; the adapter starts only on the first prompt,
     // which we never send — so even in Assisted the spy must stay at 0 here).
     await page.locator(START_LANE).first().click()
@@ -168,6 +182,9 @@ test.describe.serial('Manual-inert gate (Slice 6)', () => {
     await expect(page.getByRole('radio', { name: 'Manual' })).toHaveAttribute('aria-checked', 'true')
     await expect(page.locator(LANE_PANE)).toHaveCount(0)
     await expect(page.locator(START_LANE)).toHaveCount(0)
+    // w15/shell-layout — orchestrator chip and dock die with the dial too.
+    await expect(page.locator(ORCH_TOGGLE)).toHaveCount(0)
+    await expect(page.locator(ORCH_DOCK)).toHaveCount(0)
 
     // Mode persisted as manual after the round-trip.
     const persisted = await page.evaluate(() => localStorage.getItem('morz.mode'))
