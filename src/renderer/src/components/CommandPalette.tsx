@@ -4,6 +4,7 @@ import {
   IconAdjustments,
   IconLayoutSidebar,
   IconPalette,
+  IconPuzzle,
   IconRefresh,
   IconRobot,
   IconRocket,
@@ -13,7 +14,7 @@ import {
 import { colors } from '@/lib/tokens'
 import { springs } from '@/lib/springs'
 
-export type PaletteGroup = 'run' | 'settings' | 'spawn' | 'theme' | 'view' | 'workshop'
+export type PaletteGroup = 'module' | 'run' | 'settings' | 'spawn' | 'theme' | 'view' | 'workshop'
 
 export interface PaletteAction {
   id: string
@@ -23,6 +24,7 @@ export interface PaletteAction {
 }
 
 const GROUP_ICON: Record<PaletteGroup, typeof IconRobot> = {
+  module: IconPuzzle, // w15/modules-core
   run: IconRobot,
   settings: IconAdjustments,
   spawn: IconRocket,
