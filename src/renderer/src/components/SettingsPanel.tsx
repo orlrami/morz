@@ -23,6 +23,8 @@ import { useConnectionsStore } from '@/store/connectionsStore'
 import { useModulesStore } from '@/store/modulesStore' // w15/modules-core
 import { ConnectionsModelsSettings } from './ConnectionsModelsSettings' // w15/model-choice
 import { IntegrationsSettings } from './IntegrationsSettings' // w15/integration-slots
+import { ModuleSettingsList } from './ModuleDrawer' // w15/modules-core
+import { useOnboardingStore } from '@/store/onboardingStore' // w15/onboarding
 import {
   RUN_HISTORY_POLICIES,
   useRunsStore,
@@ -220,12 +222,30 @@ export function SettingsPanel({ initialTab = 'limits' }: { initialTab?: Settings
         <div className="mx-auto w-full max-w-[640px]">
           <SectionHeader section={activeSection} />
 
+          {/* w15 integration — Modules owns the registry list plus the wizard re-entry. */}
           {tab === 'modules' && (
-            <SettingsMountPoint
-              id="modules"
-              label="Modules"
-              description="Agent 1 mounts the module drawer here. Core settings stay available while that slice integrates."
-            />
+            <div className="space-y-4">
+              <ModuleSettingsList />
+              <section
+                className="rounded-xl border p-4"
+                style={{ background: colors.panel, borderColor: 'var(--color-line)' }}
+              >
+                <h3 className="text-xs font-semibold" style={{ fontFamily: 'var(--font-display)' }}>
+                  First-run setup
+                </h3>
+                <p className="mt-1 text-[10.5px] leading-relaxed" style={{ color: colors.quartzDim }}>
+                  Re-open the setup screen to review your CLIs, models, modules and autonomy.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => useOnboardingStore.getState().openSetup()}
+                  className="mt-3 cursor-pointer rounded-lg px-3 py-1.5 text-[11px] font-semibold"
+                  style={{ background: colors.bronze, color: colors.page }}
+                >
+                  Run setup again
+                </button>
+              </section>
+            </div>
           )}
 
           {tab === 'connections-models' && (
@@ -445,4 +465,5 @@ export function SettingsPanel({ initialTab = 'limits' }: { initialTab?: Settings
     </section>
   )
 }
+
 

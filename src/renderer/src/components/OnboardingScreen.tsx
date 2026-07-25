@@ -44,9 +44,11 @@ export function OnboardingScreen({
   onSave,
   onSkip
 }: OnboardingScreenProps): JSX.Element {
-  const [draft, setDraft] = useState<OnboardingSnapshot>(() =>
-    cloneSnapshot(snapshot.completed ? snapshot : minimalOnboardingSnapshot(false))
-  )
+  /* w15 integration — always start from the snapshot the store handed us: its
+   * modules mirror the registry (source of truth), so a first run never
+   * silently reverts state the app already has. "Start minimal" stays an
+   * explicit action (onSkip), not the default draft. */
+  const [draft, setDraft] = useState<OnboardingSnapshot>(() => cloneSnapshot(snapshot))
   const [saving, setSaving] = useState<'open' | 'skip' | null>(null)
   const [error, setError] = useState<string | null>(null)
   const detected = useMemo(
@@ -55,7 +57,7 @@ export function OnboardingScreen({
   )
 
   useEffect(() => {
-    setDraft(cloneSnapshot(snapshot.completed ? snapshot : minimalOnboardingSnapshot(false)))
+    setDraft(cloneSnapshot(snapshot))
   }, [snapshot])
 
   const setModule = (id: ModuleId, enabled: boolean): void => {

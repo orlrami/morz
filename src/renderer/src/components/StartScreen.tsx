@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+﻿import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   IconArrowRight,
   IconBolt,
@@ -40,6 +40,7 @@ import {
   type Space
 } from '@/store/spaceStore'
 import { useSessionsStore } from '@/store/sessionsStore'
+import { useModulesStore } from '@/store/modulesStore' // w15/modules-core
 
 const SESSION_OPTIONS: ReadonlyArray<{ value: StartSession; label: string }> = [
   { value: 'shell', label: 'Plain shell' },
@@ -119,6 +120,7 @@ export function StartScreen({
   const gitByRoot = useSpaceStore((state) => state.gitByRoot)
   const spacesReady = useSpaceStore((state) => state.ready)
   const connections = useConnectionsStore((state) => state.connections)
+  const sessionsEnabled = useModulesStore((state) => state.enabled.sessions)
   const sessions = useSessionsStore((state) => state.sessions)
   const sessionsLoading = useSessionsStore((state) => state.loading)
   const sessionsError = useSessionsStore((state) => state.error)
@@ -152,9 +154,12 @@ export function StartScreen({
     if (!selectedSpaceId && activeSpaceId) setSelectedSpaceId(activeSpaceId)
   }, [activeSpaceId, selectedSpaceId])
 
+  /* w15/modules-core â€” recent sessions belong to the sessions module: with it
+   * disabled the launcher must not query session history at all. */
   useEffect(() => {
+    if (!sessionsEnabled) return
     void useSessionsStore.getState().refresh(selectedRoot)
-  }, [selectedRoot])
+  }, [selectedRoot, sessionsEnabled])
 
   const installed = useMemo(
     () =>
@@ -278,8 +283,8 @@ export function StartScreen({
                   rows={4}
                   placeholder={
                     session === 'shell'
-                      ? 'Optional — leave empty for a plain shell…'
-                      : 'Describe the outcome you want from this session…'
+                      ? 'Optional â€” leave empty for a plain shellâ€¦'
+                      : 'Describe the outcome you want from this sessionâ€¦'
                   }
                   className="block w-full resize-none bg-transparent px-5 py-4 text-[14px] leading-relaxed outline-none placeholder:text-[#EEE6D966]"
                 />
@@ -304,7 +309,7 @@ export function StartScreen({
                       {space.name}
                     </option>
                   ))}
-                  <option value="__open__">Open a folder…</option>
+                  <option value="__open__">Open a folderâ€¦</option>
                 </PreflightSelect>
 
                 <PreflightSelect
@@ -322,10 +327,10 @@ export function StartScreen({
                     >
                       {option.label}
                       {option.value === 'shell'
-                        ? ' · default'
+                        ? ' Â· default'
                         : installed.get(option.value)
                           ? ''
-                          : ' · unavailable'}
+                          : ' Â· unavailable'}
                     </option>
                   ))}
                 </PreflightSelect>
@@ -349,7 +354,7 @@ export function StartScreen({
                   <option value="manual">Manual</option>
                   <option value="assisted">Assisted</option>
                   <option value="orchestrated" disabled={!orchestrationEnabled}>
-                    Orchestrated{orchestrationEnabled ? '' : ' · module off'}
+                    Orchestrated{orchestrationEnabled ? '' : ' Â· module off'}
                   </option>
                 </PreflightSelect>
               </div>
@@ -376,7 +381,7 @@ export function StartScreen({
                   >
                     <span style={{ color: colors.bronzeHot }}>$</span> {launch.command}
                     {session !== 'shell' && launch.inheritsCliDefault && (
-                      <span style={{ color: colors.quartzDim }}> · Morz adds no flag</span>
+                      <span style={{ color: colors.quartzDim }}> Â· Morz adds no flag</span>
                     )}
                   </p>
                 </div>
@@ -441,7 +446,7 @@ export function StartScreen({
               action={selectedSpace?.name ?? 'No space'}
             />
             <div className="mt-2 space-y-2">
-              {sessionsLoading && <EmptyRow text="Reading session history…" />}
+              {sessionsLoading && <EmptyRow text="Reading session historyâ€¦" />}
               {!sessionsLoading && sessionsError && <EmptyRow text={sessionsError} error />}
               {!sessionsLoading && !sessionsError && sessions.length === 0 && (
                 <EmptyRow text="No resumable work in this space yet." />
@@ -472,7 +477,7 @@ export function StartScreen({
                       style={{ color: colors.quartzDim }}
                     >
                       {formatSessionTime(record.startedAt)}
-                      {record.model ? ` · ${record.model}` : ''}
+                      {record.model ? ` Â· ${record.model}` : ''}
                     </p>
                   </div>
                   <button
@@ -657,7 +662,7 @@ function SpaceCard({
         </span>
         {dirty > 0 ? (
           <span className="ml-auto shrink-0" style={{ color: colors.warning }}>
-            dirty · ±{dirty}
+            dirty Â· Â±{dirty}
           </span>
         ) : (
           <span className="ml-auto shrink-0" style={{ color: colors.done }}>
@@ -755,7 +760,7 @@ function SpaceExplorerPreview({ space }: { space: Space | undefined }): JSX.Elem
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 font-mono text-[10px]">
         {!root && <EmptyRow text="Choose or open a project space to preview its files." />}
         {root && error && <EmptyRow text={error} error />}
-        {root && !error && !childrenByPath[root] && <EmptyRow text="Reading workspace…" />}
+        {root && !error && !childrenByPath[root] && <EmptyRow text="Reading workspaceâ€¦" />}
         {childrenByPath[root]?.map((entry) => (
           <PreviewTreeRow
             key={entry.path}
@@ -842,7 +847,7 @@ function PreviewTreeRow({
               className="py-1"
               style={{ paddingLeft: 24 + depth * 14, color: colors.quartzFaint }}
             >
-              …
+              â€¦
             </p>
           )}
         </div>
@@ -850,3 +855,4 @@ function PreviewTreeRow({
     </div>
   )
 }
+

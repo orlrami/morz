@@ -52,12 +52,15 @@ export const useOnboardingStore = create<OnboardingState>((set, get) => ({
     try {
       const [snapshot, detections] = await Promise.all([
         window.morzOnboarding.get(),
-        window.morzOnboarding.detect().catch(() => [] as OnboardingDetection[])
+        window.morzOnboarding.detect().catch(() => [] as OnboardingDetection[]),
+        // The registry is the source of truth for what is enabled; the wizard
+        // shows it rather than a parallel default map (w15 integration).
+        useModulesStore.getState().hydrate()
       ])
       useModeStore.getState().setMode(snapshot.autonomy)
       set({
         status: 'ready',
-        snapshot,
+        snapshot: { ...snapshot, modules: { ...useModulesStore.getState().enabled } },
         detections,
         setupOpen: !snapshot.completed,
         error: null

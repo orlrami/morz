@@ -42,11 +42,13 @@ test.describe.serial('Settings information architecture', () => {
     for (const label of SECTION_LABELS) {
       await settings.getByRole('button', { name: label, exact: true }).click()
       await expect(settings.getByText(`Settings / ${label}`, { exact: true })).toBeVisible()
+      // w15 integration — the placeholders were replaced by the real slices.
       if (label === 'Modules') {
-        await expect(settings.getByTestId('settings-mount-modules')).toBeVisible()
+        await expect(settings.getByTestId('module-toggle-orchestration')).toBeVisible()
+        await expect(settings.getByRole('button', { name: 'Run setup again' })).toBeVisible()
       }
       if (label === 'Connections & Models') {
-        await expect(settings.getByTestId('settings-mount-connections-models')).toBeVisible()
+        await expect(settings.getByTestId('model-card-claude')).toBeVisible()
       }
       if (label === 'Integrations') {
         await expect(settings.getByTestId('settings-mount-integrations')).toBeVisible()

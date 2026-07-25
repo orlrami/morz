@@ -104,24 +104,23 @@ export async function launchMorz(opts?: {
   return { app, page, appDataDir }
 }
 
-/** Complete the first-run wizard with every module enabled, if it is showing. */
+/**
+ * Accept the first-run wizard as pre-seeded, if it is showing. The wizard
+ * mirrors the module registry (MORZ_MODULES seeds it), so the harness must NOT
+ * flip toggles — doing so would overwrite a spec's own module seed.
+ */
 async function passOnboarding(page: Page): Promise<void> {
   const setup = page.getByRole('heading', { name: 'Make Morz yours' })
   if (!(await setup.isVisible().catch(() => false))) {
     await setup.waitFor({ state: 'visible', timeout: 8_000 }).catch(() => undefined)
   }
   if (!(await setup.isVisible().catch(() => false))) return
-  const moduleToggles = page.getByRole('checkbox', { name: /^Enable / })
-  for (let index = 0; index < (await moduleToggles.count()); index += 1) {
-    const toggle = moduleToggles.nth(index)
-    if ((await toggle.getAttribute('aria-checked')) !== 'true') await toggle.click()
-  }
   await page.getByRole('button', { name: 'Open Morz' }).click()
   await setup.waitFor({ state: 'hidden', timeout: 15_000 }).catch(() => undefined)
 }
 
 /** Enter the shell from the launcher (plain shell, no agent), if it is showing. */
-async function passStartScreen(page: Page): Promise<void> {
+export async function passStartScreen(page: Page): Promise<void> {
   const start = page.getByTestId('start-screen')
   if (!(await start.isVisible().catch(() => false))) {
     await start.waitFor({ state: 'visible', timeout: 8_000 }).catch(() => undefined)
