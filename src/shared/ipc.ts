@@ -1205,3 +1205,8 @@ export interface RunHistoryBridge {
   applyPolicy(spaceRoot: string, policy: RunHistoryPolicy): Promise<ClearedRun[]>
 }
 // end w14/runs-clear
+
+// w15/context-hub — opt-in context-file matrix + proposal-only writes.
+export interface MorzApi {
+  contextHub?: import('./context-hub').ContextHubBridge
+}
