@@ -35,6 +35,19 @@ test.describe.serial('command palette', () => {
     await expect(terminals).toHaveCount(3)
   })
 
+  // w16/polish-motion — palette = Spotlight: the persistent titlebar search bar
+  // is gone; a small icon (and Ctrl+K) open the same centered modal.
+  test('opens from the titlebar search icon; no persistent search bar remains', async () => {
+    const { page } = morz
+    await expect(page.getByText('Search agents, files, actions')).toHaveCount(0)
+
+    await page.getByRole('button', { name: 'Open command palette' }).click()
+    const palette = page.getByRole('dialog', { name: 'Command palette' })
+    await expect(palette).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(palette).toHaveCount(0)
+  })
+
   test('hides Claude commands in Manual mode', async () => {
     const { page } = morz
     await expect(page.getByRole('radio', { name: 'Manual' })).toHaveAttribute('aria-checked', 'true')
