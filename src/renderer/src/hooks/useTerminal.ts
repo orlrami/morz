@@ -270,7 +270,14 @@ function createSession(paneId: string): Session {
   return session
 }
 
-function spawn(session: Session, paneId: string, shell?: string, cwd?: string): void {
+function spawn(
+  session: Session,
+  paneId: string,
+  shell?: string,
+  cwd?: string,
+  argv?: string[],
+  env?: Record<string, string>
+): void {
   if (session.spawned) return
   session.spawned = true
   const pty = ptyApi()
@@ -283,10 +290,11 @@ function spawn(session: Session, paneId: string, shell?: string, cwd?: string): 
     .spawn({
       paneId,
       shell,
+      argv,
       cwd,
       cols: session.term.cols,
       rows: session.term.rows,
-      env: { MORZ_BLOCK_NONCE: session.nonce }
+      env: { MORZ_BLOCK_NONCE: session.nonce, ...env }
     })
     .then(({ ok }) => {
       if (!ok) {
@@ -305,6 +313,8 @@ function spawn(session: Session, paneId: string, shell?: string, cwd?: string): 
 export interface UseTerminalOpts {
   shell?: string
   cwd?: string
+  argv?: string[]
+  env?: Record<string, string>
 }
 
 export function useTerminal(
@@ -314,6 +324,8 @@ export function useTerminal(
   const containerRef = useRef<HTMLDivElement>(null)
   const shell = opts?.shell
   const cwd = opts?.cwd
+  const argv = opts?.argv
+  const env = opts?.env
 
   useEffect(() => {
     const el = containerRef.current
@@ -355,7 +367,7 @@ export function useTerminal(
     el.style.background = colors.page
 
     fit.fit()
-    spawn(session, paneId, shell, cwd)
+    spawn(session, paneId, shell, cwd, argv, env)
 
     const ro = new ResizeObserver(() => {
       if (el.clientWidth > 0 && el.clientHeight > 0) fit.fit()

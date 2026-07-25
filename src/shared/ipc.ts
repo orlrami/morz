@@ -12,6 +12,8 @@
 export interface TerminalSpawnOpts {
   paneId: string
   shell?: string // 'pwsh' | 'cmd' | 'wsl' | absolute path; default = user's shell
+  /** Direct process arguments. Never concatenate these into a shell command. */
+  argv?: string[]
   cwd?: string
   cols: number
   rows: number
@@ -56,6 +58,23 @@ export const SessionApi = {
   save: 'session:save', // (SessionSnapshot)
   load: 'session:load' // () => Promise<SessionSnapshot | null>
 } as const
+
+export type OnLaunchPreference = 'straight-to-shell' | 'always-start-screen'
+
+export const StartScreenApi = {
+  getPreference: 'start-screen:get-preference',
+  setPreference: 'start-screen:set-preference',
+  testLaunches: 'start-screen:e2e-launches'
+} as const
+
+export interface StartScreenBridge {
+  getPreference(): Promise<OnLaunchPreference>
+  setPreference(preference: OnLaunchPreference): Promise<OnLaunchPreference>
+}
+
+export interface StartScreenTestBridge {
+  launches(): Promise<TerminalSpawnOpts[]>
+}
 
 /* ── FileService (Slice 3) — owner: Agent 3 ──────────────────── */
 export type Eol = 'lf' | 'crlf'

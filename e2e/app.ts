@@ -43,7 +43,11 @@ let launchSeq = 0
  * user's real %APPDATA%\Morz\morz.db. Pass a previous appDataDir to relaunch
  * against the same store (session-restore scenarios).
  */
-export async function launchMorz(opts?: { appDataDir?: string }): Promise<MorzApp> {
+export async function launchMorz(opts?: {
+  appDataDir?: string
+  /** Keep the production launcher visible instead of opening its default plain shell. */
+  showStartScreen?: boolean
+}): Promise<MorzApp> {
   if (!existsSync(MAIN_JS)) {
     throw new Error(`Missing ${MAIN_JS} — run \`npm run build\` before the E2E suite.`)
   }
@@ -74,6 +78,13 @@ export async function launchMorz(opts?: { appDataDir?: string }): Promise<MorzAp
   })
   await page.bringToFront()
   await installCollector(page)
+  if (!opts?.showStartScreen) {
+    const launcher = page.getByTestId('start-screen')
+    if (await launcher.isVisible().catch(() => false)) {
+      await page.getByTestId('start-launch').click()
+      await launcher.waitFor({ state: 'detached' })
+    }
+  }
   return { app, page, appDataDir }
 }
 

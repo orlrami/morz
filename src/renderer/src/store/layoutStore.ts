@@ -17,6 +17,10 @@ export interface PaneDef {
   cwd: string
   /** '' = user's default shell; unused for claude panes. */
   shell: string
+  /** Direct executable arguments for CLI panes. */
+  argv?: string[]
+  /** Marks panes created by the launcher (used by the isolated E2E spawn seam). */
+  startScreenLaunch?: boolean
   /** False only while no user keystroke has reached this pane. */
   touched?: boolean
   /** Claude panes only — the lane's adapter agentId. */
@@ -191,6 +195,8 @@ export const useLayoutStore = create<LayoutState>()((set) => ({
         kind: 'terminal',
         cwd: cwd ?? src.cwd,
         shell: src.kind === 'terminal' ? src.shell : '',
+        argv: undefined,
+        startScreenLaunch: false,
         touched: false
       }
       const root = splitLeafInTree(s.root, paneId, dir, sibling)

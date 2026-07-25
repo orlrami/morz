@@ -9,7 +9,12 @@ import Database from 'better-sqlite3'
 import { app, ipcMain } from 'electron'
 import { join } from 'path'
 import { mkdirSync } from 'fs'
-import { SessionApi, type SessionSnapshot } from '../../shared/ipc'
+import {
+  SessionApi,
+  StartScreenApi,
+  type OnLaunchPreference,
+  type SessionSnapshot
+} from '../../shared/ipc'
 
 let db: Database.Database | null = null
 
@@ -30,6 +35,11 @@ function open(): Database.Database {
       ts      INTEGER NOT NULL,
       kind    TEXT NOT NULL,
       payload TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS app_preferences (
+      key        TEXT PRIMARY KEY,
+      value      TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
     );
   `)
   return db
@@ -101,4 +111,36 @@ export function registerSessionIpc(): void {
     }
   })
   ipcMain.handle(SessionApi.load, () => loadSnapshot())
+}
+
+const ON_LAUNCH_KEY = 'on-launch'
+const DEFAULT_ON_LAUNCH: OnLaunchPreference = 'straight-to-shell'
+
+function validOnLaunch(value: unknown): value is OnLaunchPreference {
+  return value === 'straight-to-shell' || value === 'always-start-screen'
+}
+
+export function loadOnLaunchPreference(): OnLaunchPreference {
+  const row = open()
+    .prepare('SELECT value FROM app_preferences WHERE key = ?')
+    .get(ON_LAUNCH_KEY) as { value: string } | undefined
+  return validOnLaunch(row?.value) ? row.value : DEFAULT_ON_LAUNCH
+}
+
+export function saveOnLaunchPreference(value: unknown): OnLaunchPreference {
+  if (!validOnLaunch(value)) throw new Error('Invalid on-launch preference.')
+  open()
+    .prepare(
+      `INSERT INTO app_preferences (key, value, updated_at) VALUES (?, ?, ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
+    )
+    .run(ON_LAUNCH_KEY, value, Date.now())
+  return value
+}
+
+export function registerStartScreenIpc(): void {
+  ipcMain.handle(StartScreenApi.getPreference, () => loadOnLaunchPreference())
+  ipcMain.handle(StartScreenApi.setPreference, (_event, value: unknown) =>
+    saveOnLaunchPreference(value)
+  )
 }

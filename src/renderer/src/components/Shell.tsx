@@ -127,6 +127,10 @@ function parsePane(v: unknown): PaneDef | null {
     kind: p.kind,
     cwd: p.cwd ?? '',
     shell: p.shell ?? '',
+    argv: Array.isArray(p.argv)
+      ? p.argv.filter((value): value is string => typeof value === 'string')
+      : undefined,
+    startScreenLaunch: p.startScreenLaunch === true,
     touched: typeof p.touched === 'boolean' ? p.touched : true,
     agentId: p.agentId
   }
@@ -209,14 +213,23 @@ export function Shell(): JSX.Element {
     spaceRoot ? state.gitByRoot[spaceRoot]?.branch ?? null : null
   )
   const activeLanes = lanes.filter((lane) => sameRoot(lane.cwd, spaceRoot))
+  const terminalAgents = panes
+    .filter(
+      (pane) =>
+        pane.kind === 'terminal' &&
+        sameRoot(pane.cwd, spaceRoot) &&
+        ['claude', 'codex', 'agy', 'opencode'].includes(pane.shell)
+    )
+    .map((pane) => pane.shell)
   const sessionAgents = useMemo(
     () => [
       ...new Set([
         ...(activeSpace?.agents.map((agent) => agent.cli) ?? []),
-        ...(activeLanes.length > 0 ? ['claude'] : [])
+        ...(activeLanes.length > 0 ? ['claude'] : []),
+        ...terminalAgents
       ])
     ],
-    [activeLanes.length, activeSpace?.agents]
+    [activeLanes.length, activeSpace?.agents, terminalAgents.join('|')]
   )
   const sessionAgentsKey = sessionAgents.join('|')
 
@@ -335,6 +348,7 @@ export function Shell(): JSX.Element {
     })
     const idle = window.setInterval(save, 30_000)
     window.addEventListener('beforeunload', save)
+    save()
     return () => {
       unsub()
       window.clearTimeout(timer)
@@ -571,7 +585,7 @@ export function Shell(): JSX.Element {
   )
 
   return (
-    <div className="relative flex h-full flex-col overflow-hidden">
+    <div data-testid="shell-root" className="relative flex h-full flex-col overflow-hidden">
       <TitleBar onOpenPalette={() => setPaletteOpen(true)} />
 
       <div className="relative flex min-h-0 flex-1">
@@ -830,7 +844,9 @@ function ShellTerminalPane({
 }): JSX.Element {
   const { containerRef } = useTerminal(pane.paneId, {
     shell: pane.shell || undefined,
-    cwd: pane.cwd || undefined
+    cwd: pane.cwd || undefined,
+    argv: pane.argv,
+    env: pane.startScreenLaunch ? { MORZ_START_SCREEN_LAUNCH: '1' } : undefined
   })
   const ctxMenu = useTerminalContextMenu(pane.paneId)
   const active = useLayoutStore((s) => s.activePaneId === pane.paneId)
