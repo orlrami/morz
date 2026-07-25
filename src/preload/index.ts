@@ -682,6 +682,7 @@ import {
 const connectionsBridge: MorzConnectionsApi = {
   list: (): Promise<CliConnection[]> => ipcRenderer.invoke(ConnectionsChannels.list),
   refresh: (): Promise<CliConnection[]> => ipcRenderer.invoke(ConnectionsChannels.refresh),
+  update: (id) => ipcRenderer.invoke(ConnectionsChannels.update, id),
   onChanged: (callback) => {
     const listener = (_event: unknown, connections: CliConnection[]): void => callback(connections)
     ipcRenderer.on(ConnectionsChannels.changed, listener)

@@ -1,13 +1,15 @@
 import { create } from 'zustand'
-import type { CliConnection, MorzConnectionsApi } from '@shared/connections'
+import type { CliConnection, CliId, MorzConnectionsApi } from '@shared/connections'
 
 interface ConnectionsState {
   connections: CliConnection[]
   loading: boolean
   refreshing: boolean
+  updating: CliId | null
   error: string | null
   start(): void
   refresh(): Promise<void>
+  updateCli(id: CliId): Promise<void>
 }
 
 type ConnectionsWindow = {
@@ -34,6 +36,7 @@ export const useConnectionsStore = create<ConnectionsState>((set) => ({
   connections: [],
   loading: false,
   refreshing: false,
+  updating: null,
   error: null,
   start: () => {
     if (started) return
@@ -60,6 +63,16 @@ export const useConnectionsStore = create<ConnectionsState>((set) => ({
       set({ error: errorMessage(error) })
     } finally {
       set({ refreshing: false })
+    }
+  },
+  updateCli: async (id) => {
+    set({ updating: id, error: null })
+    try {
+      await bridge().update(id)
+    } catch (error) {
+      set({ error: errorMessage(error) })
+    } finally {
+      set({ updating: null })
     }
   }
 }))

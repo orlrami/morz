@@ -136,6 +136,7 @@ export function ConnectionsModelsSettings(): JSX.Element {
           const cli = snapshot.cli
           const connection = connections.find((entry) => entry.id === cli)
           const installed = connection?.installed ?? false
+          const stale = connection?.versionStale ?? false
           const choice = snapshot.global
           const effective: ModelChoice = snapshot.effective
           const overrideModel = snapshot.spaceOverride?.model ?? ''
@@ -150,14 +151,22 @@ export function ConnectionsModelsSettings(): JSX.Element {
               <div className="flex items-center gap-2.5">
                 <span
                   className="size-2 shrink-0 rounded-full"
-                  style={{ background: installed ? colors.done : 'var(--color-line-strong)' }}
+                  style={{
+                    background: installed
+                      ? stale
+                        ? colors.warning
+                        : colors.done
+                      : 'var(--color-line-strong)'
+                  }}
                   aria-hidden="true"
                 />
                 <h3 className="text-xs font-semibold" style={{ fontFamily: 'var(--font-display)' }}>
                   {CLI_LABEL[cli]}
                 </h3>
                 <span className="truncate font-mono text-[9px]" style={{ color: colors.quartzDim }}>
-                  {installed ? connection?.version ?? 'version unavailable' : 'not found on PATH'}
+                  {installed
+                    ? `${connection?.version ?? 'version unavailable'}${stale ? ' · stale' : ''}`
+                    : 'not found on PATH'}
                 </span>
                 <span className="ml-auto flex gap-1">
                   {APPLIES_TO[cli].map((chip) => (

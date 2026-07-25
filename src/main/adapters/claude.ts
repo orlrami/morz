@@ -474,6 +474,24 @@ function stop(agentId: string): void {
  * permission REPLY still travels claude:permission-respond — respondPermission
  * stays the single writer of control_response.
  */
+export interface ClaudeRestartSummary {
+  total: number
+  resumed: number
+  plain: number
+}
+
+/** Restart live Claude lanes after an explicit notification action. */
+export function restartLiveClaudeSessions(): ClaudeRestartSummary {
+  const lanes = [...procs.values()].map((proc) => ({
+    agentId: proc.agentId,
+    cwd: proc.cwd,
+    resume: proc.sessionId ?? undefined
+  }))
+  for (const lane of lanes) start(lane)
+  const resumed = lanes.filter((lane) => Boolean(lane.resume)).length
+  return { total: lanes.length, resumed, plain: lanes.length - resumed }
+}
+
 export const claudeAdapter: AgentAdapter = {
   cli: 'claude',
   start: (opts: AdapterStartOpts) => start(opts),
