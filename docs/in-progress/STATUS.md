@@ -72,7 +72,13 @@ From owner's first look at the running app:
 - **w11** (9 agents): CLI connections detection + real Limits, AI report engine (BYO OpenAI/Gemini/OpenRouter, default claude), commit-AI summaries, demo-able reviewer, curated MCP catalog, settings scroll+theme-preview, IDE send-to-agent, per-project sessions, live pill-bar model detection.
 - **w12** (7 agents): orchestrator unblocked (plan immutability loop), multiline goal composer, selectable planner engine + Codex fallback, honest post-commit refresh, dictation/injected-keys land in fields, session pin+resume, live orch audit (found: dispatched agents never execute).
 - **w13** (9 agents, from the Fable-5 desktop QA review): **dispatched agents now execute in VISIBLE renderer panes** (attach handshake fixed the flow-control stall — the engine turns over), planner repairs real specs instead of rejecting (200-char rule), immutable-fields normalize (dependsOn), paste-once, syncpack packaged, curated-first workshop ranking + spam denylist, pin/resume on every session row, Assisted dial reachable (hover moved the hit target), pristine panes follow the active space. E2E ~140 passing.
-## Current target: **0.0.5 — "Your Morz"** ([spec](../roadmap/0.0.5.md))
+## Current: **0.1.5 — "Polish & Fix"** SHIPPED (wave 16) — E2E 199 passed + 13 live-gated
+
+### Wave 16 (4 agents: 2 Fable + 2 Sol) — merged, reviewed, integrated. Installer `morz-0.1.5-setup.exe`.
+From owner dogfood round 1 ([scope](WAVE16.md)): drawer portaled (was clipped to the rail), context-hub scan fixed (picker-only root authority removed — structural validation like fs:list), draggable setup/launcher (drag strips), dark native dropdowns (color-scheme), CLI version re-probe + Refresh + "Update now" button (visible pane, consent-gated restart-sessions w/ --resume), Spotlight palette (centered modal + titlebar icon; persistent bar gone), motion pass (springs-only, reduced-motion honored), Voice module deleted (Wispr Flow compat kept via voice-input.spec), planner engine = detected-CLI roster + OpenCode engine, memory bootstrap ("Build memory from my files" — op-set gated bulk import). Integration fixes: drawer = A's portal + C's animation; shared root validator keeps the friendly error contract; updater args quoted; palette focus restore.
+Known flaky under full-suite load only: model-choice dispatched --model (passes isolated every run).
+
+## Previous: **0.0.5 — "Your Morz"** ([spec](../roadmap/0.0.5.md)) — COMPLETE
 
 ### Wave 15 (12 agents: 4 Fable + 5 Sol + 1 GPT-5.5 + 1 Gemini 3.1 Pro + 1 Sonnet) — merged. **E2E 189 passed + 13 live-gated.**
 Scope: [`WAVE15.md`](WAVE15.md) · agent pack: [`WAVE15-AGENTS.md`](WAVE15-AGENTS.md) · designs: claude-design project "Morz — Modular Shell & First-Run Onboarding".
