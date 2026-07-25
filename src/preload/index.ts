@@ -610,6 +610,23 @@ const updaterBridge: UpdaterBridge = {
 
 contextBridge.exposeInMainWorld('morzUpdater', updaterBridge)
 
+// w15/onboarding — first-run settings and PATH detection.
+import {
+  OnboardingApi as OnboardingChannels,
+  type MorzOnboardingApi,
+  type OnboardingDetection,
+  type OnboardingSnapshot
+} from '../shared/onboarding'
+
+const onboardingBridge: MorzOnboardingApi = {
+  get: (): Promise<OnboardingSnapshot> => ipcRenderer.invoke(OnboardingChannels.get),
+  detect: (): Promise<OnboardingDetection[]> => ipcRenderer.invoke(OnboardingChannels.detect),
+  save: (snapshot): Promise<OnboardingSnapshot> =>
+    ipcRenderer.invoke(OnboardingChannels.save, snapshot)
+}
+
+contextBridge.exposeInMainWorld('morzOnboarding', onboardingBridge)
+
 // w11/connections — append-only CLI detection and usage bridge.
 import {
   ConnectionsApi as ConnectionsChannels,

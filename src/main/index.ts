@@ -47,6 +47,7 @@ import { startPipeServer, type BusPipeServer } from './bus/pipe-server'
 import { BUS_OPEN_FILE_CHANNEL, createToolHandlers } from './bus/tool-handlers'
 import { SqliteBoardPort } from './bus/board-port'
 import { registerHandoffIpc } from './bus/handoff' // w4/handoff
+import { registerOnboardingIpc } from './services/onboarding'
 
 // w7/errors-research — last-resort main-process error surface. Producer-level
 // handlers should still classify expected failures before they reach this path.
@@ -609,6 +610,7 @@ app.whenReady().then(() => {
   registerEditorIpc(ipcMain)
   registerClaudeIpc()
   registerHandoffIpc() // w4/handoff — handlers only; nothing runs until Assisted UI calls
+  registerOnboardingIpc()
   startPtyHost()
 
   if (process.env['MORZ_SMOKE']) {
