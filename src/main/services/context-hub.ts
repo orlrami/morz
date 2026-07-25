@@ -77,7 +77,17 @@ async function validateSpace(input: ContextSpaceInput): Promise<ContextSpaceInpu
 /** Shared scanner boundary for context-hub and memory bootstrap. */
 export async function validateContextRoot(rootInput: string): Promise<string> {
   if (!isAbsolute(rootInput)) throw new Error('Space root must be absolute')
-  const root = await realpath(rootInput)
+  if (normalize(rootInput).split(sep).includes('..')) {
+    throw new Error('Space root must not contain traversal segments')
+  }
+  let root: string
+  try {
+    root = await realpath(rootInput)
+  } catch {
+    // Deliberate message contract (w16): callers and specs match on this text
+    // instead of a raw ENOENT with the probed filesystem path.
+    throw new Error('Space root does not exist')
+  }
   const info = await stat(root)
   if (!info.isDirectory()) throw new Error('Space root must be a directory')
   return root

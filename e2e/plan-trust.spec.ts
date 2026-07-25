@@ -155,6 +155,8 @@ test.describe('plan-card trust regressions', () => {
       .toBeGreaterThan(128)
     await expect
       .poll(() => composer.evaluate((element) => element.clientHeight))
-      .toBeGreaterThan(initialHeight * 3) // w15: taller single-line baseline after the redesign
+      // Growth contract, not a ratio: the single-line baseline keeps changing
+      // with chrome polish, so assert 8 lines add several line-heights instead.
+      .toBeGreaterThan(initialHeight + 60)
   })
 })
