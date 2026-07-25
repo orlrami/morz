@@ -9,9 +9,16 @@ import {
   IconTrash,
   IconX
 } from '@tabler/icons-react'
-import type { MemoryEntry, MemoryOp, MemoryScope } from '@shared/memory'
+import type {
+  MemoryBootstrapReview,
+  MemoryEntry,
+  MemoryOp,
+  MemoryScope,
+  MorzMemoryApi
+} from '@shared/memory'
 import { colors } from '@/lib/tokens'
 import { useMemoryStore } from '@/store/memoryStore'
+import { useSpaceStore } from '@/store/spaceStore'
 
 const SCOPES: MemoryScope[] = ['global', 'project', 'space', 'agent']
 
@@ -231,9 +238,14 @@ export function MemorySettings(): JSX.Element {
   const search = useMemoryStore((state) => state.search)
   const addRule = useMemoryStore((state) => state.addRule)
   const resolveProposal = useMemoryStore((state) => state.resolveProposal)
+  const spaces = useSpaceStore((state) => state.spaces)
   const [query, setQuery] = useState('')
   const [title, setTitle] = useState('')
   const [body, setBody] = useState('')
+  const [bootstrapReview, setBootstrapReview] = useState<MemoryBootstrapReview | null>(null)
+  const [bootstrapSelected, setBootstrapSelected] = useState<Set<string>>(new Set())
+  const [bootstrapBusy, setBootstrapBusy] = useState<'scan' | 'apply' | null>(null)
+  const [bootstrapStatus, setBootstrapStatus] = useState('')
 
   useEffect(() => start(), [start])
   useEffect(() => {
@@ -243,6 +255,52 @@ export function MemorySettings(): JSX.Element {
 
   const pending = proposals.filter((proposal) => proposal.state === 'pending')
   const visibleEntries = query.trim() ? searchResults : entries
+
+  const memoryApi = (): MorzMemoryApi | undefined =>
+    (window as unknown as { morz?: { memory?: MorzMemoryApi } }).morz?.memory
+
+  const buildMemory = (): void => {
+    const api = memoryApi()
+    if (!api) return
+    setBootstrapBusy('scan')
+    setBootstrapStatus('')
+    void api
+      .bootstrap(spaces.map(({ id, name, root }) => ({ id, name, root })))
+      .then((review) => {
+        setBootstrapReview(review)
+        setBootstrapSelected(new Set(
+          review.groups
+            .flatMap((group) => group.items)
+            .filter((item) => item.proposal.op?.kind !== 'noop')
+            .map((item) => item.id)
+        ))
+      })
+      .catch((reason: unknown) => {
+        setBootstrapStatus(reason instanceof Error ? reason.message : String(reason))
+      })
+      .finally(() => setBootstrapBusy(null))
+  }
+
+  const applyBootstrap = (): void => {
+    const api = memoryApi()
+    if (!api || !bootstrapReview) return
+    setBootstrapBusy('apply')
+    setBootstrapStatus('')
+    void api
+      .applyBootstrap(bootstrapReview.reviewId, [...bootstrapSelected])
+      .then(async (result) => {
+        setBootstrapStatus(
+          `${result.applied} imported${result.skipped ? `, ${result.skipped} skipped` : ''}.`
+        )
+        setBootstrapReview(null)
+        setBootstrapSelected(new Set())
+        await useMemoryStore.getState().refresh()
+      })
+      .catch((reason: unknown) => {
+        setBootstrapStatus(reason instanceof Error ? reason.message : String(reason))
+      })
+      .finally(() => setBootstrapBusy(null))
+  }
 
   const submitRule = (event: FormEvent): void => {
     event.preventDefault()
@@ -277,6 +335,133 @@ export function MemorySettings(): JSX.Element {
         <span className="ml-auto rounded-full border px-2 py-1 text-[9.5px]" style={{ borderColor: 'var(--color-line-strong)', color: colors.quartzDim }}>
           {entries.length} in scope
         </span>
+      </div>
+
+      <div className="mt-3 rounded-lg border p-2.5" style={{ borderColor: 'var(--color-line)' }}>
+        <div className="flex items-center justify-between gap-2">
+          <div>
+            <p className="text-[10px] font-semibold" style={{ color: colors.quartz }}>
+              Build memory from existing guidance
+            </p>
+            <p className="mt-0.5 text-[9.5px] leading-relaxed" style={{ color: colors.quartzDim }}>
+              Review Claude files and space docs together. Nothing is imported until Apply.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={buildMemory}
+            disabled={bootstrapBusy !== null}
+            className="min-h-7 shrink-0 rounded-md border px-2.5 text-[9.5px] font-semibold disabled:opacity-40"
+            style={{ borderColor: 'var(--color-line-strong)', color: colors.bronzeHot }}
+          >
+            {bootstrapBusy === 'scan' ? 'Scanning…' : 'Build memory from my files…'}
+          </button>
+        </div>
+
+        {bootstrapReview && (
+          <section
+            className="mt-2 rounded-md border p-2"
+            style={{ background: colors.card, borderColor: 'var(--color-line-strong)' }}
+            aria-label="Memory bootstrap review"
+          >
+            <p className="text-[10px]" data-testid="memory-bootstrap-counts" style={{ color: colors.quartz }}>
+              {bootstrapReview.counts.filesScanned} files scanned
+              {bootstrapReview.counts.filesRead !== bootstrapReview.counts.filesScanned
+                ? ` (${bootstrapReview.counts.filesRead} read)`
+                : ''}
+              {`, ${bootstrapReview.counts.candidates} candidates, ${bootstrapReview.counts.adds} new / ${bootstrapReview.counts.updates} updates`}
+              {bootstrapReview.counts.deletes ? ` / ${bootstrapReview.counts.deletes} deletes` : ''}
+              {` / ${bootstrapReview.counts.noops} skipped`}
+            </p>
+            <div className="mt-2 flex gap-1.5">
+              <button
+                type="button"
+                onClick={() => setBootstrapSelected(new Set(
+                  bootstrapReview.groups
+                    .flatMap((group) => group.items)
+                    .filter((item) => item.proposal.op?.kind !== 'noop')
+                    .map((item) => item.id)
+                ))}
+                className="min-h-7 rounded-md border px-2 text-[9.5px]"
+                style={{ borderColor: 'var(--color-line-strong)', color: colors.quartzDim }}
+              >
+                Select all
+              </button>
+              <button
+                type="button"
+                onClick={() => setBootstrapSelected(new Set())}
+                className="min-h-7 rounded-md border px-2 text-[9.5px]"
+                style={{ borderColor: 'var(--color-line-strong)', color: colors.quartzDim }}
+              >
+                Select none
+              </button>
+            </div>
+            <div className="mt-2 max-h-72 space-y-2 overflow-y-auto">
+              {bootstrapReview.groups.map((group) => (
+                <div key={group.source} className="rounded-md border p-2" style={{ borderColor: 'var(--color-line)' }}>
+                  <p className="break-all text-[9px] font-semibold" style={{ color: colors.quartzDim }}>
+                    {group.source}
+                  </p>
+                  <div className="mt-1.5 space-y-1">
+                    {group.items.map((item) => {
+                      const noop = item.proposal.op?.kind === 'noop'
+                      return (
+                        <label key={item.id} className="flex items-start gap-2 text-[9.5px]" style={{ color: colors.quartz }}>
+                          <input
+                            type="checkbox"
+                            aria-label={`Select ${item.proposal.entry.title}`}
+                            checked={bootstrapSelected.has(item.id)}
+                            disabled={noop}
+                            onChange={(event) => {
+                              setBootstrapSelected((current) => {
+                                const next = new Set(current)
+                                if (event.target.checked) next.add(item.id)
+                                else next.delete(item.id)
+                                return next
+                              })
+                            }}
+                            className="mt-0.5 size-3.5"
+                            style={{ accentColor: colors.bronze }}
+                          />
+                          <span>
+                            <span className="font-semibold">{item.proposal.entry.title}</span>
+                            <span className="ml-1 uppercase" style={{ color: noop ? colors.quartzDim : colors.bronzeHot }}>
+                              {noop ? 'skipped' : item.proposal.op?.kind ?? 'add'}
+                            </span>
+                            {item.proposal.entry.body && (
+                              <span className="mt-0.5 block line-clamp-2" style={{ color: colors.quartzDim }}>
+                                {item.proposal.entry.body}
+                              </span>
+                            )}
+                          </span>
+                        </label>
+                      )
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+            {bootstrapReview.truncations.length > 0 && (
+              <ul className="mt-2 space-y-0.5 text-[9px]" style={{ color: colors.quartzDim }}>
+                {bootstrapReview.truncations.map((line) => <li key={line}>{line}</li>)}
+              </ul>
+            )}
+            <button
+              type="button"
+              onClick={applyBootstrap}
+              disabled={bootstrapBusy !== null || bootstrapSelected.size === 0}
+              className="mt-2 min-h-7 rounded-md px-2.5 text-[9.5px] font-semibold disabled:opacity-40"
+              style={{ background: colors.bronze, color: colors.page }}
+            >
+              {bootstrapBusy === 'apply' ? 'Applying…' : `Apply ${bootstrapSelected.size} selected`}
+            </button>
+          </section>
+        )}
+        {bootstrapStatus && (
+          <p className="mt-2 text-[9.5px]" role="status" style={{ color: colors.quartzDim }}>
+            {bootstrapStatus}
+          </p>
+        )}
       </div>
 
       <div className="mt-3 flex gap-1 border-t pt-3" style={{ borderColor: 'var(--color-line)' }} role="tablist" aria-label="Memory scope">

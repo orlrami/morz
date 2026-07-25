@@ -510,6 +510,9 @@ contextBridge.exposeInMainWorld('morzPulse', pulseBridge)
 // w8/memory-core — append-only learning-memory bridge
 import {
   MemoryApi as MemoryChannels,
+  type MemoryBootstrapApplyResult,
+  type MemoryBootstrapReview,
+  type MemoryBootstrapSpace,
   type MemoryEntry,
   type MemoryOpAuditRow,
   type MemoryProposal,
@@ -538,6 +541,13 @@ const memoryApi: MemoryE2eApi = {
   resolveProposal: (id: string, approved: boolean): Promise<MemoryProposal> =>
     ipcRenderer.invoke(MemoryChannels.resolveProposal, { id, approved }),
   restore: (id: string): Promise<MemoryEntry> => ipcRenderer.invoke(MemoryChannels.restore, id),
+  bootstrap: (spaces: MemoryBootstrapSpace[]): Promise<MemoryBootstrapReview> =>
+    ipcRenderer.invoke(MemoryChannels.bootstrap, spaces),
+  applyBootstrap: (
+    reviewId: string,
+    selectedIds: string[]
+  ): Promise<MemoryBootstrapApplyResult> =>
+    ipcRenderer.invoke(MemoryChannels.applyBootstrap, { reviewId, selectedIds }),
   onChanged: (callback) => {
     const listener = (): void => callback()
     ipcRenderer.on(MemoryChannels.changed, listener)

@@ -65,14 +65,20 @@ async function validateSpace(
   const id = validateText(input.id, 'Space id', 200)
   const name = validateText(input.name, 'Space name', 500)
   const rootInput = validateText(input.root, 'Space root', 32_768)
-  if (!isAbsolute(rootInput)) throw new Error('Space root must be absolute')
-  const root = await realpath(rootInput)
-  const info = await stat(root)
-  if (!info.isDirectory()) throw new Error('Space root must be a directory')
+  const root = await validateContextRoot(rootInput)
   if (isAuthorizedRoot && !(await isAuthorizedRoot(root))) {
     throw new Error('Space root is not authorized by Morz')
   }
   return { id, name, root }
+}
+
+/** Shared scanner boundary for context-hub and memory bootstrap. */
+export async function validateContextRoot(rootInput: string): Promise<string> {
+  if (!isAbsolute(rootInput)) throw new Error('Space root must be absolute')
+  const root = await realpath(rootInput)
+  const info = await stat(root)
+  if (!info.isDirectory()) throw new Error('Space root must be a directory')
+  return root
 }
 
 function candidatePath(root: string, relativePath: string): string {
@@ -90,7 +96,7 @@ function isContained(root: string, path: string): boolean {
   return fromRoot === '' || (!fromRoot.startsWith('..') && !isAbsolute(fromRoot))
 }
 
-async function assertKnownPathSafe(root: string, pathInput: string): Promise<void> {
+export async function assertKnownPathSafe(root: string, pathInput: string): Promise<void> {
   const path = resolve(pathInput)
   if (!isContained(root, path) || path === root) {
     throw new Error('Context path escaped its Space root')

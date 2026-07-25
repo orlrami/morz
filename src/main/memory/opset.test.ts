@@ -21,6 +21,7 @@ import {
   restoreEntry,
   type MemoryCandidate
 } from './opset'
+import { splitMarkdownCandidates } from './bootstrap'
 
 const root = mkdtempSync(join(tmpdir(), 'morz-memory-opset-'))
 after(() => rmSync(root, { recursive: true, force: true }))
@@ -46,6 +47,61 @@ function candidate(overrides: Partial<MemoryCandidate> = {}): MemoryCandidate {
 }
 
 /* ------------------------------------------------------ dedup + classify — */
+
+test('memory bootstrap splits heading-bounded candidates to 2KB with source provenance', () => {
+  const source = 'C:\\Projects\\fixture\\CLAUDE.md'
+  const candidates = splitMarkdownCandidates({
+    path: source,
+    content: [
+      'Preamble guidance.',
+      '',
+      '# Preferences',
+      'Always use pnpm.',
+      '',
+      '## Testing',
+      'x'.repeat(2_700)
+    ].join('\n'),
+    scope: 'project',
+    scopeRef: 'C:\\Projects\\fixture'
+  })
+
+  assert.equal(candidates[0].title, 'CLAUDE.md')
+  assert.equal(candidates[0].source, `${source}#CLAUDE.md`)
+  assert.equal(candidates[1].title, 'Preferences')
+  assert.equal(candidates[1].source, `${source}#Preferences`)
+  assert.equal(candidates[2].title, 'Testing (part 1)')
+  assert.equal(candidates[3].title, 'Testing (part 2)')
+  assert.ok(candidates.every((item) => Buffer.byteLength(item.body, 'utf8') <= 2_048))
+  assert.ok(candidates.every((item) => item.scope === 'project'))
+  assert.ok(candidates.every((item) => item.scopeRef === 'C:\\Projects\\fixture'))
+})
+
+test('memory bootstrap candidate rerun reconciles to NOOP without classifier work', async () => {
+  const [item] = splitMarkdownCandidates({
+    path: 'C:\\Users\\builder\\.claude\\MEMORY.md',
+    content: '# Package manager\nUse pnpm for JavaScript projects.',
+    scope: 'global'
+  })
+  const existing: MemoryEntry = {
+    ...item,
+    createdAt: '2026-07-25T00:00:00.000Z',
+    updatedAt: '2026-07-25T00:00:00.000Z'
+  }
+  let classifierCalls = 0
+
+  const op = await reconcileCandidate(item, {
+    sameScope: () => [existing],
+    neighbors: () => [existing],
+    classify: async () => {
+      classifierCalls += 1
+      return { op: 'ADD' }
+    }
+  })
+
+  assert.equal(op.kind, 'noop')
+  assert.equal(op.targetId, existing.id)
+  assert.equal(classifierCalls, 0)
+})
 
 test('exact-hash pre-dedup returns NOOP without calling the classifier', async () => {
   const existing = entry()

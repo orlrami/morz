@@ -112,6 +112,9 @@ function normalizeEntry(value: unknown, existing?: MemoryEntry | null): MemoryEn
   const sourceRunId = input.sourceRunId === undefined || input.sourceRunId === null || input.sourceRunId === ''
     ? undefined
     : cleanString(input.sourceRunId, 'sourceRunId', 200).trim()
+  const source = input.source === undefined || input.source === null || input.source === ''
+    ? undefined
+    : cleanString(input.source, 'source', 32_768).trim()
   return {
     id: validateId(input.id),
     scope,
@@ -127,7 +130,8 @@ function normalizeEntry(value: unknown, existing?: MemoryEntry | null): MemoryEn
     validAt: optionalTimestamp('validAt'),
     invalidAt: optionalTimestamp('invalidAt'),
     expiredAt: optionalTimestamp('expiredAt'),
-    sourceRunId
+    sourceRunId,
+    source
   }
 }
 
@@ -159,7 +163,7 @@ function serialize(entry: MemoryEntry): string {
     ['createdAt', entry.createdAt],
     ['updatedAt', entry.updatedAt],
     ['enabled', entry.enabled],
-    ...(['validAt', 'invalidAt', 'expiredAt', 'sourceRunId'] as const)
+    ...(['validAt', 'invalidAt', 'expiredAt', 'sourceRunId', 'source'] as const)
       .filter((key) => entry[key] !== undefined)
       .map((key) => [key, entry[key]] as [keyof MemoryEntry, unknown])
   ]
@@ -182,7 +186,7 @@ function parseMemoryFile(path: string): MemoryEntry {
   const metadata: Record<string, unknown> = Object.create(null) as Record<string, unknown>
   const allowed = new Set([
     'id', 'scope', 'scopeRef', 'kind', 'title', 'origin', 'createdAt', 'updatedAt', 'enabled',
-    'validAt', 'invalidAt', 'expiredAt', 'sourceRunId'
+    'validAt', 'invalidAt', 'expiredAt', 'sourceRunId', 'source'
   ])
   for (const line of match[1].split(/\r?\n/)) {
     const separator = line.indexOf(':')
