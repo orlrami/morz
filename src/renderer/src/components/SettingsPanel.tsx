@@ -19,6 +19,7 @@ import { RoutingSettings } from './RoutingSettings' // w8/routing
 import { VoiceSettings } from './VoiceSettings'
 import { UpdateSettings } from './UpdateSettings'
 import { ConnectionsSettings } from './ConnectionsSettings' // w11/connections
+import { ConnectionsModelsSettings } from './ConnectionsModelsSettings' // w15/model-choice
 import { useConnectionsStore } from '@/store/connectionsStore'
 import {
   RUN_HISTORY_POLICIES,
@@ -162,7 +163,14 @@ export function SettingsPanel({ initialTab = 'limits' }: { initialTab?: Settings
           </div>
         )}
 
-        {tab === 'connections' && <ConnectionsSettings />}
+        {tab === 'connections' && (
+          <div className="mx-auto w-full max-w-[640px]">
+            <ConnectionsSettings />
+            {/* w15/model-choice — per-CLI model cards (Agent 6 re-homes this
+                under Workspace / Connections & Models in the settings IA). */}
+            <ConnectionsModelsSettings />
+          </div>
+        )}
 
         {tab === 'appearance' && (
           <div className="mx-auto w-full max-w-[560px]">

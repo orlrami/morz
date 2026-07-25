@@ -44,6 +44,8 @@ import { journalEntries } from '../store/db'
 import { PortPool } from './port-pool'
 // Memory launch helper; the marked write-site below is the only behavior change.
 import { memoryPort, prependRenderedMemory } from '../memory/learn-port'
+// w15/model-choice — per-agent CLI model suffix for the visible launch command.
+import { launchSuffixFor } from '../services/model-choice'
 import {
   agentTransition,
   consumeApprovedPlan,
@@ -179,23 +181,28 @@ function git(cwd: string, args: string[]): Promise<string> {
   )
 }
 
-/** The command you'd type by hand to launch this agent's CLI on its seed. */
-function launchCommand(cli: PlannedCli, seedPath: string): string {
+/** The command you'd type by hand to launch this agent's CLI on its seed.
+ * w15/model-choice: a session-flag ModelChoice (space override wins) appends
+ * the per-CLI model flag; inherit adds NOTHING. Model ids are SAFE_MODEL_RE-
+ * validated at save time, so the suffix can never carry shell metacharacters. */
+function launchCommand(cli: PlannedCli, seedPath: string, spaceRoot: string): string {
   const quoted = `'${seedPath.replace(/'/g, "''")}'`
+  const modelSuffix = launchSuffixFor(cli, spaceRoot)
   // w13/dispatch-visible test hook: substitute a fake CLI executable so the e2e
   // suite can prove real end-to-end execution (pane visible, command actually
-  // runs, output streams) without spending LLM tokens.
+  // runs, output streams) without spending LLM tokens. The model suffix rides
+  // along so the suite can assert the typed flag without a real CLI.
   const fake = process.env.MORZ_DISPATCH_FAKE_CLI
-  if (fake) return `& '${fake.replace(/'/g, "''")}' "$(Get-Content -Raw ${quoted})"`
+  if (fake) return `& '${fake.replace(/'/g, "''")}'${modelSuffix} "$(Get-Content -Raw ${quoted})"`
   switch (cli) {
     case 'claude':
-      return `claude "$(Get-Content -Raw ${quoted})"`
+      return `claude${modelSuffix} "$(Get-Content -Raw ${quoted})"`
     case 'codex':
-      return `codex "$(Get-Content -Raw ${quoted})"`
+      return `codex${modelSuffix} "$(Get-Content -Raw ${quoted})"`
     case 'agy':
       // agy takes no prompt argument — the adapter injects the seed via
       // bracketed paste once the TUI is up (Agent 4's lane).
-      return 'agy'
+      return `agy${modelSuffix}`
   }
 }
 
@@ -329,7 +336,7 @@ async function launchAgent(
         `[dispatch] renderer never attached pane ${paneId} — refusing to launch into a stalled PTY`
       )
     }
-    h.writePane(paneId, `${launchCommand(agent.cli, seedPath)}\r`)
+    h.writePane(paneId, `${launchCommand(agent.cli, seedPath, plan.spaceRoot)}\r`)
   }
   agentTransition(runId, agent.agentId, 'running')
   push(runId)

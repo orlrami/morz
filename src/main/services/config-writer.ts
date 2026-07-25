@@ -15,6 +15,9 @@ import { createTwoFilesPatch } from 'diff'
 import { applyEdits, modify, parse as parseJsonc, type ParseError } from 'jsonc-parser'
 import { parse as parseToml, stringify as stringifyToml, type TomlTable } from 'smol-toml'
 import { ConfigWriterApi } from '../../shared/ipc'
+// w15/model-choice — persistent model default proposals ride the same
+// diff-first machinery (stableRead → proposal → mtime-guarded apply).
+import { isSafeModelId } from '../../shared/model-choice'
 
 export type ConfigTarget = 'claude' | 'codex' | 'opencode'
 export type ConfigWriterPaths = Record<ConfigTarget, string>
@@ -77,6 +80,9 @@ interface StableFile {
 
 interface ConfigWriterOptions {
   paths?: ConfigWriterPaths
+  /** w15/model-choice — where each CLI's MODEL default lives (claude's model
+   * key is in ~/.claude/settings.json, not the MCP file). Test override. */
+  modelPaths?: ConfigWriterPaths
   projectDir?: string
   homeDir?: string
   appDataDir?: string
@@ -86,6 +92,9 @@ interface ConfigWriterOptions {
 export interface ConfigWriter {
   detect(): Promise<DetectedConfig[]>
   propose(spec: InstallSpec, targets: ConfigTarget[]): Promise<ConfigProposal[]>
+  /** w15/model-choice — diff-first proposal setting the CLI's persistent
+   * default model key. NEVER writes; apply() is the only write path. */
+  proposeModel(target: ConfigTarget, model: string): Promise<ConfigProposal>
   apply(proposalId: string): Promise<ApplyResult>
 }
 
@@ -101,9 +110,15 @@ function firstExisting(candidates: string[]): string {
   return candidates.find((candidate) => existsSync(candidate)) ?? candidates[0]
 }
 
+/** w15/model-choice — MORZ_CONFIG_HOME lets the e2e suite point every config
+ * path at a fixture directory instead of the developer's real home. */
+function resolveHomeDir(options: ConfigWriterOptions): string {
+  return options.homeDir ?? process.env.MORZ_CONFIG_HOME ?? homedir()
+}
+
 function defaultPaths(options: ConfigWriterOptions): ConfigWriterPaths {
   const projectDir = options.projectDir ?? process.cwd()
-  const homeDir = options.homeDir ?? homedir()
+  const homeDir = resolveHomeDir(options)
   const appDataDir = options.appDataDir ?? process.env.APPDATA ?? join(homeDir, 'AppData', 'Roaming')
   const explicitOpenCode = process.env.OPENCODE_CONFIG
 
@@ -235,6 +250,41 @@ function mergeConfig(target: ConfigTarget, path: string, content: string, spec: 
   return `${stringifyToml(parsed).replace(/\n/g, eol).replace(new RegExp(`${eol}+$`), '')}${eol}`
 }
 
+/* ── w15/model-choice — persistent model-default proposals ── */
+
+function defaultModelPaths(options: ConfigWriterOptions, paths: ConfigWriterPaths): ConfigWriterPaths {
+  const homeDir = resolveHomeDir(options)
+  return {
+    // The model key lives in ~/.claude/settings.json — NOT the MCP file.
+    claude: join(homeDir, '.claude', 'settings.json'),
+    codex: join(homeDir, '.codex', 'config.toml'),
+    opencode: paths.opencode
+  }
+}
+
+function mergeModelConfig(target: ConfigTarget, path: string, content: string, model: string): string {
+  if (target === 'claude' || target === 'opencode') {
+    const source = content.trim().length === 0 ? '{}' : content
+    parseJsonConfig(source, path) // validate before editing
+    return applyEdits(
+      source,
+      modify(source, ['model'], model, { formattingOptions: formattingOptions(source) })
+    )
+  }
+  let parsed: TomlTable
+  try {
+    parsed = parseToml(content)
+  } catch {
+    throw new ConfigWriterError('CONFIG_INVALID', `Cannot parse config: ${path}`)
+  }
+  parsed.model = model
+  const eol = content.includes('\r\n') ? '\r\n' : '\n'
+  return `${stringifyToml(parsed).replace(/\n/g, eol).replace(new RegExp(`${eol}+$`), '')}${eol}`
+}
+
+/** Sentinel mtime for a proposal that CREATES a missing config file. */
+const MISSING_FILE_MTIME = -1
+
 async function stableRead(path: string): Promise<StableFile> {
   let before
   try {
@@ -276,8 +326,40 @@ async function atomicReplace(path: string, content: string, mode: number): Promi
 
 export function createConfigWriter(options: ConfigWriterOptions = {}): ConfigWriter {
   const paths = options.paths ?? defaultPaths(options)
+  // w15/model-choice — model keys live in different files than MCP entries.
+  const modelPaths = options.modelPaths ?? defaultModelPaths(options, paths)
   const now = options.now ?? (() => new Date())
   const proposals = new Map<string, StoredProposal>()
+
+  function storeProposal(
+    target: ConfigTarget,
+    path: string,
+    source: StableFile,
+    newContent: string
+  ): ConfigProposal {
+    const hash = sha256(`${target}\0${path}\0${source.hash}\0${newContent}`)
+    const proposalId = randomUUID()
+    const proposal: StoredProposal = {
+      proposalId,
+      hash,
+      target,
+      path,
+      unifiedDiff: createTwoFilesPatch(path, path, source.content, newContent, 'before', 'after'),
+      oldContent: source.content,
+      newContent,
+      oldHash: source.hash,
+      mtimeMs: source.mtimeMs
+    }
+    proposals.set(proposalId, proposal)
+    while (proposals.size > MAX_PROPOSALS) proposals.delete(proposals.keys().next().value!)
+    return {
+      proposalId: proposal.proposalId,
+      hash: proposal.hash,
+      target: proposal.target,
+      path: proposal.path,
+      unifiedDiff: proposal.unifiedDiff
+    }
+  }
 
   return {
     async detect(): Promise<DetectedConfig[]> {
@@ -305,36 +387,55 @@ export function createConfigWriter(options: ConfigWriterOptions = {}): ConfigWri
         uniqueTargets.map(async (target): Promise<ConfigProposal> => {
           const source = await stableRead(paths[target])
           const newContent = mergeConfig(target, paths[target], source.content, spec)
-          const hash = sha256(`${target}\0${paths[target]}\0${source.hash}\0${newContent}`)
-          const proposalId = randomUUID()
-          const proposal: StoredProposal = {
-            proposalId,
-            hash,
-            target,
-            path: paths[target],
-            unifiedDiff: createTwoFilesPatch(paths[target], paths[target], source.content, newContent, 'before', 'after'),
-            oldContent: source.content,
-            newContent,
-            oldHash: source.hash,
-            mtimeMs: source.mtimeMs
-          }
-          proposals.set(proposalId, proposal)
-          while (proposals.size > MAX_PROPOSALS) proposals.delete(proposals.keys().next().value!)
-          return {
-            proposalId: proposal.proposalId,
-            hash: proposal.hash,
-            target: proposal.target,
-            path: proposal.path,
-            unifiedDiff: proposal.unifiedDiff
-          }
+          return storeProposal(target, paths[target], source, newContent)
         })
       )
+    },
+
+    // w15/model-choice — diff-first persistent model default. A missing file
+    // (fresh ~/.claude/settings.json) becomes a CREATE proposal.
+    async proposeModel(target: ConfigTarget, model: string): Promise<ConfigProposal> {
+      if (!TARGETS.includes(target)) {
+        throw new ConfigWriterError('INVALID_INSTALL_SPEC', 'Unsupported CLI for a model write')
+      }
+      if (typeof model !== 'string' || !isSafeModelId(model)) {
+        throw new ConfigWriterError('INVALID_INSTALL_SPEC', 'Model id has an unsupported shape')
+      }
+      const path = modelPaths[target]
+      let source: StableFile
+      try {
+        source = await stableRead(path)
+      } catch (error) {
+        if (!(error instanceof ConfigWriterError) || error.code !== 'CONFIG_NOT_FOUND') throw error
+        source = { content: '', mtimeMs: MISSING_FILE_MTIME, hash: sha256('') }
+      }
+      const newContent = mergeModelConfig(target, path, source.content, model)
+      return storeProposal(target, path, source, newContent)
     },
 
     async apply(proposalId: string): Promise<ApplyResult> {
       const proposal = proposals.get(proposalId)
       if (!proposal) {
         throw new ConfigWriterError('PROPOSAL_NOT_FOUND', 'Proposal is missing or was already applied')
+      }
+
+      // w15/model-choice — a CREATE proposal applies only while the file is
+      // still absent; nothing exists to back up.
+      if (proposal.mtimeMs === MISSING_FILE_MTIME) {
+        const stillMissing = await stat(proposal.path).then(
+          () => false,
+          (error) => (error as NodeJS.ErrnoException).code === 'ENOENT'
+        )
+        if (!stillMissing) {
+          proposals.delete(proposalId)
+          throw new ConfigWriterError(
+            'CONFIG_CHANGED',
+            `Config appeared after proposal; re-propose before applying: ${proposal.path}`
+          )
+        }
+        await atomicReplace(proposal.path, proposal.newContent, 0o644)
+        proposals.delete(proposalId)
+        return { target: proposal.target, path: proposal.path, backupPath: '' }
       }
 
       const source = await stableRead(proposal.path)
@@ -362,6 +463,12 @@ export function createConfigWriter(options: ConfigWriterOptions = {}): ConfigWri
 }
 
 let defaultWriter: ConfigWriter | null = null
+
+/** w15/model-choice — the ONE shared writer instance: model proposals and MCP
+ * proposals live in the same map, so either apply channel can land either. */
+export function defaultConfigWriter(): ConfigWriter {
+  return (defaultWriter ??= createConfigWriter())
+}
 
 export function registerConfigWriterIpc(ipcMain: IpcMain): void {
   defaultWriter ??= createConfigWriter()

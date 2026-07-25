@@ -41,6 +41,8 @@ import {
   memoryPort,
   resolveMemoryProposal
 } from '../memory/learn-port'
+// w15/model-choice — session-flag model resolution + e2e spawn-args seam.
+import { modelArgsForLaunch, recordLaneSpawnArgs } from '../services/model-choice'
 import {
   dismissNotice,
   notify,
@@ -336,6 +338,10 @@ function start(opts: ClaudeStartOpts): { agentId: string } {
   stop(opts.agentId)
   const args = [...CLAUDE_ARGS]
   if (opts.resume) args.push('--resume', opts.resume)
+  // w15/model-choice — session-flag choice rides the spawn (space override
+  // wins over global; inherit or cli-config = no flag at all).
+  args.push(...modelArgsForLaunch('claude', opts.cwd))
+  recordLaneSpawnArgs(args)
   const child = spawn('claude', args, {
     cwd: opts.cwd,
     windowsHide: true,

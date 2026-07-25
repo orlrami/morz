@@ -18,6 +18,8 @@ import {
   type PulseTrigger
 } from '../../shared/ipc'
 import type { NotifyItem } from '../../shared/notify'
+// w15/model-choice — session-flag Claude model rides the pulse launch.
+import { modelArgsForLaunch } from './model-choice'
 
 const DEFAULT_TIME = '08:00'
 const MAX_CAPTURE_BYTES = 64 * 1024
@@ -264,8 +266,12 @@ function terminateTree(child: ChildProcess): void {
   child.kill()
 }
 
-function claudeLaunch(): { command: string; args: string[] } {
-  const args = ['-p', '--model', 'haiku', '--tools', '']
+function claudeLaunch(root: string): { command: string; args: string[] } {
+  // w15/model-choice — a session-flag Claude choice (space override wins)
+  // replaces the cheap haiku default; inherit/cli-config keep haiku, the
+  // pulse's own cost floor (the brief is a summary, not a coding session).
+  const modelArgs = modelArgsForLaunch('claude', root)
+  const args = ['-p', ...(modelArgs.length > 0 ? modelArgs : ['--model', 'haiku']), '--tools', '']
   if (process.platform !== 'win32') return { command: 'claude', args }
 
   const found = spawnSync('where.exe', ['claude'], {
@@ -280,10 +286,11 @@ function claudeLaunch(): { command: string; args: string[] } {
   const script = paths.find((path) => /\.(?:cmd|bat)$/i.test(path))
   if (!script || /["\r\n]/.test(script)) return { command: 'claude', args }
   const command = process.env.ComSpec ?? 'cmd.exe'
-  // Fixed command text only; the untrusted project context still travels exclusively on stdin.
+  // Fixed command text only; the untrusted project context still travels
+  // exclusively on stdin. Model ids are SAFE_MODEL_RE-validated at save time.
   return {
     command,
-    args: ['/d', '/s', '/c', `"${script}" -p --model haiku --tools ""`]
+    args: ['/d', '/s', '/c', `"${script}" ${args.map((arg) => (arg === '' ? '""' : arg)).join(' ')}`]
   }
 }
 
@@ -387,7 +394,7 @@ async function generateBrief(root: string): Promise<string> {
     return '# MORZ_E2E daily pulse brief\n\n## What moved\n- Stubbed progress.\n\n## Blocked\n- Nothing in the deterministic fixture.\n\n## Top 3 next actions\n1. Verify Pulse.\n2. Review the brief.\n3. Close the project.'
   }
   // The prompt travels on stdin and tools are disabled: project text never reaches a shell or an agent tool sink.
-  const launch = claudeLaunch()
+  const launch = claudeLaunch(root)
   return runProcess(launch.command, launch.args, root, pulsePrompt(context))
 }
 

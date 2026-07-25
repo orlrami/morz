@@ -922,3 +922,10 @@ app.whenReady().then(() => {
   })
 })
 // end w14/runs-clear
+
+// w15/model-choice — append-only per-CLI model selection registration.
+// The store opens morz.db; launch surfaces (lanes/dispatcher/planner/pulse)
+// resolve through services/model-choice and fall back to inherit before init.
+import { registerModelChoiceIpc } from './services/model-choice'
+app.whenReady().then(() => registerModelChoiceIpc())
+// end w15/model-choice

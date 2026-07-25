@@ -1205,3 +1205,57 @@ export interface RunHistoryBridge {
   applyPolicy(spaceRoot: string, policy: RunHistoryPolicy): Promise<ClearedRun[]>
 }
 // end w14/runs-clear
+
+// w15/model-choice — append-only per-CLI model selection contract.
+// ModelChoice types live in shared/model-choice.ts; every launch surface
+// (lanes, dispatcher, planner, pulse, opencode) resolves through that engine.
+// cli-config choices route through the config-writer (diff-first, never a
+// direct write); inherit = NO flag ever.
+import type {
+  ModelCatalogEntry,
+  ModelChoice,
+  ModelCli,
+  ModelSource
+} from './model-choice'
+
+export interface ModelChoiceSetInput {
+  cli: ModelCli
+  model: string
+  source: ModelSource
+  fallback?: string | null
+  /** Absent/empty = the global default; a space root = per-space override. */
+  spaceRoot?: string
+}
+
+export interface ModelChoiceSnapshot {
+  cli: ModelCli
+  global: ModelChoice
+  spaceOverride: ModelChoice | null
+  /** What a launch in the queried space would actually use (override wins). */
+  effective: ModelChoice
+  catalog: ModelCatalogEntry[]
+}
+
+export const ModelChoiceApi = {
+  list: 'model-choice:list', // (spaceRoot?) => Promise<ModelChoiceSnapshot[]>
+  set: 'model-choice:set', // (ModelChoiceSetInput) => Promise<ModelChoiceSnapshot[]>
+  clearOverride: 'model-choice:clear-override', // (cli, spaceRoot) => Promise<ModelChoiceSnapshot[]>
+  refreshCatalogs: 'model-choice:refresh-catalogs', // () => Promise<void>
+  proposeConfig: 'model-choice:propose-config', // (cli, model) => Promise<ConfigWriterProposal> — diff only, never writes
+  applyConfig: 'model-choice:apply-config', // (proposalId) => Promise<ConfigWriterApplyResult>
+  changed: 'model-choice:changed', // push (no payload — re-list)
+  testLaneSpawnArgs: 'model-choice:e2e-lane-spawn-args' // MORZ_E2E only
+} as const
+
+export interface MorzModelsBridge {
+  list(spaceRoot?: string): Promise<ModelChoiceSnapshot[]>
+  set(input: ModelChoiceSetInput): Promise<ModelChoiceSnapshot[]>
+  clearOverride(cli: ModelCli, spaceRoot: string): Promise<ModelChoiceSnapshot[]>
+  refreshCatalogs(): Promise<void>
+  proposeConfig(cli: ModelCli, model: string): Promise<ConfigWriterProposal>
+  applyConfig(proposalId: string): Promise<ConfigWriterApplyResult>
+  onChanged(cb: () => void): () => void
+  /** Present only when MORZ_E2E=1: last Claude lane spawn argv. */
+  testLaneSpawnArgs?(): Promise<string[] | null>
+}
+// end w15/model-choice
