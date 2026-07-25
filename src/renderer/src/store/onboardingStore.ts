@@ -78,5 +78,13 @@ export const useOnboardingStore = create<OnboardingState>((set, get) => ({
     await applyModules(saved.modules)
     set({ snapshot: saved, setupOpen: false, error: null })
   },
-  openSetup: () => set({ setupOpen: true, error: null })
+  /* Re-running setup must show what the app is actually running: the registry
+   * store is the source of truth, so seed the wizard from it rather than from a
+   * snapshot that predates any drawer/palette toggle. */
+  openSetup: () =>
+    set((state) => ({
+      setupOpen: true,
+      error: null,
+      snapshot: { ...state.snapshot, modules: { ...useModulesStore.getState().enabled } }
+    }))
 }))

@@ -51,6 +51,12 @@ let launchSeq = 0
 export async function launchMorz(opts?: {
   appDataDir?: string
   env?: Record<string, string>
+  /** false = leave the first-run wizard up for the spec to drive. */
+  skipOnboarding?: boolean
+  /** false = leave the launcher up for the spec to drive. */
+  skipStartScreen?: boolean
+  /** true = same as skipStartScreen:false (start-screen.spec's spelling). */
+  showStartScreen?: boolean
 }): Promise<MorzApp> {
   if (!existsSync(MAIN_JS)) {
     throw new Error(`Missing ${MAIN_JS} — run \`npm run build\` before the E2E suite.`)
@@ -84,7 +90,45 @@ export async function launchMorz(opts?: {
   })
   await page.bringToFront()
   await installCollector(page)
+  // w15 integration — a fresh profile now boots through TWO gates before the
+  // shell: the first-run wizard (w15/onboarding) and the launcher
+  // (w15/start-screen, shown whenever there is no restorable session). Specs
+  // that assert shell surfaces get walked past both; first-run.spec and
+  // start-screen.spec opt out to drive the gates themselves.
+  if (opts?.skipOnboarding !== false) {
+    await passOnboarding(page)
+  }
+  if (opts?.skipStartScreen !== false && opts?.showStartScreen !== true) {
+    await passStartScreen(page)
+  }
   return { app, page, appDataDir }
+}
+
+/** Complete the first-run wizard with every module enabled, if it is showing. */
+async function passOnboarding(page: Page): Promise<void> {
+  const setup = page.getByRole('heading', { name: 'Make Morz yours' })
+  if (!(await setup.isVisible().catch(() => false))) {
+    await setup.waitFor({ state: 'visible', timeout: 8_000 }).catch(() => undefined)
+  }
+  if (!(await setup.isVisible().catch(() => false))) return
+  const moduleToggles = page.getByRole('checkbox', { name: /^Enable / })
+  for (let index = 0; index < (await moduleToggles.count()); index += 1) {
+    const toggle = moduleToggles.nth(index)
+    if ((await toggle.getAttribute('aria-checked')) !== 'true') await toggle.click()
+  }
+  await page.getByRole('button', { name: 'Open Morz' }).click()
+  await setup.waitFor({ state: 'hidden', timeout: 15_000 }).catch(() => undefined)
+}
+
+/** Enter the shell from the launcher (plain shell, no agent), if it is showing. */
+async function passStartScreen(page: Page): Promise<void> {
+  const start = page.getByTestId('start-screen')
+  if (!(await start.isVisible().catch(() => false))) {
+    await start.waitFor({ state: 'visible', timeout: 8_000 }).catch(() => undefined)
+  }
+  if (!(await start.isVisible().catch(() => false))) return
+  await page.getByTestId('start-launch').click()
+  await start.waitFor({ state: 'detached', timeout: 15_000 }).catch(() => undefined)
 }
 
 /** Quit gracefully (before-quit → PTY-host shutdown), then hard-kill the tree. */
