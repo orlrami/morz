@@ -16,6 +16,13 @@ import { PlannerApi, PlannerEngineApi } from '../../shared/ipc'
 import type { AgentAdapter } from '../adapters/types'
 import type { PlannedAgent, SpawnPlan } from '../../shared/spawn-plan'
 import { hashSpawnPlan, PlanStore } from './plan-store'
+// w15/model-choice — planner Claude model unified onto the ModelChoice store.
+import {
+  getPlannerClaudeModel,
+  ModelChoiceStore,
+  seedPlannerModelFromLegacy,
+  setPlannerClaudeModel
+} from '../store/model-choice-store'
 
 const MAX_GOAL_CHARS = 100_000
 const MAX_PROMPT_CHARS = 12_000
@@ -983,6 +990,9 @@ function normalizePlannerClaudeModel(value: unknown): PlannerClaudeModel {
 
 class PlannerEngineStore {
   private readonly db: Database.Database
+  /** w15/model-choice — the planner's Claude model is a unified ModelChoice
+   * row (cli 'claude', scope 'planner') in the shared model_choice table. */
+  private readonly modelChoices: ModelChoiceStore
 
   constructor(dbPath: string) {
     mkdirSync(dirname(dbPath), { recursive: true })
@@ -1022,6 +1032,15 @@ class PlannerEngineStore {
       INSERT OR IGNORE INTO orchestrator_planner_settings (id, engine, claude_model, updated_at)
       VALUES (1, 'fast', 'sonnet', CURRENT_TIMESTAMP);
     `)
+    // w15/model-choice — unify: reads/writes go to the model_choice table
+    // (same db connection); a legacy non-default claude_model seeds it once.
+    this.modelChoices = new ModelChoiceStore(this.db)
+    const legacy = this.db
+      .prepare('SELECT claude_model FROM orchestrator_planner_settings WHERE id = 1')
+      .get() as { claude_model?: unknown } | undefined
+    if (typeof legacy?.claude_model === 'string') {
+      seedPlannerModelFromLegacy(this.modelChoices, legacy.claude_model)
+    }
   }
 
   get(): PlannerEngine {
@@ -1039,18 +1058,15 @@ class PlannerEngineStore {
     return engine
   }
 
+  // w15/model-choice — unified onto the model_choice store (scope 'planner');
+  // the legacy claude_model column stays untouched for rollback safety.
   getModel(): PlannerClaudeModel {
-    const row = this.db
-      .prepare('SELECT claude_model FROM orchestrator_planner_settings WHERE id = 1')
-      .get() as { claude_model?: unknown } | undefined
-    return normalizePlannerClaudeModel(row?.claude_model ?? 'sonnet')
+    return getPlannerClaudeModel(this.modelChoices)
   }
 
   setModel(value: unknown): PlannerClaudeModel {
     const model = normalizePlannerClaudeModel(value)
-    this.db
-      .prepare('UPDATE orchestrator_planner_settings SET claude_model = ?, updated_at = ? WHERE id = 1')
-      .run(model, new Date().toISOString())
+    setPlannerClaudeModel(this.modelChoices, model)
     return model
   }
 

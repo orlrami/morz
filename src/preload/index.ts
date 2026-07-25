@@ -876,3 +876,38 @@ if (process.env.MORZ_E2E === '1') {
   })
 }
 // end w15/modules-core
+
+// w15/model-choice — append-only per-CLI model selection bridge.
+// window.morz was snapshotted earlier, so this API lives on its own key.
+import {
+  ModelChoiceApi,
+  type ModelChoiceSetInput,
+  type ModelChoiceSnapshot,
+  type MorzModelsBridge
+} from '../shared/ipc'
+import type { ModelCli } from '../shared/model-choice'
+
+const modelsBridge: MorzModelsBridge = {
+  list: (spaceRoot?: string): Promise<ModelChoiceSnapshot[]> =>
+    ipcRenderer.invoke(ModelChoiceApi.list, spaceRoot),
+  set: (input: ModelChoiceSetInput): Promise<ModelChoiceSnapshot[]> =>
+    ipcRenderer.invoke(ModelChoiceApi.set, input),
+  clearOverride: (cli: ModelCli, spaceRoot: string): Promise<ModelChoiceSnapshot[]> =>
+    ipcRenderer.invoke(ModelChoiceApi.clearOverride, cli, spaceRoot),
+  refreshCatalogs: (): Promise<void> => ipcRenderer.invoke(ModelChoiceApi.refreshCatalogs),
+  proposeConfig: (cli, model) => ipcRenderer.invoke(ModelChoiceApi.proposeConfig, cli, model),
+  applyConfig: (proposalId) => ipcRenderer.invoke(ModelChoiceApi.applyConfig, proposalId),
+  onChanged: (cb) => {
+    const listener = (): void => cb()
+    ipcRenderer.on(ModelChoiceApi.changed, listener)
+    return () => ipcRenderer.off(ModelChoiceApi.changed, listener)
+  }
+}
+
+if (process.env.MORZ_E2E === '1') {
+  modelsBridge.testLaneSpawnArgs = (): Promise<string[] | null> =>
+    ipcRenderer.invoke(ModelChoiceApi.testLaneSpawnArgs)
+}
+
+contextBridge.exposeInMainWorld('morzModels', modelsBridge)
+// end w15/model-choice

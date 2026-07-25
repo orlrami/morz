@@ -11,6 +11,8 @@ import {
   type CliConnection,
   type CliId
 } from '../../shared/connections'
+// w15/model-choice — catalog refresh piggybacks on connections sync.
+import { refreshModelCatalogs } from './model-choice'
 
 const PROBE_TIMEOUT_MS = 5_000
 const REFRESH_INTERVAL_MS = 60_000
@@ -562,6 +564,9 @@ function probe(forceBroadcast: boolean): Promise<CliConnection[]> {
       const changed = !sameConnections(cache, connections)
       cache = connections
       if (forceBroadcast || changed) broadcast(connections)
+      // w15/model-choice — refresh `agy models` / `opencode models` catalogs
+      // on connections sync (best-effort; static tables stay the floor).
+      if (changed) void refreshModelCatalogs().catch(() => undefined)
       return connections
     })
     .finally(() => {

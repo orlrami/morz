@@ -21,6 +21,7 @@ import { UpdateSettings } from './UpdateSettings'
 import { ConnectionsSettings } from './ConnectionsSettings' // w11/connections
 import { useConnectionsStore } from '@/store/connectionsStore'
 import { useModulesStore } from '@/store/modulesStore' // w15/modules-core
+import { ConnectionsModelsSettings } from './ConnectionsModelsSettings' // w15/model-choice
 import {
   RUN_HISTORY_POLICIES,
   useRunsStore,
@@ -229,11 +230,8 @@ export function SettingsPanel({ initialTab = 'limits' }: { initialTab?: Settings
           {tab === 'connections-models' && (
             <div className="space-y-4">
               <ConnectionsSettings />
-              <SettingsMountPoint
-                id="connections-models"
-                label="Connections & Models"
-                description="Agent 7 mounts model selection here. Existing CLI connection status remains above."
-              />
+              {/* w15/model-choice — per-CLI model selection, re-homed here by the IA */}
+              <ConnectionsModelsSettings />
             </div>
           )}
 
