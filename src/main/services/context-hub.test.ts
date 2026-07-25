@@ -10,7 +10,7 @@ import {
   writeFileSync
 } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
 import { afterEach, test } from 'node:test'
 import { createConfigWriter, ConfigWriterError } from './config-writer'
 import { createContextHubService } from './context-hub'
@@ -112,17 +112,20 @@ test('scan rejects malformed or non-directory roots', async () => {
   )
 })
 
-test('scan rejects a root that the main-process authority has not registered', async () => {
-  const allowed = tempProject('authorized')
-  const forged = tempProject('forged')
-  const service = createContextHubService({
-    isAuthorizedRoot: async (root) => root === allowed
-  })
+// w16 — space-store roots are the authority; the scan path enforces the same
+// structural hygiene as fs:list instead of a picker-only allowlist.
+test('scan rejects roots that fail path hygiene (traversal, nonexistent)', async () => {
+  const good = tempProject('hygiene')
+  const service = createContextHubService()
 
-  await service.scan([{ id: 'allowed', name: 'Allowed', root: allowed }])
+  await service.scan([{ id: 'good', name: 'Good', root: good }])
   await assert.rejects(
-    service.scan([{ id: 'forged', name: 'Forged', root: forged }]),
-    /not authorized/
+    service.scan([{ id: 'traversal', name: 'Traversal', root: `..${sep}..${sep}etc` }]),
+    /absolute/
+  )
+  await assert.rejects(
+    service.scan([{ id: 'ghost', name: 'Ghost', root: join(good, 'does-not-exist') }]),
+    /does not exist/
   )
 })
 

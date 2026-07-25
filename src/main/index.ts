@@ -673,22 +673,10 @@ app.whenReady().then(() => registerConfigWriterIpc(ipcMain))
 import { registerContextHubIpc } from './services/context-hub'
 import { listMemory as listContextMemories } from './memory/store'
 import { isContextModuleEnabled } from './services/context-module-gate'
-import { isContextSpaceRootAuthorized } from './services/context-space-authority'
 app.whenReady().then(() =>
   registerContextHubIpc(ipcMain, {
     templatesRoot: join(app.getAppPath(), 'resources', 'context-templates'),
     isEnabled: isContextModuleEnabled,
-    isAuthorizedRoot: async (root) => {
-      if (process.env.MORZ_E2E === '1') {
-        try {
-          const roots = JSON.parse(process.env.MORZ_E2E_CONTEXT_ROOTS ?? '[]') as unknown
-          return Array.isArray(roots) && roots.includes(root)
-        } catch {
-          return false
-        }
-      }
-      return isContextSpaceRootAuthorized(root)
-    },
     listMemories: (space) =>
       listContextMemories().filter((entry) =>
         entry.scope === 'global' ||
