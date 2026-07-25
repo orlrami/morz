@@ -72,7 +72,30 @@ From owner's first look at the running app:
 - **w11** (9 agents): CLI connections detection + real Limits, AI report engine (BYO OpenAI/Gemini/OpenRouter, default claude), commit-AI summaries, demo-able reviewer, curated MCP catalog, settings scroll+theme-preview, IDE send-to-agent, per-project sessions, live pill-bar model detection.
 - **w12** (7 agents): orchestrator unblocked (plan immutability loop), multiline goal composer, selectable planner engine + Codex fallback, honest post-commit refresh, dictation/injected-keys land in fields, session pin+resume, live orch audit (found: dispatched agents never execute).
 - **w13** (9 agents, from the Fable-5 desktop QA review): **dispatched agents now execute in VISIBLE renderer panes** (attach handshake fixed the flow-control stall — the engine turns over), planner repairs real specs instead of rejecting (200-char rule), immutable-fields normalize (dependsOn), paste-once, syncpack packaged, curated-first workshop ranking + spam denylist, pin/resume on every session row, Assisted dial reachable (hover moved the hit target), pristine panes follow the active space. E2E ~140 passing.
-**NEXT: wave 15 — "Your Morz" (modular shell + premium redesign + BYO-tools onboarding): scope in [`WAVE15.md`](WAVE15.md), spec in [`../roadmap/0.0.5.md`](../roadmap/0.0.5.md). Pre-wave merges already on main: w15/plan-route-optin (no silent plan rewrite; opt-in chips) + w15/planner-fast-default (Sonnet + GPT-5.5 race default). Still parked from w13: Tetris end-to-end run, auto-completion loop, adapter metering, handoff wake (ORCH-AUDIT gaps).**
+## Current target: **0.0.5 — "Your Morz"** ([spec](../roadmap/0.0.5.md))
+
+### Wave 15 (12 agents: 4 Fable + 5 Sol + 1 GPT-5.5 + 1 Gemini 3.1 Pro + 1 Sonnet) — merged. **E2E 189 passed + 13 live-gated.**
+Scope: [`WAVE15.md`](WAVE15.md) · agent pack: [`WAVE15-AGENTS.md`](WAVE15-AGENTS.md) · designs: claude-design project "Morz — Modular Shell & First-Run Onboarding".
+
+| Deliverable | Status | Notes |
+|---|---|---|
+| Module registry + gated shell | ✅ | `src/shared/modules.ts` is THE contract; disabled module = no rail icon, no mount, no sync/notification IPC (asserted by an E2E IPC tap). Drawer + palette toggles + Orchestrated interlock |
+| Premium shell | ✅ | titlebar = brand + space tabs only; 56px icon rail replaces the tab strip; Explorer panel on the RIGHT; orchestrator dock is dial-owned (Manual = nothing anywhere); statusbar = context / centred dial / meters + bell; AgentPillBar deleted |
+| IDE slide-over | ✅ | ctrl-click a terminal path or click a file in Explorer → IdePane slides in OVER the app (Esc/×, reduced-motion honoured); dedicated IDE view removed |
+| Start screen (launcher) | ✅ | launcher = home when nothing is restorable; pre-flight row (space · session · model · autonomy) + spawn-transparency line; On-launch preference (straight-to-shell default) — a restorable session ALWAYS boots the shell |
+| First-run setup | ✅ | one screen w/ live preview: CLI detection + per-CLI default model, module toggles, integration slots, autonomy. Re-runnable from Settings → Modules |
+| Settings IA | ✅ | Workspace / Agents / App groups, breadcrumbed; every legacy panel migrated, none orphaned |
+| ModelChoice | ✅ | per-CLI `inherit` (adds no flag) / session-flag / diff-first config write, wired into lanes, dispatcher, planner, pulse; Connections & Models settings card shows the exact mechanism |
+| Integration slots | ✅ | git = terminal/Morz Commit/lazygit/gitui · review = off/Morz Reviewer/CodeRabbit/Greptile/Copilot · editor = slide-over/VS Code/Cursor. A slot hides the Morz surface only when another provider owns it |
+| Context hub | ✅ | spaces × context-files matrix (CLAUDE.md/AGENTS.md/STATUS.md/…), templates, shared-block propagation, memory-export block — all diff-first proposals |
+| Memory op-set | ✅ | ADD/UPDATE/DELETE/NOOP reconciliation as the approval payload + bi-temporal soft-expiry (research: [`../research/MEMORY-SYSTEMS-RESEARCH.md`](../research/MEMORY-SYSTEMS-RESEARCH.md)) |
+| Review fixes + kickoff guard | ✅ | wave-14 findings closed; `.morz/` excluded from run worktrees (ORCH-AUDIT HIGH) |
+
+**Integration bugs found and fixed (not in any agent's branch):** the first-run wizard kept a parallel module map so setup choices never gated anything (registry is now the single source of truth, wizard mirrors it); setup re-applied its saved autonomy on EVERY boot, silently overriding the dial (and disabling Manual-gated Pulse); the status-bar dial was absolutely positioned so siblings could block its clicks; the external-editor slot was never wired to the Explorer; "Run setup again" had no UI; the rail shipped a placeholder drawer calling a non-existent store API; four divergent copies of the module contract.
+
+**Known flaky (pass in isolation, fail under full-suite load):** `blocks.spec` TUI transitions (flaky since 0.0.1), `model-choice` dispatched-`--model`.
+
+**Still parked from w13:** Tetris end-to-end run, auto-completion loop, adapter metering, handoff wake (ORCH-AUDIT gaps) — see [`../roadmap/REMAINING.md`](../roadmap/REMAINING.md) 0.0.7.
 
 ## Previous target: **0.0.2 — "The Bus + Additions"** ([spec](../roadmap/0.0.2.md)) — COMPLETE
 

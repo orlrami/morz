@@ -6,7 +6,8 @@
 
 ---
 
-## 0.0.5 — "Your Morz" (NEXT — designs approved, ready to dispatch)
+## 0.0.5 — "Your Morz" ✅ BUILT (wave 15, 12 agents — merged + integrated; E2E 189 passed)
+*All nine slices below landed. Integration notes + the bugs found while merging: [`../in-progress/STATUS.md`](../in-progress/STATUS.md).*
 Scope: [`../in-progress/WAVE15.md`](../in-progress/WAVE15.md) · spec: [`0.0.5.md`](0.0.5.md) · mockups: claude-design project (Shell v3, Start Screen, First Run, Settings).
 
 | # | Slice | What |
