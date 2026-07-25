@@ -38,7 +38,7 @@ export type RailView =
   | 'settings'
   | 'workshop'
 
-/** Modules that own a center view, in rail order. Others (pulse/voice/obsidian) live in Settings. */
+/** Modules that own a center view, in rail order. Others (pulse/obsidian) live in Settings. */
 const MODULE_VIEWS: { module: ModuleId; view: RailView; label: string; icon: typeof IconTerminal2 }[] = [
   { module: 'commit', view: 'commit', label: 'Commit', icon: IconGitCommit },
   { module: 'review', view: 'review', label: 'Review', icon: IconShieldCheck },

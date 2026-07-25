@@ -1,7 +1,12 @@
 import { expect, test } from '@playwright/test'
 import { closeMorz, launchMorz, type MorzApp } from './app'
 
-test.describe('external keyboard and dictation input', () => {
+/*
+ * System-wide dictation compatibility guarantee (w16: the in-app Voice module
+ * is gone — Wispr Flow-style OS dictation injects keystrokes instead, and this
+ * suite proves those land in every Morz text field).
+ */
+test.describe('system dictation compatibility (Wispr Flow): injected keystrokes', () => {
   let morz: MorzApp
 
   test.beforeEach(async () => {
