@@ -25,7 +25,7 @@
  */
 import { execFile, spawnSync } from 'child_process'
 import { createHash, randomBytes, randomUUID } from 'crypto'
-import { mkdirSync, rmSync, writeFileSync } from 'fs'
+import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { dirname, isAbsolute, join } from 'path'
 import { promisify } from 'util'
 import type { IpcMain } from 'electron'
@@ -265,6 +265,37 @@ function createKickoffTasks(plan: SpawnPlan): Map<AgentId, string> {
   return taskByAgent
 }
 
+/* ── kickoff-guard: worktree-private exclude ── */
+
+/**
+ * Append `pattern` to the space repo's private git exclude file so it is never
+ * visible to `git status` or `git add -A` inside any worktree of the space.
+ *
+ * Git reads `$GIT_COMMON_DIR/info/exclude` for per-repo excludes across all
+ * worktrees. For a linked worktree this is the main space `.git/info/exclude`,
+ * NOT the worktree-private `$GIT_DIR/worktrees/<name>/info/exclude` (which git
+ * does not check for untracked-file filtering). We write to `$GIT_COMMON_DIR`
+ * rather than `.gitignore` so the pattern is never committed to the repo.
+ */
+async function addWorktreeExclude(worktree: string, pattern: string): Promise<void> {
+  // --git-common-dir: returns the shared .git dir for all worktrees of the repo.
+  // For a main worktree this equals --git-dir; for a linked worktree it is the
+  // main repo's .git directory. Available since git 2.5 (2015).
+  const commonDir = await git(worktree, ['rev-parse', '--git-common-dir'])
+  const absCommonDir = isAbsolute(commonDir) ? commonDir : join(worktree, commonDir)
+  const infoDir = join(absCommonDir, 'info')
+  mkdirSync(infoDir, { recursive: true })
+  const excludePath = join(infoDir, 'exclude')
+  let current = ''
+  try {
+    current = readFileSync(excludePath, 'utf8')
+  } catch {
+    // exclude file doesn't exist yet in a fresh repo — that's fine
+  }
+  if (current.split(/\r?\n/).some((line) => line.trim() === pattern)) return
+  appendFileSync(excludePath, (current && !current.endsWith('\n') ? '\n' : '') + pattern + '\n', 'utf8')
+}
+
 /* ── dispatch ── */
 
 async function launchAgent(
@@ -279,6 +310,9 @@ async function launchAgent(
   const worktree = join(dirname(plan.spaceRoot), `${runTag}-${agent.agentId}`)
   await git(plan.spaceRoot, ['worktree', 'add', worktree, '-b', agent.branch])
   patchAgent(runId, agent.agentId, { worktree, kickoff_task_id: kickoffTaskId })
+  // w15/kickoff-guard — exclude .morz/ from git tracking in this worktree
+  // BEFORE creating the directory so it is never reported by git status.
+  await addWorktreeExclude(worktree, '.morz/')
 
   const port = pool.alloc()
   patchAgent(runId, agent.agentId, { port })
