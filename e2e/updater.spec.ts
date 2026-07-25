@@ -21,19 +21,19 @@ test.describe.serial('Morz updater', () => {
       if (url.pathname === '/latest.yml') {
         response.writeHead(200, { 'content-type': 'text/yaml' })
         response.end([
-          'version: 0.0.5',
+          'version: 0.2.0',
           'files:',
-          '  - url: morz-0.0.5-setup.exe',
+          '  - url: morz-0.2.0-setup.exe',
           `    sha512: ${FAKE_SHA512}`,
           `    size: ${FAKE_INSTALLER.length}`,
-          'path: morz-0.0.5-setup.exe',
+          'path: morz-0.2.0-setup.exe',
           `sha512: ${FAKE_SHA512}`,
           `releaseDate: '${new Date().toISOString()}'`,
           ''
         ].join('\n'))
         return
       }
-      if (url.pathname === '/morz-0.0.5-setup.exe') {
+      if (url.pathname === '/morz-0.2.0-setup.exe') {
         response.writeHead(200, {
           'content-type': 'application/octet-stream',
           'content-length': String(FAKE_INSTALLER.length)
@@ -74,7 +74,7 @@ test.describe.serial('Morz updater', () => {
     expect(snapshot).toMatchObject<Partial<UpdaterSnapshot>>({
       enabled: false,
       status: 'disabled',
-      version: '0.0.4',
+      version: '0.1.5',
       channel: 'stable'
     })
 
@@ -89,7 +89,7 @@ test.describe.serial('Morz updater', () => {
     await morz.page.getByRole('button', { name: 'Settings' }).click()
     await morz.page.getByRole('button', { name: 'About' }).click()
     const settings = morz.page.getByRole('region', { name: 'Update settings' })
-    await expect(settings).toContainText('Version 0.0.4 · Stable channel')
+    await expect(settings).toContainText('Version 0.1.5 · Stable channel')
     await expect(settings.getByRole('button', { name: 'Check for updates' })).toBeDisabled()
   })
 
@@ -110,7 +110,7 @@ test.describe.serial('Morz updater', () => {
     await expect.poll(async () => {
       const notices = await morz!.page.evaluate(() => window.morz.notify?.list())
       return notices?.find((notice) => notice.id === 'app:update-available')?.title ?? null
-    }).toBe('Morz 0.0.5 is available')
+    }).toBe('Morz 0.2.0 is available')
     await expect.poll(async () => {
       const state = await morz!.page.evaluate(async () => ({
         snapshot: await (window as unknown as { morzUpdater: UpdaterBridge }).morzUpdater.status(),
