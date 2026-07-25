@@ -13,7 +13,8 @@ import {
   IconRobot,
   IconColumns,
   IconX,
-  IconHistory
+  IconHistory,
+  IconBooks
 } from '@tabler/icons-react'
 import { TitleBar } from './TitleBar'
 import { MorzSignal } from './Brand'
@@ -31,6 +32,7 @@ import { RemotePanel } from './RemotePanel'
 import { SettingsPanel, type SettingsTab } from './SettingsPanel'
 import { WorkshopPanel } from './WorkshopPanel'
 import { SessionsPanel } from './SessionsPanel'
+import { ContextHubPanel } from './ContextHubPanel'
 // w6/organizer-ui
 import { OrganizerPanel } from './OrganizerPanel'
 import { ToastHost } from './Toast'
@@ -67,7 +69,7 @@ function getRunPane(): RunPaneBridge | undefined {
   return (window as unknown as { morzRunPane?: RunPaneBridge }).morzRunPane
 }
 
-type CenterView = 'terminals' | 'commit' | 'review' | 'dag' | 'browser' | 'remote' | 'organizer' | 'sessions' | 'settings' | 'workshop'
+type CenterView = 'terminals' | 'commit' | 'review' | 'dag' | 'browser' | 'remote' | 'organizer' | 'sessions' | 'context' | 'settings' | 'workshop'
 
 const VIEWS: { id: CenterView; label: string; icon: typeof IconTerminal2 }[] = [
   { id: 'terminals', label: 'Terminals', icon: IconTerminal2 },
@@ -81,6 +83,12 @@ const VIEWS: { id: CenterView; label: string; icon: typeof IconTerminal2 }[] = [
   { id: 'sessions', label: 'Sessions', icon: IconHistory }
 ]
 
+const CONTEXT_VIEW: { id: CenterView; label: string; icon: typeof IconTerminal2 } = {
+  id: 'context',
+  label: 'Context',
+  icon: IconBooks
+}
+
 /* Dev-only: allow ?view=commit&explorer=1 so surfaces can be screenshot-verified. */
 function initialFromUrl(): { view: CenterView; explorer: boolean } {
   const params = new URLSearchParams(window.location.search)
@@ -89,6 +97,24 @@ function initialFromUrl(): { view: CenterView; explorer: boolean } {
     view: view && VIEWS.some((v) => v.id === view) ? view : 'terminals',
     explorer: params.get('explorer') === '1'
   }
+}
+
+function useContextModuleEnabled(): boolean {
+  const [enabled, setEnabled] = useState(() => window.morzContextE2eEnabled === true)
+  useEffect(() => {
+    let active = true
+    const modules = window.morzModules
+    if (!modules) return () => { active = false }
+    void modules.get()
+      .then((state) => {
+        if (active) setEnabled(state.context === true)
+      })
+      .catch(() => {
+        if (active) setEnabled(false)
+      })
+    return () => { active = false }
+  }, [])
+  return enabled
 }
 
 function sameRoot(left: string, right: string): boolean {
@@ -193,6 +219,14 @@ export function Shell(): JSX.Element {
   const [view, setView] = useState<CenterView>(initial.view)
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('limits')
   const [settingsRevision, setSettingsRevision] = useState(0)
+  const contextEnabled = useContextModuleEnabled()
+  const views = useMemo(
+    () => contextEnabled ? [...VIEWS, CONTEXT_VIEW] : VIEWS,
+    [contextEnabled]
+  )
+  useEffect(() => {
+    if (!contextEnabled && view === 'context') setView('terminals')
+  }, [contextEnabled, view])
 
   const mode = useModeStore((s) => s.mode)
   const root = useLayoutStore((s) => s.root)
@@ -431,7 +465,7 @@ export function Shell(): JSX.Element {
   )
 
   const paletteActions = useMemo<PaletteAction[]>(() => {
-    const actions: PaletteAction[] = VIEWS.map((item) => ({
+    const actions: PaletteAction[] = views.map((item) => ({
       id: `view-${item.id}`,
       group: 'view',
       label: `view: ${item.label.toLowerCase()}`
@@ -486,7 +520,7 @@ export function Shell(): JSX.Element {
     }
 
     return actions
-  }, [activePaneId, activeLanes.length, mode, panes])
+  }, [activePaneId, activeLanes.length, mode, panes, views])
 
   const openSettings = useCallback((tab: SettingsTab, focusMemory = false): void => {
     setSettingsTab(tab)
@@ -506,7 +540,7 @@ export function Shell(): JSX.Element {
       const centerView = id.startsWith('view-') ? id.slice('view-'.length) : ''
       if (
         centerView &&
-        [...VIEWS.map((item) => item.id), 'settings', 'workshop'].includes(centerView as CenterView)
+        [...views.map((item) => item.id), 'settings', 'workshop'].includes(centerView as CenterView)
       ) {
         setView(centerView as CenterView)
         return
@@ -567,7 +601,7 @@ export function Shell(): JSX.Element {
         if (themes.some((theme) => theme.id === themeId)) useThemeStore.getState().setTheme(themeId)
       }
     },
-    [openSettings, spaceRoot, startClaudeLane]
+    [openSettings, spaceRoot, startClaudeLane, views]
   )
 
   return (
@@ -595,7 +629,7 @@ export function Shell(): JSX.Element {
               role="tablist"
               aria-label="Center view"
             >
-              {VIEWS.map((v) => {
+              {views.map((v) => {
                 const active = view === v.id
                 const Icon = v.icon
                 return (
@@ -696,6 +730,7 @@ export function Shell(): JSX.Element {
           {view === 'organizer' && <OrganizerPanel />}
           {/* w11/sessions */}
           {view === 'sessions' && <SessionsPanel />}
+          {view === 'context' && contextEnabled && <ContextHubPanel />}
           {view === 'settings' && (
             <SettingsPanel
               key={settingsRevision} // w11/settings-ux: reset only for an explicit settings open
