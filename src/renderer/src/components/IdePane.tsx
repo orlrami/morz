@@ -1,7 +1,7 @@
 /*
  * Morz IDE pane (0.0.1 Slice 3) — editable CodeMirror 6 "Beside" panel.
  *
- * Rendered by Shell.tsx as a fixed right-side overlay above the shell. It
+ * Rendered by Shell.tsx as a right-side overlay above the shell. It
  * stays mounted but hidden until an 'open-file' event arrives on the renderer
  * bus (terminal ctrl-click, morz:// deep link), then opens the file at
  * line:col.
@@ -11,7 +11,7 @@
  * scroll+cursor when not dirty, banner when dirty · Open in VS Code / Cursor.
  */
 import React, { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
-import { motion } from 'framer-motion'
+import { motion, useReducedMotion } from 'framer-motion'
 import { IconCopy, IconMessageChatbot, IconSparkles, IconX } from '@tabler/icons-react'
 import { springs } from '@/lib/springs'
 import { EditorView } from '@codemirror/view'
@@ -136,6 +136,7 @@ function SelectionMenuItem({
 }
 
 export function IdePane(): React.JSX.Element | null {
+  const reduceMotion = useReducedMotion()
   const [open, setOpen] = useState(false)
   const [filePath, setFilePath] = useState<string | null>(null)
   const [dirty, setDirty] = useState(false)
@@ -152,6 +153,7 @@ export function IdePane(): React.JSX.Element | null {
   const hostRef = useRef<HTMLDivElement | null>(null)
   const selectionMenuRef = useRef<HTMLDivElement | null>(null)
   const viewRef = useRef<EditorView | null>(null)
+  const previousFocusRef = useRef<HTMLElement | null>(null)
   const pathRef = useRef<string | null>(null)
   const mtimeRef = useRef(0)
   const dirtyRef = useRef(false)
@@ -310,7 +312,13 @@ export function IdePane(): React.JSX.Element | null {
 
   /* open-file events from the terminal link pipeline / deep links */
   useEffect(() => {
-    const onOpen = (ev: OpenFileEvent): void => requestOpen(ev)
+    const onOpen = (ev: OpenFileEvent): void => {
+      const activeElement = document.activeElement
+      if (activeElement instanceof HTMLElement && !paneRef.current?.contains(activeElement)) {
+        previousFocusRef.current = activeElement
+      }
+      requestOpen(ev)
+    }
     appEvents.on('open-file', onOpen)
     return () => appEvents.off('open-file', onOpen)
   }, [requestOpen])
@@ -370,19 +378,50 @@ export function IdePane(): React.JSX.Element | null {
   }, [])
   saveRef.current = () => void save()
 
-  const close = (): void => {
+  const dismiss = (): void => {
+    ++loadSeqRef.current
     ++explainSeqRef.current
+    setSelectionMenu(null)
+    setExplanation(null)
+    setOpen(false)
+    requestAnimationFrame(() => {
+      if (previousFocusRef.current?.isConnected) previousFocusRef.current.focus()
+    })
+  }
+
+  const close = (): void => {
+    dismiss()
     if (pathRef.current) morz().file.unwatch(pathRef.current)
     destroyView()
     pathRef.current = null
     setFilePath(null)
     setBanner(null)
-    setSelectionMenu(null)
-    setExplanation(null)
     setTabs([])
     markDirty(false)
-    setOpen(false)
   }
+
+  useEffect(() => {
+    if (!open || selectionMenu) return
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      dismiss()
+    }
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => window.removeEventListener('keydown', onKeyDown, true)
+  }, [open, selectionMenu])
+
+  useEffect(() => {
+    const pane = paneRef.current
+    if (!pane) return
+    if (open) pane.removeAttribute('inert')
+    else pane.setAttribute('inert', '')
+  }, [open])
+
+  useEffect(() => {
+    if (!open) return
+    requestAnimationFrame(() => viewRef.current?.focus())
+  }, [open])
 
   /** Remove a tab; guard the active-dirty case behind a banner. */
   const closeTab = (path: string): void => {
@@ -582,8 +621,8 @@ export function IdePane(): React.JSX.Element | null {
    * The pane stays MOUNTED always (never AnimatePresence-unmounted): the
    * editor host div must exist BEFORE loadFile's mountDoc runs (setOpen(true)
    * has not committed yet on the first open — a conditional render would leave
-   * hostRef null and silently drop the editor). Hidden = slid off-screen right
-   * with the same spring the file explorer uses.
+   * hostRef null and silently drop the editor). Hidden = slid off-screen right;
+   * reduced-motion users get the same state change without the spring.
    */
   const btn =
     'px-2 py-1 rounded-[var(--radius-data)] border border-line-strong text-[11px] font-body transition-colors'
@@ -591,21 +630,24 @@ export function IdePane(): React.JSX.Element | null {
   const btnDead = `${btn} text-quartz-faint cursor-not-allowed`
 
   return (
-    <motion.div
+    <motion.aside
       ref={paneRef}
-      className="fixed right-0 flex flex-col bg-panel border-l border-line-strong shadow-2xl"
+      className="absolute right-0 flex flex-col bg-panel border-l border-line-strong shadow-2xl"
+      aria-label="IDE overlay"
+      aria-hidden={!open}
+      data-testid="ide-overlay"
       initial={false}
       animate={
         open
-          ? { x: 0, opacity: 1, transition: springs.panel }
-          : { x: '105%', opacity: 0, transition: { duration: 0.16 } }
+          ? { x: 0, opacity: 1, transition: reduceMotion ? { duration: 0 } : springs.panel }
+          : { x: '105%', opacity: 0, transition: { duration: reduceMotion ? 0 : 0.16 } }
       }
       style={{
         top: 38,
         bottom: 0,
-        width: 'min(48vw, 760px)',
-        minWidth: 420,
-        zIndex: 60,
+        width: 660,
+        maxWidth: '100%',
+        zIndex: 80,
         pointerEvents: open ? 'auto' : 'none'
       }}
     >
@@ -632,7 +674,7 @@ export function IdePane(): React.JSX.Element | null {
         >
           Cursor
         </button>
-        <button className={`${btnLive} ml-1`} onClick={close} title="Close editor">
+        <button className={`${btnLive} ml-1`} onClick={dismiss} title="Close editor">
           ✕
         </button>
       </div>
@@ -825,7 +867,7 @@ export function IdePane(): React.JSX.Element | null {
           </div>
         </div>
       )}
-    </motion.div>
+    </motion.aside>
   )
 }
 

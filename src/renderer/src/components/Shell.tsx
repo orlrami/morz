@@ -22,7 +22,7 @@ import { AgentPillBar } from './AgentPillBar'
 import { OrchestratorPanel } from './OrchestratorPanel'
 import { StatusBar } from './StatusBar'
 import { CommandPalette, type PaletteAction } from './CommandPalette'
-import { FileExplorer } from './FileExplorer'
+import { ExplorerPanel } from './ExplorerPanel'
 import { CommitPanel } from './CommitPanel'
 import { ReviewerPanel } from './ReviewerPanel'
 import { DagView } from './DagView'
@@ -705,9 +705,9 @@ export function Shell(): JSX.Element {
           {view === 'workshop' && <WorkshopPanel />}
         </main>
 
-        {orchestratorOpen && <OrchestratorPanel />}{/* w10/identity */}
+        <ExplorerPanel open={explorerOpen} onClose={() => setExplorerOpen(false)} />
 
-        <FileExplorer open={explorerOpen} onClose={() => setExplorerOpen(false)} />
+        {orchestratorOpen && <OrchestratorPanel />}{/* w10/identity */}
       </div>
 
       <StatusBar onOpenCommit={() => setView('commit')} />
