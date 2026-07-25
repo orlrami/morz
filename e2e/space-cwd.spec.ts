@@ -127,7 +127,7 @@ test.describe.serial('active space terminal cwd (w13/space-cwd)', () => {
     const usedCwd = /MORZ_USED_CWD=([^\r\n]+)/.exec(usedBuffer)![1].trim()
 
     const paneTwoBeforeFirstSpace = (await termText(page, PANE_2)).length
-    await page.getByRole('button', { name: 'Open folder' }).click()
+    await page.getByRole('button', { name: 'Add space' }).click()
     await expect(page.locator(`[data-space-name="${basename(firstRoot)}"]`)).toHaveAttribute(
       'data-active',
       'true'
@@ -148,7 +148,7 @@ test.describe.serial('active space terminal cwd (w13/space-cwd)', () => {
       process.env.MORZ_E2E_PICK_FOLDER = root
     }, secondRoot)
     const paneTwoBeforeSecondSpace = (await termText(page, PANE_2)).length
-    await page.getByRole('button', { name: 'Open folder' }).click()
+    await page.getByRole('button', { name: 'Add space' }).click()
     await expect(page.locator(`[data-space-name="${basename(secondRoot)}"]`)).toHaveAttribute(
       'data-active',
       'true'

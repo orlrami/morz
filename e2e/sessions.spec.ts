@@ -36,7 +36,7 @@ test.describe.serial('per-project session history (w11/sessions)', () => {
     morz = await launchMorz()
     let { page, appDataDir } = morz
 
-    await page.getByRole('button', { name: 'Open folder' }).click()
+    await page.getByRole('button', { name: 'Add space' }).click()
     const firstSpace = page.locator(`[data-space-name="${firstName}"]`)
     await expect(firstSpace).toHaveAttribute('data-active', 'true')
 
@@ -53,7 +53,7 @@ test.describe.serial('per-project session history (w11/sessions)', () => {
     process.env.MORZ_E2E_PICK_FOLDER = secondRoot
     morz = await launchMorz({ appDataDir })
     page = morz.page
-    await page.getByRole('button', { name: 'Open folder' }).click()
+    await page.getByRole('button', { name: 'Add space' }).click()
     const secondSpace = page.locator(`[data-space-name="${secondName}"]`)
     await expect(secondSpace).toHaveAttribute('data-active', 'true')
 

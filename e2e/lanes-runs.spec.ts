@@ -122,6 +122,11 @@ test('pill bar shows CLI panes and dispatched agents but excludes plain shells',
     }
     expect(seeded, 'seeded fixture space survived reload').toBe(true)
 
+    // w15/shell-layout — live agents render inside the orchestrator dock now;
+    // Orchestrated auto-opens it (Manual mounts zero orchestrator DOM).
+    await page.getByRole('radio', { name: 'Orchestrated' }).click()
+    await expect(page.getByRole('complementary', { name: 'Orchestrator' })).toBeVisible()
+
     await expect(page.getByText(/No active/)).toBeVisible()
     await expect(page.getByTestId('agent-pill')).toHaveCount(0)
 
@@ -158,7 +163,6 @@ test('pill bar shows CLI panes and dispatched agents but excludes plain shells',
     await expect(reviewer).toContainText('Codex')
     await expect(page.getByTestId('agent-pill')).toHaveCount(3)
 
-    await page.getByRole('radio', { name: 'Orchestrated' }).click()
     await page.getByRole('tab', { name: 'Runs' }).click()
     await expect(page.getByRole('heading', { name: 'surface every active agent' })).toBeVisible()
     await expect(page.getByTestId('run-agent')).toHaveCount(2)
