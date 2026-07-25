@@ -87,12 +87,15 @@ export function FileExplorer({ open, onClose }: FileExplorerProps): JSX.Element 
     <AnimatePresence>
       {open && (
         <motion.aside
-          initial={{ x: -280, opacity: 0 }}
+          initial={{ x: 240, opacity: 0 }}
           animate={{ x: 0, opacity: 1, transition: springs.panel }}
-          exit={{ x: -280, opacity: 0, transition: { duration: 0.16 } }}
-          className="absolute bottom-7 left-0 top-10 z-40 flex w-[264px] flex-col border-r shadow-2xl"
-          style={{ background: colors.panel, borderColor: 'var(--color-line-strong)' }}
+          exit={{ x: 240, opacity: 0, transition: { duration: 0.16 } }}
+          /* w15/shell-layout — Explorer mount slot: static 224px panel between
+           * the stage and the orchestrator dock (Agent 3 replaces internals). */
+          className="flex w-[224px] shrink-0 flex-col border-l"
+          style={{ background: colors.panel, borderColor: 'var(--color-line)' }}
           aria-label="File explorer"
+          data-testid="explorer-slot"
         >
           <div
             className="flex items-center gap-2 border-b px-3 py-2"

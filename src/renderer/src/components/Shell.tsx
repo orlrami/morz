@@ -1,24 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { motion } from 'framer-motion'
-import {
-  IconTerminal2,
-  IconGitCommit,
-  IconShieldCheck,
-  IconTopologyStar3,
-  IconFolders,
-  IconWorld,
-  IconDeviceMobile,
-  IconSettings,
-  IconSquareRoundedPlus,
-  IconRobot,
-  IconColumns,
-  IconX,
-  IconHistory
-} from '@tabler/icons-react'
+import { IconTerminal2, IconRobot, IconColumns, IconX } from '@tabler/icons-react'
 import { TitleBar } from './TitleBar'
 import { MorzSignal } from './Brand'
-import { SpacesSidebar } from './SpacesSidebar'
-import { AgentPillBar } from './AgentPillBar'
+import { IconRail, type RailView } from './IconRail'
 import { OrchestratorPanel } from './OrchestratorPanel'
 import { StatusBar } from './StatusBar'
 import { CommandPalette, type PaletteAction } from './CommandPalette'
@@ -27,7 +11,6 @@ import { CommitPanel } from './CommitPanel'
 import { ReviewerPanel } from './ReviewerPanel'
 import { DagView } from './DagView'
 import { BrowserPanel } from './BrowserPanel'
-import { RemotePanel } from './RemotePanel'
 import { SettingsPanel, type SettingsTab } from './SettingsPanel'
 import { WorkshopPanel } from './WorkshopPanel'
 import { SessionsPanel } from './SessionsPanel'
@@ -41,10 +24,11 @@ import { serializeTerminal, useTerminal, whenTerminalAttached } from '@/hooks/us
 import { emit, off, on } from '@/lib/app-events'
 import { isEditableTarget } from '@/lib/keyboard'
 import { colors } from '@/lib/tokens'
-import { springs } from '@/lib/springs'
 import { themes, useThemeStore } from '@/lib/themes'
 import { useCatalogStore } from '@/store/catalogStore'
 import { claudeAllowed, useModeStore } from '@/store/modeStore'
+import { useModulesStore } from '@/store/modulesStore'
+import type { ModuleId } from '@shared/modules'
 import { useLaneStore } from '@/store/laneStore'
 import { getRunApi, hydrateRuns } from '@/store/runsStore'
 import {
@@ -67,19 +51,35 @@ function getRunPane(): RunPaneBridge | undefined {
   return (window as unknown as { morzRunPane?: RunPaneBridge }).morzRunPane
 }
 
-type CenterView = 'terminals' | 'commit' | 'review' | 'dag' | 'browser' | 'remote' | 'organizer' | 'sessions' | 'settings' | 'workshop'
+type CenterView = RailView
 
-const VIEWS: { id: CenterView; label: string; icon: typeof IconTerminal2 }[] = [
-  { id: 'terminals', label: 'Terminals', icon: IconTerminal2 },
-  { id: 'commit', label: 'Commit', icon: IconGitCommit },
-  { id: 'review', label: 'Review', icon: IconShieldCheck },
-  { id: 'dag', label: 'Waves', icon: IconTopologyStar3 },
-  { id: 'browser', label: 'Browser', icon: IconWorld },
-  { id: 'remote', label: 'Remote', icon: IconDeviceMobile },
-  { id: 'organizer', label: 'Organizer', icon: IconFolders },
-  // w11/sessions — one center-view entry; SpacesSidebar remains untouched.
-  { id: 'sessions', label: 'Sessions', icon: IconHistory }
+/* w15/shell-layout — Remote parked; the icon rail owns view icons now. */
+const VIEWS: { id: CenterView; label: string }[] = [
+  { id: 'terminals', label: 'Terminals' },
+  { id: 'commit', label: 'Commit' },
+  { id: 'review', label: 'Review' },
+  { id: 'dag', label: 'Waves' },
+  { id: 'browser', label: 'Browser' },
+  { id: 'organizer', label: 'Organizer' },
+  { id: 'sessions', label: 'Sessions' }
 ]
+
+const VIEW_TITLES: Record<CenterView, string> = {
+  ...Object.fromEntries(VIEWS.map((v) => [v.id, v.label])),
+  settings: 'Settings',
+  workshop: 'Workshop'
+} as Record<CenterView, string>
+
+/* Views owned by a module — a disabled module's view falls back to terminals. */
+const VIEW_MODULE: Partial<Record<CenterView, ModuleId>> = {
+  commit: 'commit',
+  review: 'review',
+  dag: 'orchestration',
+  browser: 'browser',
+  organizer: 'organizer',
+  sessions: 'sessions',
+  workshop: 'workshop'
+}
 
 /* Dev-only: allow ?view=commit&explorer=1 so surfaces can be screenshot-verified. */
 function initialFromUrl(): { view: CenterView; explorer: boolean } {
@@ -184,12 +184,14 @@ function layoutFromSnapshot(snap: SessionSnapshot | null): LayoutNode | null {
   return null
 }
 
-/* Morz shell: titlebar / (sidebar | pill-bar + center view | orchestrator) / statusbar. */
+/* Morz shell (w15 premium): titlebar / (icon rail | stage | explorer | dock) / statusbar. */
 export function Shell(): JSX.Element {
   const initial = initialFromUrl()
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [explorerOpen, setExplorerOpen] = useState(initial.explorer)
-  const [orchestratorOpen, setOrchestratorOpen] = useState(true) // w10/identity
+  /* Orchestrator dock is dial-owned: Manual mounts nothing, Assisted starts
+   * closed behind the one header chip, Orchestrated auto-opens. */
+  const [orchOpen, setOrchOpen] = useState(false)
   const [view, setView] = useState<CenterView>(initial.view)
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('limits')
   const [settingsRevision, setSettingsRevision] = useState(0)
@@ -219,6 +221,23 @@ export function Shell(): JSX.Element {
     [activeLanes.length, activeSpace?.agents]
   )
   const sessionAgentsKey = sessionAgents.join('|')
+  const modulesEnabled = useModulesStore((s) => s.enabled)
+
+  /* w15/shell-layout — module map hydrates once (bridge or interim defaults). */
+  useEffect(() => {
+    void useModulesStore.getState().hydrate()
+  }, [])
+
+  /* Dial owns the dock: Orchestrated auto-opens, Manual/Assisted reset closed. */
+  useEffect(() => {
+    setOrchOpen(mode === 'orchestrated')
+  }, [mode])
+
+  /* A disabled module takes its view with it. */
+  useEffect(() => {
+    const owner = VIEW_MODULE[view]
+    if (owner && !modulesEnabled[owner]) setView('terminals')
+  }, [modulesEnabled, view])
 
   /* w11/sessions — a space with an open pane owns exactly one live work record. */
   useEffect(() => {
@@ -575,90 +594,54 @@ export function Shell(): JSX.Element {
       <TitleBar onOpenPalette={() => setPaletteOpen(true)} />
 
       <div className="relative flex min-h-0 flex-1">
-        <SpacesSidebar />
+        <IconRail
+          view={view}
+          onSelectView={setView}
+          explorerOpen={explorerOpen}
+          onToggleExplorer={() => setExplorerOpen((v) => !v)}
+        />
 
         <main className="flex min-h-0 min-w-0 flex-1 flex-col">
-          <div className="flex items-center border-b" style={{ borderColor: 'var(--color-line)', background: colors.page }}>
-            {/* explorer toggle + view switcher share the strip above the panes */}
-            <button
-              onClick={() => setExplorerOpen((v) => !v)}
-              className="ml-2 flex cursor-pointer items-center gap-1 rounded-md p-1.5 transition-colors hover:bg-[#37332B]"
-              title="Toggle file explorer (Ctrl+B)"
-              aria-label="Toggle file explorer"
-              style={{ color: explorerOpen ? colors.bronzeHot : colors.quartzDim }}
+          {/* stage header: crumb + view title left, dial-gated orchestrator chip right */}
+          <div
+            className="flex h-10 shrink-0 items-center gap-2 border-b px-3"
+            style={{ borderColor: 'var(--color-line)', background: colors.page }}
+            data-testid="stage-header"
+          >
+            <span className="truncate text-[11px]" style={{ color: colors.quartzDim }}>
+              {activeSpace?.name ?? 'no space'}
+            </span>
+            <span aria-hidden style={{ color: colors.quartzFaint }}>
+              /
+            </span>
+            <span
+              className="text-[12px] font-semibold"
+              style={{ color: colors.quartz, fontFamily: 'var(--font-display)' }}
             >
-              <IconFolders size={15} stroke={1.5} />
-            </button>
+              {VIEW_TITLES[view]}
+            </span>
 
-            <nav
-              className="ml-1 flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto py-1.5 [&::-webkit-scrollbar]:hidden"
-              role="tablist"
-              aria-label="Center view"
-            >
-              {VIEWS.map((v) => {
-                const active = view === v.id
-                const Icon = v.icon
-                return (
-                  <button
-                    key={v.id}
-                    role="tab"
-                    aria-selected={active}
-                    onClick={() => setView(v.id)}
-                    className="relative flex shrink-0 cursor-pointer items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] font-medium"
-                    style={{ color: active ? colors.quartz : colors.quartzDim, fontFamily: 'var(--font-display)' }}
-                  >
-                    {active && (
-                      <motion.span
-                        layoutId="center-view-pill"
-                        transition={springs.layout}
-                        className="absolute inset-0 rounded-lg border"
-                        style={{ background: colors.card, borderColor: 'var(--color-line-strong)' }}
-                      />
-                    )}
-                    <span className="relative flex items-center gap-1.5">
-                      <Icon size={13} stroke={1.5} />
-                      {v.label}
-                    </span>
-                  </button>
-                )
-              })}
-            </nav>
-
-            <button
-              onClick={() => setView('workshop')}
-              className="ml-auto flex cursor-pointer items-center rounded-md p-1.5 transition-colors hover:bg-[#37332B]"
-              title="Workshop — add skills, MCP servers, plugins, models"
-              aria-label="Workshop"
-              style={{ color: view === 'workshop' ? colors.bronzeHot : colors.quartzDim }}
-            >
-              <IconSquareRoundedPlus size={15} stroke={1.5} />
-            </button>
-            {/* w10/identity — the orchestrator is a Morz system, not a generic robot. */}
-            <button
-              onClick={() => setOrchestratorOpen((open) => !open)}
-              className="flex cursor-pointer items-center rounded-md p-1.5 transition-colors hover:bg-[#37332B]"
-              title={`${orchestratorOpen ? 'Hide' : 'Show'} orchestrator`}
-              aria-label="Toggle orchestrator"
-              aria-pressed={orchestratorOpen}
-              style={{ color: orchestratorOpen ? colors.quartz : colors.quartzDim }}
-            >
-              <MorzSignal className="h-[15px] w-[21px]" goldPoint />
-            </button>
-            <button
-              onClick={() => setView('settings')}
-              className="mr-2 flex cursor-pointer items-center rounded-md p-1.5 transition-colors hover:bg-[#37332B]"
-              title="Settings"
-              aria-label="Settings"
-              style={{ color: view === 'settings' ? colors.bronzeHot : colors.quartzDim }}
-            >
-              <IconSettings size={15} stroke={1.5} />
-            </button>
+            {mode !== 'manual' && (
+              <button
+                onClick={() => setOrchOpen((open) => !open)}
+                className="ml-auto flex cursor-pointer items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10.5px] font-semibold transition-colors hover:bg-[#37332B]"
+                title={`${orchOpen ? 'Hide' : 'Show'} orchestrator`}
+                aria-label="Toggle orchestrator"
+                aria-pressed={orchOpen}
+                style={{
+                  borderColor: 'var(--color-line-strong)',
+                  color: orchOpen ? colors.quartz : colors.quartzDim,
+                  fontFamily: 'var(--font-display)'
+                }}
+              >
+                <MorzSignal className="h-[13px] w-[18px]" goldPoint />
+                Orchestrator
+              </button>
+            )}
           </div>
 
           {view === 'terminals' && (
-            <>
-              <AgentPillBar />
-              <div className="flex min-h-0 flex-1" style={{ background: colors.page }}>
+            <div className="flex min-h-0 flex-1" style={{ background: colors.page }}>
                 {!hydrated && (
                   <div
                     className="flex flex-1 items-center justify-center text-[11px]"
@@ -685,14 +668,12 @@ export function Shell(): JSX.Element {
                     }
                   />
                 )}
-              </div>
-            </>
+            </div>
           )}
           {view === 'commit' && <CommitPanel />}
           {view === 'review' && <ReviewerPanel />}
           {view === 'dag' && <DagView />}
           {view === 'browser' && <BrowserPanel />}
-          {view === 'remote' && <RemotePanel />}
           {view === 'organizer' && <OrganizerPanel />}
           {/* w11/sessions */}
           {view === 'sessions' && <SessionsPanel />}
@@ -705,9 +686,10 @@ export function Shell(): JSX.Element {
           {view === 'workshop' && <WorkshopPanel />}
         </main>
 
-        {orchestratorOpen && <OrchestratorPanel />}{/* w10/identity */}
-
+        {/* right side, in order: Explorer panel (Agent 3 fills internals), then the dock */}
         <FileExplorer open={explorerOpen} onClose={() => setExplorerOpen(false)} />
+
+        {mode !== 'manual' && orchOpen && <OrchestratorPanel />}
       </div>
 
       <StatusBar onOpenCommit={() => setView('commit')} />
