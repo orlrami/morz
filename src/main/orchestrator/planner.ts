@@ -13,6 +13,7 @@ import type {
   StoredSpawnPlan
 } from '../../shared/ipc'
 import { PlannerApi, PlannerEngineApi } from '../../shared/ipc'
+import { inheritChoice, modelFlagArgs } from '../../shared/model-choice'
 import type { AgentAdapter } from '../adapters/types'
 import type { PlannedAgent, SpawnPlan } from '../../shared/spawn-plan'
 import { hashSpawnPlan, PlanStore } from './plan-store'
@@ -513,6 +514,57 @@ function stripTerminalControls(value: string): string {
   return value.replace(/\x1b(?:\[[0-9;:?<=>]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[@-Z\\-_])/g, '')
 }
 
+/** OpenCode documents `run [message..]` as its non-interactive command.
+ * Model flags come from the user's existing ModelChoice configuration. */
+export function buildOpenCodePlannerArgs(prompt: string, modelArgs: readonly string[] = []): string[] {
+  return ['run', ...modelArgs, prompt]
+}
+
+async function runOpenCodePlanner(prompt: string, cwd: string): Promise<string> {
+  const { modelChoiceStore } = await import('../services/model-choice')
+  const choice = modelChoiceStore()?.resolve('opencode', cwd) ?? inheritChoice('opencode')
+  const args = buildOpenCodePlannerArgs(prompt, modelFlagArgs(choice))
+  return new Promise((resolve, reject) => {
+    const child = spawn('opencode', args, {
+      cwd,
+      windowsHide: true,
+      shell: false,
+      stdio: ['ignore', 'pipe', 'pipe']
+    })
+    let stdout = ''
+    let stderr = ''
+    let settled = false
+    const finish = (error?: Error): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      if (error) reject(error)
+      else resolve(stripTerminalControls(stdout).trim())
+    }
+    const timer = setTimeout(() => {
+      child.kill()
+      finish(new Error('opencode planner timed out'))
+    }, ADAPTER_TIMEOUT_MS)
+    child.stdout.on('data', (chunk: Buffer) => {
+      stdout += chunk.toString('utf8')
+      if (Buffer.byteLength(stdout, 'utf8') > MAX_STREAM_BYTES) {
+        child.kill()
+        finish(new Error('opencode planner output exceeded the size limit'))
+      }
+    })
+    child.stderr.on('data', (chunk: Buffer) => {
+      if (stderr.length < 2_000) stderr += chunk.toString('utf8').slice(0, 2_000 - stderr.length)
+    })
+    child.once('error', (error) => finish(new Error(`Could not start opencode planner: ${error.message}`)))
+    child.once('close', (code) => {
+      if (settled) return
+      if (code !== 0) finish(new Error(`opencode planner exited ${code}: ${stderr.trim() || 'no details'}`))
+      else if (!stdout.trim()) finish(new Error('opencode planner returned no text'))
+      else finish()
+    })
+  })
+}
+
 /** Agy's adapter contract is raw PTY output. Recover a complete rendered JSON
  * snapshot, then require it to pass the same strict SpawnPlan validator. */
 export function extractLocalSpawnPlanBlock(response: string): unknown {
@@ -670,8 +722,15 @@ function e2ePlannerResponse(
   createdAt: string
 ): string {
   if (engine === 'claude' && goal.includes('claude-fails')) return 'not a SpawnPlan'
-  const label = engine === 'claude' ? 'Claude' : engine === 'codex' ? 'Codex' : 'Local'
-  const cli = engine === 'local' ? 'agy' : engine
+  const label =
+    engine === 'claude'
+      ? 'Claude'
+      : engine === 'codex'
+        ? 'Codex'
+        : engine === 'opencode'
+          ? 'OpenCode'
+          : 'Local'
+  const cli = engine === 'local' ? 'agy' : engine === 'opencode' ? 'codex' : engine
   // w13/planner-schema markers: exercise the repair + hard-reject paths.
   const repair = goal.includes('MORZ_E2E_REPAIR')
   const broken = goal.includes('MORZ_E2E_BROKEN')
@@ -804,7 +863,9 @@ async function generatePlan(
         ? dependencies.runClaude(prompt)
         : runClaudePlanner(prompt, dependencies.claudeModel ?? 'sonnet')
     }
-    return runAdapterPlanner(selected, prompt, root)
+    return selected === 'opencode'
+      ? runOpenCodePlanner(prompt, root)
+      : runAdapterPlanner(selected, prompt, root)
   })
   let issues: string[] | undefined
 
@@ -981,12 +1042,12 @@ function assertHash(value: unknown, label: string): asserts value is string {
 }
 
 // w12/orch-engine
-const PLANNER_ENGINES = new Set<PlannerEngine>(['fast', 'claude', 'codex', 'local'])
+const PLANNER_ENGINES = new Set<PlannerEngine>(['fast', 'claude', 'codex', 'opencode', 'local'])
 const PLANNER_CLAUDE_MODELS = new Set<PlannerClaudeModel>(['sonnet', 'opus', 'fable'])
 
-function normalizePlannerEngine(value: unknown): PlannerEngine {
+export function normalizePlannerEngine(value: unknown): PlannerEngine {
   if (typeof value !== 'string' || !PLANNER_ENGINES.has(value as PlannerEngine)) {
-    throw new Error('Planner engine must be fast, claude, codex, or local')
+    throw new Error('Planner engine must be fast, claude, codex, opencode, or local')
   }
   return value as PlannerEngine
 }
@@ -998,16 +1059,23 @@ function normalizePlannerClaudeModel(value: unknown): PlannerClaudeModel {
   return value as PlannerClaudeModel
 }
 
-class PlannerEngineStore {
+export class PlannerEngineStore {
   private readonly db: Database.Database
+  private readonly ownsDb: boolean
   /** w15/model-choice — the planner's Claude model is a unified ModelChoice
    * row (cli 'claude', scope 'planner') in the shared model_choice table. */
   private readonly modelChoices: ModelChoiceStore
 
-  constructor(dbPath: string) {
-    mkdirSync(dirname(dbPath), { recursive: true })
-    this.db = new Database(dbPath)
-    this.db.pragma('journal_mode = WAL')
+  constructor(dbPathOrDb: string | Database.Database) {
+    if (typeof dbPathOrDb === 'string') {
+      mkdirSync(dirname(dbPathOrDb), { recursive: true })
+      this.db = new Database(dbPathOrDb)
+      this.db.pragma('journal_mode = WAL')
+      this.ownsDb = true
+    } else {
+      this.db = dbPathOrDb
+      this.ownsDb = false
+    }
     // w15/planner-fast-default — migrate the w12 table: the CHECK gains
     // 'fast', a claude_model column appears, and rows still on the old
     // default ('claude') move to the new default ('fast'); explicit
@@ -1032,10 +1100,32 @@ class PlannerEngineStore {
         COMMIT;
       `)
     }
+    // w16/planner-memory — copy the complete w15 row into a table whose
+    // engine CHECK adds OpenCode, then drop the renamed table atomically.
+    const w15 = this.db
+      .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'orchestrator_planner_settings'")
+      .get() as { sql?: string } | undefined
+    if (w15?.sql && !w15.sql.includes("'opencode'")) {
+      this.db.exec(`
+        BEGIN;
+        ALTER TABLE orchestrator_planner_settings RENAME TO orchestrator_planner_settings_w15;
+        CREATE TABLE orchestrator_planner_settings (
+          id INTEGER PRIMARY KEY CHECK (id = 1),
+          engine TEXT NOT NULL CHECK (engine IN ('fast', 'claude', 'codex', 'opencode', 'local')),
+          claude_model TEXT NOT NULL DEFAULT 'sonnet' CHECK (claude_model IN ('sonnet', 'opus', 'fable')),
+          updated_at TEXT NOT NULL
+        );
+        INSERT INTO orchestrator_planner_settings (id, engine, claude_model, updated_at)
+        SELECT id, engine, claude_model, updated_at
+        FROM orchestrator_planner_settings_w15;
+        DROP TABLE orchestrator_planner_settings_w15;
+        COMMIT;
+      `)
+    }
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS orchestrator_planner_settings (
         id INTEGER PRIMARY KEY CHECK (id = 1),
-        engine TEXT NOT NULL CHECK (engine IN ('fast', 'claude', 'codex', 'local')),
+        engine TEXT NOT NULL CHECK (engine IN ('fast', 'claude', 'codex', 'opencode', 'local')),
         claude_model TEXT NOT NULL DEFAULT 'sonnet' CHECK (claude_model IN ('sonnet', 'opus', 'fable')),
         updated_at TEXT NOT NULL
       );
@@ -1081,7 +1171,7 @@ class PlannerEngineStore {
   }
 
   close(): void {
-    if (this.db.open) this.db.close()
+    if (this.ownsDb && this.db.open) this.db.close()
   }
 }
 

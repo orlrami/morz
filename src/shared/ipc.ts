@@ -1103,7 +1103,7 @@ export interface SessionResumeTestBridge {
 // w12/orch-engine — append-only planner engine selection contract.
 // w15/planner-fast-default — 'fast' races Claude (Sonnet) against Codex
 // (GPT-5.5); first valid plan wins. Default engine for new installs.
-export type PlannerEngine = 'fast' | 'claude' | 'codex' | 'local'
+export type PlannerEngine = 'fast' | 'claude' | 'codex' | 'opencode' | 'local'
 
 /** Which Claude model the planner uses when the claude engine runs. */
 export type PlannerClaudeModel = 'sonnet' | 'opus' | 'fable'

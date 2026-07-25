@@ -16,6 +16,7 @@ import { staggerContainer, staggerItem } from '@/lib/springs'
 import { useModeStore } from '@/store/modeStore'
 import { useModulesStore } from '@/store/modulesStore' // w15/modules-core
 import { useBusStore, getBus } from '@/store/busStore'
+import { useConnectionsStore } from '@/store/connectionsStore'
 import { useLaneStore } from '@/store/laneStore'
 import { selectActiveSpace, selectActiveSpaceRoot, useSpaceStore } from '@/store/spaceStore'
 import { AgentPillBar } from './AgentPillBar'
@@ -256,6 +257,8 @@ function PlannerFlow(): JSX.Element {
   const [claudeModel, setClaudeModel] = useState<PlannerClaudeModel>('sonnet')
   const [engineSaving, setEngineSaving] = useState(false)
   const [engineNotice, setEngineNotice] = useState('')
+  const connections = useConnectionsStore((state) => state.connections)
+  const startConnections = useConnectionsStore((state) => state.start)
   // end w12/orch-engine
   const [record, setRecord] = useState<StoredSpawnPlan | null>(null)
   const [amendments, setAmendments] = useState<StoredPlanAmendment[]>([])
@@ -310,7 +313,21 @@ function PlannerFlow(): JSX.Element {
       .then(setClaudeModel)
       .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : String(reason)))
   }, [])
+  useEffect(() => startConnections(), [startConnections])
   // end w12/orch-engine
+
+  const installed = new Map(connections.map((connection) => [connection.id, connection.installed]))
+  const engineOptions: Array<{ value: PlannerEngine; label: string; detected: boolean }> = [
+    {
+      value: 'fast',
+      label: 'Fast',
+      detected: installed.get('claude') === true || installed.get('codex') === true
+    },
+    { value: 'claude', label: 'Claude', detected: installed.get('claude') === true },
+    { value: 'codex', label: 'Codex', detected: installed.get('codex') === true },
+    { value: 'opencode', label: 'OpenCode', detected: installed.get('opencode') === true },
+    { value: 'local', label: 'Local', detected: installed.get('agy') === true }
+  ]
 
   const run = async (work: () => Promise<void>): Promise<void> => {
     setBusy(true)
@@ -465,17 +482,23 @@ function PlannerFlow(): JSX.Element {
               .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : String(reason)))
               .finally(() => setEngineSaving(false))
           }}
-          className="w-[66px] rounded-md border bg-black/10 px-1 py-1 text-[9px] font-semibold outline-none focus:ring-1 disabled:opacity-40"
+          className="w-[82px] rounded-md border bg-black/10 px-1 py-1 text-[9px] font-semibold outline-none focus:ring-1 disabled:opacity-40"
           style={{
             borderColor: 'var(--color-line-strong)',
             color: colors.quartz,
             '--tw-ring-color': colors.bronze
           } as React.CSSProperties}
         >
-          <option value="fast">Fast</option>
-          <option value="claude">Claude</option>
-          <option value="codex">Codex</option>
-          <option value="local">Local</option>
+          {engineOptions.map((option) => (
+            <option
+              key={option.value}
+              value={option.value}
+              disabled={!option.detected}
+              title={option.detected ? undefined : 'not detected on PATH'}
+            >
+              {option.label}{option.detected ? '' : ' — not detected on PATH'}
+            </option>
+          ))}
         </select>
         {/* w15/planner-fast-default — Claude model for the fast/claude engines */}
         {(engine === 'fast' || engine === 'claude') && (
