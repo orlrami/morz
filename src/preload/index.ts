@@ -109,6 +109,13 @@ const startScreenBridge: StartScreenBridge = {
 }
 contextBridge.exposeInMainWorld('morzStartScreen', startScreenBridge)
 
+/* E2E-only: MORZ_START_SCREEN=off boots straight into the shell so specs that
+ * seed their own layout are not handed the launcher's fresh panes. Production
+ * never sets this, so the launcher gate stays exactly as designed. */
+if (process.env.MORZ_START_SCREEN === 'off') {
+  contextBridge.exposeInMainWorld('morzStartScreenDisabled', true)
+}
+
 if (process.env.MORZ_E2E_START_SCREEN_STUB === '1') {
   const startScreenTestBridge: StartScreenTestBridge = {
     launches: () => ipcRenderer.invoke(StartScreenApi.testLaunches)

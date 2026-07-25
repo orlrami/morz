@@ -1,6 +1,6 @@
-﻿/*
- * Module gating (w15/modules-core) â€” proves gating is REAL, not cosmetic:
- *  1. All modules off â†’ only core surfaces exist (no module tab, button, or
+/*
+ * Module gating (w15/modules-core) — proves gating is REAL, not cosmetic:
+ *  1. All modules off → only core surfaces exist (no module tab, button, or
  *     dock) AND the renderer produces ZERO module IPC traffic (asserted via
  *     the MORZ_E2E preload tap on ipcRenderer.invoke/send).
  *  2. Enabling orchestration from the module drawer surfaces the orchestrator
@@ -12,9 +12,9 @@
 import { test, expect } from '@playwright/test'
 import { closeMorz, launchMorz, PANE_1, PROMPT_RE, runInPane, waitForTerm, type MorzApp } from './app'
 
-/** Outbound IPC channels owned by modules â€” none may fire while all are off. */
+/** Outbound IPC channels owned by modules — none may fire while all are off. */
 const MODULE_CHANNEL_PREFIXES = [
-  'sessions:', // session history/resume (NOT 'session:' â€” layout snapshot is core)
+  'sessions:', // session history/resume (NOT 'session:' — layout snapshot is core)
   'pulse:',
   'catalog:',
   'run:',
@@ -37,7 +37,7 @@ const ORCH_PANEL = '[aria-label="Orchestrator"]'
 function moduleIpcCalls(page: MorzApp['page']): Promise<string[]> {
   return page.evaluate((prefixes) => {
     const tap = (window as unknown as { morzE2eIpc?: { calls(): string[] } }).morzE2eIpc
-    if (!tap) throw new Error('morzE2eIpc tap missing â€” launch with MORZ_E2E=1')
+    if (!tap) throw new Error('morzE2eIpc tap missing — launch with MORZ_E2E=1')
     return tap.calls().filter((channel) => prefixes.some((prefix) => channel.startsWith(prefix)))
   }, MODULE_CHANNEL_PREFIXES)
 }
@@ -73,7 +73,7 @@ test.describe.serial('modules: all off = core only, enable = live', () => {
 
   test('all-off produces zero module IPC traffic', async () => {
     const { page } = morz
-    // Real activity first â€” the app is alive, not idling.
+    // Real activity first — the app is alive, not idling.
     await waitForTerm(page, PANE_1, PROMPT_RE, 90_000)
     await runInPane(page, PANE_1, '"MORZ_MODULES_$(6*7)"')
     await waitForTerm(page, PANE_1, /MORZ_MODULES_42/)
@@ -81,7 +81,7 @@ test.describe.serial('modules: all off = core only, enable = live', () => {
     await page.waitForTimeout(8_000)
     expect(
       await moduleIpcCalls(page),
-      'a disabled module generated IPC traffic â€” its sync registration is not gated'
+      'a disabled module generated IPC traffic — its sync registration is not gated'
     ).toEqual([])
   })
 

@@ -74,6 +74,12 @@ export async function launchMorz(opts?: {
   env['MORZ_USER_DATA'] = appDataDir
   Object.assign(env, opts?.env)
   env['MORZ_MODULES'] ??= 'all' // w15/modules-core (see doc comment above)
+  // w15/start-screen — legacy specs seed their own layout and expect the shell;
+  // the launcher would replace that layout with fresh panes. Specs that drive
+  // the launcher pass showStartScreen and opt back in.
+  if (opts?.showStartScreen !== true && opts?.skipStartScreen !== false) {
+    env['MORZ_START_SCREEN'] ??= 'off'
+  }
 
   const app = await _electron.launch({
     executablePath: ELECTRON_EXE,

@@ -1,4 +1,4 @@
-﻿import { useEffect } from 'react'
+import { useEffect } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { IconLock, IconX } from '@tabler/icons-react'
 import { MODULES, type ModuleId } from '@shared/modules'
@@ -7,7 +7,7 @@ import { springs } from '@/lib/springs'
 import { useModeStore } from '@/store/modeStore'
 import { useModulesStore } from '@/store/modulesStore'
 
-/** Always-on surfaces â€” shown locked so "core vs module" stays legible. */
+/** Always-on surfaces — shown locked so "core vs module" stays legible. */
 const CORE_SURFACES = ['Terminals', 'Explorer', 'IDE', 'Spaces', 'Settings']
 
 const MODULE_HINT: Record<ModuleId, string> = {
@@ -30,7 +30,7 @@ interface ModuleDrawerProps {
 }
 
 /*
- * Module drawer (w15/modules-core) â€” the one place modules are switched on and
+ * Module drawer (w15/modules-core) — the one place modules are switched on and
  * off. Reachable from the shell's `+` affordance and the Ctrl-K
  * `module: enable/disable <name>` actions.
  */
@@ -115,7 +115,7 @@ export function ModuleSettingsList(): JSX.Element {
                 className="pb-2 text-[10px] uppercase tracking-wider"
                 style={{ color: colors.quartzDim }}
               >
-                Core â€” always on
+                Core — always on
               </p>
               <div className="flex flex-wrap gap-1.5">
                 {CORE_SURFACES.map((label) => (

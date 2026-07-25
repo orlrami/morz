@@ -66,7 +66,7 @@ test.describe.serial('premium shell chrome (w15/shell-layout)', () => {
     await expect(page.getByTestId('stage-header')).toContainText('Commit')
 
     await rail.getByRole('button', { name: 'Add modules' }).click()
-    const drawer = page.getByRole('dialog', { name: 'Module drawer' })
+    const drawer = page.getByTestId('module-drawer')
     await expect(drawer).toBeVisible()
     await drawer.getByRole('checkbox', { name: 'Module Commit' }).uncheck()
 
@@ -125,3 +125,4 @@ test.describe.serial('premium shell chrome (w15/shell-layout)', () => {
     await expect(footer.getByRole('button', { name: /^Notifications/ })).toBeVisible()
   })
 })
+

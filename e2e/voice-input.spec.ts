@@ -15,6 +15,8 @@ test.describe('external keyboard and dictation input', () => {
 
   test('lands injected keystrokes in every Morz text field', async () => {
     const { page } = morz
+    // w15/shell-layout — the orchestrator (and its Goal field) is dial-owned.
+    await page.getByRole('button', { name: 'Toggle orchestrator' }).click()
     const goal = page.getByRole('textbox', { name: 'Goal' })
 
     await goal.focus()
@@ -137,3 +139,5 @@ test.describe('external keyboard and dictation input', () => {
     await expect(page.getByRole('dialog', { name: 'Command palette' })).toBeVisible()
   })
 })
+
+

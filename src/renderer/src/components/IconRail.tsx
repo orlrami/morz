@@ -1,4 +1,4 @@
-﻿import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   IconFolders,
   IconGitCommit,
@@ -15,10 +15,11 @@ import {
 import { MODULES, type ModuleId } from '@shared/modules'
 import { colors } from '@/lib/tokens'
 import { useModulesStore } from '@/store/modulesStore'
+import { useSlotsStore } from '@/store/slotsStore' // w15/integration-slots
 import { ModuleDrawer } from './ModuleDrawer'
 
 /*
- * w15/shell-layout â€” 56px icon rail, the shell's only view switcher.
+ * w15/shell-layout — 56px icon rail, the shell's only view switcher.
  * Groups: CORE (Terminals, Explorer toggle) / MODULES (enabled modules with a
  * center view, from modulesStore) / bottom `+` (module drawer) + Settings.
  * Active view = bronze left bar + card tint. Buttons keep role="tab" with the
@@ -56,8 +57,17 @@ interface IconRailProps {
   onToggleExplorer(): void
 }
 
+/* w15/integration-slots — the rail drops a surface only when another provider
+ * owns it (lazygit/gitui for git, an external service for review). */
+function slotOwned(view: RailView, slots: { git: string; review: string }): boolean {
+  if (view === 'commit') return slots.git === 'terminal' || slots.git === 'morz-commit'
+  if (view === 'review') return slots.review === 'off' || slots.review === 'morz-reviewer'
+  return true
+}
+
 export function IconRail({ view, onSelectView, explorerOpen, onToggleExplorer }: IconRailProps): JSX.Element {
   const enabled = useModulesStore((s) => s.enabled)
+  const slots = useSlotsStore((s) => s.choices)
   const [drawerOpen, setDrawerOpen] = useState(false)
 
   return (
@@ -89,7 +99,7 @@ export function IconRail({ view, onSelectView, explorerOpen, onToggleExplorer }:
 
         <RailDivider />
 
-        {MODULE_VIEWS.filter((m) => enabled[m.module]).map((m) => (
+        {MODULE_VIEWS.filter((m) => enabled[m.module] && slotOwned(m.view, slots)).map((m) => (
           <RailTab
             key={m.view}
             label={m.label}
@@ -194,5 +204,6 @@ function RailButton({
   )
 }
 
-/* w15 integration â€” the rail's `+` opens the real ModuleDrawer (w15/modules-core). */
+/* w15 integration — the rail's `+` opens the real ModuleDrawer (w15/modules-core). */
+
 

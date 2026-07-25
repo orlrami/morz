@@ -1,5 +1,5 @@
-﻿/*
- * Module registry contract (0.0.5, wave-15 slice 1) â€” THE shared contract of
+/*
+ * Module registry contract (0.0.5, wave-15 slice 1) — THE shared contract of
  * the wave: shell rail, drawer, onboarding, settings, and gating all derive
  * from this file. Core surfaces (terminals, explorer, ide-overlay, spaces,
  * settings) are always on and intentionally NOT listed here.
@@ -60,7 +60,7 @@ export const ModulesApi = {
   set: 'modules:set' // ({id, on}) => Promise<Record<ModuleId, boolean>>  persisted, returns full map
 } as const
 
-/** window.morzModules â€” exposed by the preload. */
+/** window.morzModules — exposed by the preload. */
 export interface ModulesBridge {
   get(): Promise<Record<ModuleId, boolean>>
   set(id: ModuleId, on: boolean): Promise<Record<ModuleId, boolean>>

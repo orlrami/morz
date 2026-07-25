@@ -82,7 +82,9 @@ export default function App(): JSX.Element {
       // between a live/restorable PTY session and its shell surface. With
       // nothing to restore there is no shell to go "straight" to, so both
       // preferences land on the launcher.
-      setSurface(hasRestorableSession(saved) ? 'shell' : 'start')
+      const launcherDisabled = (window as unknown as { morzStartScreenDisabled?: boolean })
+        .morzStartScreenDisabled
+      setSurface(launcherDisabled || hasRestorableSession(saved) ? 'shell' : 'start')
     })
     return () => {
       cancelled = true
