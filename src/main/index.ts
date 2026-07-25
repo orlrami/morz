@@ -867,6 +867,11 @@ app.on('browser-window-created', (_e, win) => {
 })
 // end w13/dispatch-visible
 
+// w15/modules-core — append-only module registry persistence.
+import { registerModulesIpc } from './services/modules'
+app.whenReady().then(() => registerModulesIpc())
+// end w15/modules-core
+
 // w14/runs-clear — append-only validated run-history handlers.
 import {
   RunHistoryApi as RunHistoryChannels,
