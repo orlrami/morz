@@ -3,6 +3,7 @@
 import type { MorzApi } from '@shared/ipc'
 import type { SlotsBridge, SlotsTestBridge } from '@shared/slots'
 import type { ModulesBridge } from '@shared/modules'
+import type { MorzOnboardingApi } from '@shared/onboarding'
 
 export {}
 
@@ -16,5 +17,6 @@ declare global {
     morzModules?: ModulesBridge
     /** E2E-only synchronous module seam. Never published in production. */
     morzContextE2eEnabled?: boolean
+    morzOnboarding: MorzOnboardingApi
   }
 }
