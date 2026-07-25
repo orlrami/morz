@@ -1,6 +1,7 @@
 import { isAbsolute, normalize } from 'path'
 import { BrowserWindow, dialog, type IpcMain } from 'electron'
 import { DialogApi } from '../../shared/ipc'
+import { authorizeContextSpaceRoot } from './context-space-authority'
 
 function e2eFolder(): string | null {
   if (process.env.MORZ_E2E !== '1') return null
@@ -10,7 +11,11 @@ function e2eFolder(): string | null {
 
 export function registerDialogIpc(ipcMain: IpcMain): void {
   ipcMain.handle(DialogApi.pickFolder, async (event): Promise<string | null> => {
-    if (process.env.MORZ_E2E === '1') return e2eFolder()
+    if (process.env.MORZ_E2E === '1') {
+      const fixture = e2eFolder()
+      if (fixture) await authorizeContextSpaceRoot(fixture)
+      return fixture
+    }
 
     const parent = BrowserWindow.fromWebContents(event.sender)
     const options: Electron.OpenDialogOptions = {
@@ -22,6 +27,7 @@ export function registerDialogIpc(ipcMain: IpcMain): void {
       : await dialog.showOpenDialog(options)
     if (result.canceled) return null
     const root = result.filePaths[0]
-    return root && isAbsolute(root) ? normalize(root) : null
+    if (!root || !isAbsolute(root)) return null
+    return authorizeContextSpaceRoot(normalize(root))
   })
 }

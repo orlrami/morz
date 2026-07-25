@@ -20,7 +20,8 @@ const MODULE_HINT: Record<ModuleId, string> = {
   workshop: 'Skills, MCP servers, plugins, models',
   pulse: 'Scheduled daily brief',
   voice: 'Push-to-talk dictation (local Whisper)',
-  obsidian: 'Vault read/search and ADR write'
+  obsidian: 'Vault read/search and ADR write',
+  context: 'CLAUDE.md / AGENTS.md / STATUS.md across your spaces'
 }
 
 interface ModuleDrawerProps {

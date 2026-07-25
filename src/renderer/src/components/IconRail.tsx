@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+﻿import { useEffect, useRef, useState } from 'react'
 import {
   IconFolders,
   IconGitCommit,
@@ -7,6 +7,7 @@ import {
   IconSettings,
   IconShieldCheck,
   IconSquareRoundedPlus,
+  IconFileText,
   IconTerminal2,
   IconTopologyStar3,
   IconWorld
@@ -17,7 +18,7 @@ import { useModulesStore } from '@/store/modulesStore'
 import { ModuleDrawer } from './ModuleDrawer'
 
 /*
- * w15/shell-layout — 56px icon rail, the shell's only view switcher.
+ * w15/shell-layout â€” 56px icon rail, the shell's only view switcher.
  * Groups: CORE (Terminals, Explorer toggle) / MODULES (enabled modules with a
  * center view, from modulesStore) / bottom `+` (module drawer) + Settings.
  * Active view = bronze left bar + card tint. Buttons keep role="tab" with the
@@ -32,6 +33,7 @@ export type RailView =
   | 'browser'
   | 'organizer'
   | 'sessions'
+  | 'context'
   | 'settings'
   | 'workshop'
 
@@ -43,6 +45,7 @@ const MODULE_VIEWS: { module: ModuleId; view: RailView; label: string; icon: typ
   { module: 'browser', view: 'browser', label: 'Browser', icon: IconWorld },
   { module: 'organizer', view: 'organizer', label: 'Organizer', icon: IconFolders },
   { module: 'sessions', view: 'sessions', label: 'Sessions', icon: IconHistory },
+  { module: 'context', view: 'context', label: 'Context', icon: IconFileText },
   { module: 'workshop', view: 'workshop', label: 'Workshop', icon: IconSquareRoundedPlus }
 ]
 
@@ -191,4 +194,5 @@ function RailButton({
   )
 }
 
-/* w15 integration — the rail's `+` opens the real ModuleDrawer (w15/modules-core). */
+/* w15 integration â€” the rail's `+` opens the real ModuleDrawer (w15/modules-core). */
+

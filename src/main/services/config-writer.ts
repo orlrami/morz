@@ -1,15 +1,17 @@
 import { createHash, randomUUID } from 'node:crypto'
 import {
   copyFile,
+  lstat,
   mkdir,
   open,
   readFile,
+  realpath,
   stat,
   unlink
 } from 'node:fs/promises'
 import { constants, existsSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import type { IpcMain } from 'electron'
 import { createTwoFilesPatch } from 'diff'
 import { applyEdits, modify, parse as parseJsonc, type ParseError } from 'jsonc-parser'
@@ -48,6 +50,20 @@ export interface ApplyResult {
   backupPath: string
 }
 
+export interface FileProposal {
+  proposalId: string
+  hash: string
+  path: string
+  label: string
+  unifiedDiff: string
+}
+
+export interface FileApplyResult {
+  path: string
+  backupPath: string | null
+  created: boolean
+}
+
 export type ConfigWriterErrorCode =
   | 'CONFIG_CHANGED'
   | 'CONFIG_INVALID'
@@ -78,6 +94,15 @@ interface StableFile {
   hash: string
 }
 
+interface StoredFileProposal extends FileProposal {
+  oldContent: string
+  newContent: string
+  oldHash: string
+  mtimeMs: number
+  existed: boolean
+  root: string | null
+}
+
 interface ConfigWriterOptions {
   paths?: ConfigWriterPaths
   /** w15/model-choice — where each CLI's MODEL default lives (claude's model
@@ -96,6 +121,14 @@ export interface ConfigWriter {
    * default model key. NEVER writes; apply() is the only write path. */
   proposeModel(target: ConfigTarget, model: string): Promise<ConfigProposal>
   apply(proposalId: string): Promise<ApplyResult>
+  proposeFile(
+    path: string,
+    newContent: string,
+    label: string,
+    expectedContent?: string,
+    root?: string
+  ): Promise<FileProposal>
+  applyFile(proposalId: string): Promise<FileApplyResult>
 }
 
 const TARGETS: ConfigTarget[] = ['claude', 'codex', 'opencode']
@@ -303,12 +336,72 @@ async function stableRead(path: string): Promise<StableFile> {
   return { content, mtimeMs: after.mtimeMs, hash: sha256(content) }
 }
 
+async function stableReadOptional(path: string): Promise<StableFile & { existed: boolean }> {
+  try {
+    return { ...(await stableRead(path)), existed: true }
+  } catch (error) {
+    if (error instanceof ConfigWriterError && error.code === 'CONFIG_NOT_FOUND') {
+      return { content: '', mtimeMs: 0, hash: sha256(''), existed: false }
+    }
+    throw error
+  }
+}
+
 function timestamp(date: Date): string {
   return date.toISOString().replace(/[-:.]/g, '')
 }
 
+function isContained(root: string, path: string): boolean {
+  const fromRoot = relative(root, path)
+  return fromRoot === '' || (!fromRoot.startsWith('..') && !isAbsolute(fromRoot))
+}
+
+/**
+ * Generic file proposals are main-process-only, but Context Hub also supplies
+ * a Space root so this writer can enforce the filesystem boundary at proposal
+ * and apply time. Existing links are rejected instead of followed: otherwise
+ * a docs/ junction could redirect a seemingly in-Space write elsewhere.
+ */
+async function assertSafeFilePath(rootInput: string, pathInput: string): Promise<string> {
+  if (!isAbsolute(rootInput)) {
+    throw new ConfigWriterError('INVALID_INSTALL_SPEC', 'File proposal root must be absolute')
+  }
+  const root = await realpath(rootInput)
+  const path = resolve(pathInput)
+  if (!isContained(root, path) || path === root) {
+    throw new ConfigWriterError('INVALID_INSTALL_SPEC', 'File proposal escaped its Space root')
+  }
+
+  const fromRoot = relative(root, path)
+  let current = root
+  for (const segment of fromRoot.split(/[\\/]/).filter(Boolean)) {
+    current = join(current, segment)
+    try {
+      const info = await lstat(current)
+      if (info.isSymbolicLink()) {
+        throw new ConfigWriterError(
+          'INVALID_INSTALL_SPEC',
+          `File proposal crosses a symbolic link or junction: ${current}`
+        )
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') break
+      throw error
+    }
+  }
+
+  try {
+    const canonical = await realpath(path)
+    if (!isContained(root, canonical)) {
+      throw new ConfigWriterError('INVALID_INSTALL_SPEC', 'File proposal escaped its Space root')
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+  }
+  return root
+}
+
 async function atomicReplace(path: string, content: string, mode: number): Promise<void> {
-  await mkdir(dirname(path), { recursive: true })
   const tempPath = `${path}.morz-tmp-${process.pid}-${randomUUID()}`
   const handle = await open(tempPath, 'wx', mode)
   try {
@@ -324,12 +417,33 @@ async function atomicReplace(path: string, content: string, mode: number): Promi
   }
 }
 
+async function atomicCreate(
+  path: string,
+  content: string,
+  mode = 0o600,
+  validate?: () => Promise<void>
+): Promise<void> {
+  await mkdir(dirname(path), { recursive: true })
+  await validate?.()
+  const handle = await open(path, 'wx', mode)
+  let complete = false
+  try {
+    await handle.writeFile(content, 'utf8')
+    await handle.sync()
+    complete = true
+  } finally {
+    await handle.close()
+    if (!complete) await unlink(path).catch(() => undefined)
+  }
+}
+
 export function createConfigWriter(options: ConfigWriterOptions = {}): ConfigWriter {
   const paths = options.paths ?? defaultPaths(options)
   // w15/model-choice — model keys live in different files than MCP entries.
   const modelPaths = options.modelPaths ?? defaultModelPaths(options, paths)
   const now = options.now ?? (() => new Date())
   const proposals = new Map<string, StoredProposal>()
+  const fileProposals = new Map<string, StoredFileProposal>()
 
   function storeProposal(
     target: ConfigTarget,
@@ -458,6 +572,144 @@ export function createConfigWriter(options: ConfigWriterOptions = {}): ConfigWri
       await atomicReplace(proposal.path, proposal.newContent, sourceStat.mode)
       proposals.delete(proposalId)
       return { target: proposal.target, path: proposal.path, backupPath }
+    },
+
+    async proposeFile(
+      path: string,
+      newContent: string,
+      label: string,
+      expectedContent?: string,
+      root?: string
+    ): Promise<FileProposal> {
+      if (!isAbsolute(path) || path.length > 32_768) {
+        throw new ConfigWriterError('INVALID_INSTALL_SPEC', 'File proposal path must be absolute')
+      }
+      if (typeof newContent !== 'string' || newContent.length > 2 * 1024 * 1024) {
+        throw new ConfigWriterError('INVALID_INSTALL_SPEC', 'File proposal content is invalid')
+      }
+      if (typeof label !== 'string' || !label.trim() || label.length > 500) {
+        throw new ConfigWriterError('INVALID_INSTALL_SPEC', 'File proposal label is invalid')
+      }
+
+      const canonicalRoot = root === undefined ? null : await assertSafeFilePath(root, path)
+      const source = await stableReadOptional(path)
+      if (expectedContent !== undefined && source.content !== expectedContent) {
+        throw new ConfigWriterError(
+          'CONFIG_CHANGED',
+          `File changed while preparing proposal; refresh before retrying: ${path}`
+        )
+      }
+      const proposalId = randomUUID()
+      const hash = sha256(`file\0${path}\0${source.hash}\0${newContent}`)
+      const proposal: StoredFileProposal = {
+        proposalId,
+        hash,
+        path,
+        label: label.trim(),
+        unifiedDiff: createTwoFilesPatch(
+          source.existed ? path : '/dev/null',
+          path,
+          source.content,
+          newContent,
+          'before',
+          'after'
+        ),
+        oldContent: source.content,
+        newContent,
+        oldHash: source.hash,
+        mtimeMs: source.mtimeMs,
+        existed: source.existed,
+        root: canonicalRoot
+      }
+      fileProposals.set(proposalId, proposal)
+      while (fileProposals.size > MAX_PROPOSALS) {
+        fileProposals.delete(fileProposals.keys().next().value!)
+      }
+      return {
+        proposalId: proposal.proposalId,
+        hash: proposal.hash,
+        path: proposal.path,
+        label: proposal.label,
+        unifiedDiff: proposal.unifiedDiff
+      }
+    },
+
+    async applyFile(proposalId: string): Promise<FileApplyResult> {
+      const proposal = fileProposals.get(proposalId)
+      if (!proposal) {
+        throw new ConfigWriterError('PROPOSAL_NOT_FOUND', 'File proposal is missing or was already applied')
+      }
+
+      if (!proposal.existed) {
+        if (proposal.root) await assertSafeFilePath(proposal.root, proposal.path)
+        try {
+          await stat(proposal.path)
+          fileProposals.delete(proposalId)
+          throw new ConfigWriterError(
+            'CONFIG_CHANGED',
+            `File appeared after proposal; re-propose before applying: ${proposal.path}`
+          )
+        } catch (error) {
+          if (error instanceof ConfigWriterError) throw error
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+        }
+        try {
+          await atomicCreate(
+            proposal.path,
+            proposal.newContent,
+            0o600,
+            proposal.root
+              ? async () => {
+                  await assertSafeFilePath(proposal.root!, proposal.path)
+                }
+              : undefined
+          )
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+            fileProposals.delete(proposalId)
+            throw new ConfigWriterError(
+              'CONFIG_CHANGED',
+              `File appeared while applying proposal; re-propose before applying: ${proposal.path}`
+            )
+          }
+          throw error
+        }
+        fileProposals.delete(proposalId)
+        return { path: proposal.path, backupPath: null, created: true }
+      }
+
+      if (proposal.root) await assertSafeFilePath(proposal.root, proposal.path)
+      const source = await stableRead(proposal.path)
+      if (
+        source.mtimeMs !== proposal.mtimeMs ||
+        source.hash !== proposal.oldHash ||
+        source.content !== proposal.oldContent
+      ) {
+        fileProposals.delete(proposalId)
+        throw new ConfigWriterError(
+          'CONFIG_CHANGED',
+          `File changed after proposal; re-propose before applying: ${proposal.path}`
+        )
+      }
+
+      const sourceStat = await stat(proposal.path)
+      const backupPath = `${proposal.path}.morz-backup-${timestamp(now())}`
+      if (proposal.root) await assertSafeFilePath(proposal.root, proposal.path)
+      await copyFile(proposal.path, backupPath, constants.COPYFILE_EXCL)
+      const backupHash = sha256(await readFile(backupPath, 'utf8'))
+      const finalStat = await stat(proposal.path)
+      if (backupHash !== proposal.oldHash || finalStat.mtimeMs !== proposal.mtimeMs) {
+        fileProposals.delete(proposalId)
+        throw new ConfigWriterError(
+          'CONFIG_CHANGED',
+          `File changed while backing up; re-propose before applying: ${proposal.path}`
+        )
+      }
+
+      if (proposal.root) await assertSafeFilePath(proposal.root, proposal.path)
+      await atomicReplace(proposal.path, proposal.newContent, sourceStat.mode)
+      fileProposals.delete(proposalId)
+      return { path: proposal.path, backupPath, created: false }
     }
   }
 }

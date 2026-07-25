@@ -14,6 +14,7 @@ import { BrowserPanel } from './BrowserPanel'
 import { SettingsPanel, type SettingsTab } from './SettingsPanel'
 import { WorkshopPanel } from './WorkshopPanel'
 import { SessionsPanel } from './SessionsPanel'
+import { ContextHubPanel } from './ContextHubPanel' // w15/context-hub
 // w6/organizer-ui
 import { OrganizerPanel } from './OrganizerPanel'
 import { ToastHost } from './Toast'
@@ -63,7 +64,8 @@ const VIEWS: { id: CenterView; label: string }[] = [
   { id: 'dag', label: 'Waves' },
   { id: 'browser', label: 'Browser' },
   { id: 'organizer', label: 'Organizer' },
-  { id: 'sessions', label: 'Sessions' }
+  { id: 'sessions', label: 'Sessions' },
+  { id: 'context', label: 'Context' }
 ]
 
 const VIEW_TITLES: Record<CenterView, string> = {
@@ -80,6 +82,7 @@ const VIEW_MODULE: Partial<Record<CenterView, ModuleId>> = {
   browser: 'browser',
   organizer: 'organizer',
   sessions: 'sessions',
+  context: 'context',
   workshop: 'workshop'
 }
 
@@ -781,6 +784,8 @@ export function Shell(): JSX.Element {
           {view === 'organizer' && <OrganizerPanel />}
           {/* w11/sessions */}
           {view === 'sessions' && <SessionsPanel />}
+          {/* w15/context-hub */}
+          {view === 'context' && modulesEnabled.context && <ContextHubPanel />}
           {view === 'settings' && (
             <SettingsPanel
               key={settingsRevision} // w11/settings-ux: reset only for an explicit settings open
@@ -1048,4 +1053,5 @@ function LanePaneSlot({ pane, manual }: { pane: PaneDef; manual: boolean }): JSX
     </section>
   )
 }
+
 

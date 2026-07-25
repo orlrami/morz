@@ -1,14 +1,14 @@
-/*
+﻿/*
  * Morz shared IPC + event contract (0.0.1).
- * THE coordination point for parallel work — every module codes against this.
+ * THE coordination point for parallel work â€” every module codes against this.
  * Owner: Agent 1 (Backend). Others import types + channel names; do not redefine.
  *
- * Transport: hot PTY data flows renderer↔PTY-host over a MessagePort (see
+ * Transport: hot PTY data flows rendererâ†”PTY-host over a MessagePort (see
  * PTY_PORT_CHANNEL). Everything else is request/response over ipcRenderer.invoke
  * or push events over ipcRenderer.on, exposed on window.morz.* by the preload.
  */
 
-/* ── PTY ─────────────────────────────────────────────────────── */
+/* â”€â”€ PTY â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 export interface TerminalSpawnOpts {
   paneId: string
   shell?: string // 'pwsh' | 'cmd' | 'wsl' | absolute path; default = user's shell
@@ -25,29 +25,29 @@ export type PtyRendererMsg =
   | ({ type: 'exit' } & PtyExitMsg)
   | ({ type: 'tui' } & PtyTuiMsg)
 /**
- * Every message that travels over the PTY MessagePort (renderer↔PTY-host).
+ * Every message that travels over the PTY MessagePort (rendererâ†”PTY-host).
  * Flow control: host pauses a PTY when unacked bytes to the renderer exceed a
  * high watermark; renderer sends `ack` after xterm has consumed ~5k chars.
  */
 export type PtyPortMsg =
-  | ({ type: 'write' } & PtyDataMsg) // renderer→host: keystrokes
-  | { type: 'ack'; paneId: string; bytes: number } // renderer→host: flow-control ack
-  | { type: 'attach'; paneId: string } // renderer→host: replay scrollback after window reopen
+  | ({ type: 'write' } & PtyDataMsg) // rendererâ†’host: keystrokes
+  | { type: 'ack'; paneId: string; bytes: number } // rendererâ†’host: flow-control ack
+  | { type: 'attach'; paneId: string } // rendererâ†’host: replay scrollback after window reopen
   | PtyRendererMsg
-/** (legacy) MessagePort channel — kept for compatibility; PTY data now relays through main. */
+/** (legacy) MessagePort channel â€” kept for compatibility; PTY data now relays through main. */
 export const PTY_PORT_CHANNEL = 'morz:pty-port'
 export const PtyApi = {
   spawn: 'pty:spawn', // (TerminalSpawnOpts) => Promise<{ok:boolean}>
-  write: 'pty:write', // ({paneId, data}) renderer→main→host keystrokes
+  write: 'pty:write', // ({paneId, data}) rendererâ†’mainâ†’host keystrokes
   ack: 'pty:ack', // ({paneId, bytes}) flow-control ack
   attach: 'pty:attach', // ({paneId}) replay scrollback after reopen
   resize: 'pty:resize', // ({paneId, cols, rows})
   kill: 'pty:kill', // ({paneId})
   list: 'pty:list', // () => Promise<string[]> live paneIds (for reattach)
-  data: 'pty:data' // push main→renderer: data | exit | TUI state (tagged)
+  data: 'pty:data' // push mainâ†’renderer: data | exit | TUI state (tagged)
 } as const
 
-/* ── Session (Slice 2) ───────────────────────────────────────── */
+/* â”€â”€ Session (Slice 2) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 export interface SessionSnapshot {
   layout: unknown // dockview serialized layout (opaque here)
   panes: { paneId: string; cwd: string; shell: string; scrollback: string }[]
@@ -57,7 +57,7 @@ export const SessionApi = {
   load: 'session:load' // () => Promise<SessionSnapshot | null>
 } as const
 
-/* ── FileService (Slice 3) — owner: Agent 3 ──────────────────── */
+/* â”€â”€ FileService (Slice 3) â€” owner: Agent 3 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 export type Eol = 'lf' | 'crlf'
 export interface FileReadResult { content: string; mtimeMs: number; eol: Eol; binary: boolean }
 export type FileSaveResult = { ok: true; mtimeMs: number } | { ok: false; conflict: true; mtimeMs: number }
@@ -67,10 +67,10 @@ export const FileApi = {
   save: 'file:save', // ({path, content, expectedMtimeMs}) => Promise<FileSaveResult>
   watch: 'file:watch', // (path)
   unwatch: 'file:unwatch', // (path)
-  changed: 'file:changed' // push event → FileChangedMsg
+  changed: 'file:changed' // push event â†’ FileChangedMsg
 } as const
 
-/* ── GitService (Slice 4) — owner: Agent 4 ───────────────────── */
+/* â”€â”€ GitService (Slice 4) â€” owner: Agent 4 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 export interface GitFile { path: string; index: string; worktree: string } // porcelain=v2 XY
 export interface GitStatus {
   cwd: string
@@ -82,10 +82,10 @@ export interface GitStatus {
 export const GitApi = {
   status: 'git:status', // (cwd) => Promise<GitStatus>
   watch: 'git:watch', // (cwd)
-  changed: 'git:changed' // push event → GitStatus
+  changed: 'git:changed' // push event â†’ GitStatus
 } as const
 
-/* ── Claude adapter (Slice 5) — owner: Agent 4 ───────────────── */
+/* â”€â”€ Claude adapter (Slice 5) â€” owner: Agent 4 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 export interface ClaudeStartOpts { agentId: string; cwd: string; resume?: string }
 /** Raw Claude stream-json NDJSON event (system/init | stream_event | assistant | user | result | control_request | api_retry). */
 export type ClaudeEvent = { type: string; [k: string]: unknown }
@@ -95,25 +95,25 @@ export const ClaudeApi = {
   start: 'claude:start', // (ClaudeStartOpts) => Promise<{agentId:string}>
   send: 'claude:send', // ({agentId, text})
   interrupt: 'claude:interrupt', // ({agentId})
-  event: 'claude:event', // push → {agentId, event: ClaudeEvent}
-  permission: 'claude:permission', // push → ClaudePermissionReq ; renderer replies via permissionRespond
+  event: 'claude:event', // push â†’ {agentId, event: ClaudeEvent}
+  permission: 'claude:permission', // push â†’ ClaudePermissionReq ; renderer replies via permissionRespond
   permissionRespond: 'claude:permission-respond' // (ClaudePermissionResp)
 } as const
 
-/* ── FsService (explorer) — owner: Agent 4 ───────────────────── */
+/* â”€â”€ FsService (explorer) â€” owner: Agent 4 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 export interface FsEntry { name: string; kind: 'dir' | 'file'; path: string }
 export const FsApi = {
-  list: 'fs:list' // (dir) => Promise<FsEntry[]> — shallow listing, scoped (no '..'), node_modules/.git hidden
+  list: 'fs:list' // (dir) => Promise<FsEntry[]> â€” shallow listing, scoped (no '..'), node_modules/.git hidden
 } as const
 
-/* ── Editor handoff (Slice 3) ────────────────────────────────── */
+/* â”€â”€ Editor handoff (Slice 3) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 export const EditorApi = {
   detectEditors: 'editor:detect', // () => Promise<('vscode'|'cursor')[]>
   openExternal: 'editor:open-external' // ({editor, path, line, col})
 } as const
 
-/* ── Renderer-only event bus (mitt) — owner: Agent 2 (app-events.ts) ──
- * 'open-file': { path: string; line?: number; col?: number }  // Terminal link / reviewer → IDE pane
+/* â”€â”€ Renderer-only event bus (mitt) â€” owner: Agent 2 (app-events.ts) â”€â”€
+ * 'open-file': { path: string; line?: number; col?: number }  // Terminal link / reviewer â†’ IDE pane
  * 'focus-pane': { paneId: string }
  */
 export type OpenFileEvent = { path: string; line?: number; col?: number }
@@ -152,9 +152,9 @@ export interface MorzApi {
   editor: { detect(): Promise<('vscode' | 'cursor')[]>; openExternal(editor: string, path: string, line?: number, col?: number): void }
 }
 
-/* ── Bus v0 (0.0.2) — w4/bus — owner: Agent 1 ────────────────── */
+/* â”€â”€ Bus v0 (0.0.2) â€” w4/bus â€” owner: Agent 1 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 // Task board + mailbox IPC. Payload shapes come from the FROZEN protocol
-// (src/shared/bus.ts mirrors docs/protocol.md) — imported, never redefined.
+// (src/shared/bus.ts mirrors docs/protocol.md) â€” imported, never redefined.
 import type { AgentId, Message, Part, Task, TaskId, TaskState } from './bus'
 
 export interface BusCreateTaskInput {
@@ -168,7 +168,7 @@ export interface BusArtifactInput {
   files?: { path: string; mtimeMs: number }[]
   commits?: { sha: string; branch: string; message: string }[]
 }
-/** Message minus what Main stamps (id, from, ts) — `from` is NEVER accepted from the sender. */
+/** Message minus what Main stamps (id, from, ts) â€” `from` is NEVER accepted from the sender. */
 export interface BusSendInput {
   to: AgentId
   taskId: TaskId | null
@@ -181,14 +181,14 @@ export interface BusTaskFilter {
 export const BusApi = {
   listTasks: 'bus:list-tasks', // (BusTaskFilter?) => Promise<Task[]>
   createTask: 'bus:create-task', // (BusCreateTaskInput) => Promise<Task>  (state 'proposed')
-  acceptTask: 'bus:accept-task', // (taskId) => Promise<Task>  proposed→accepted
-  withdrawTask: 'bus:withdraw-task', // (taskId) => Promise<Task>  proposed→done (rejected)
+  acceptTask: 'bus:accept-task', // (taskId) => Promise<Task>  proposedâ†’accepted
+  withdrawTask: 'bus:withdraw-task', // (taskId) => Promise<Task>  proposedâ†’done (rejected)
   claimTask: 'bus:claim-task', // ({taskId, agentId, leaseMs?}) => Promise<Task|null>  CAS: null = lost race / deps unmet
-  completeTask: 'bus:complete-task', // ({taskId, agentId, artifact}) => Promise<Task>  working→done
-  blockTask: 'bus:block-task', // ({taskId, agentId, reason}) => Promise<Task>  working→blocked
-  resumeTask: 'bus:resume-task', // ({taskId, agentId, leaseMs?}) => Promise<Task>  blocked→working
+  completeTask: 'bus:complete-task', // ({taskId, agentId, artifact}) => Promise<Task>  workingâ†’done
+  blockTask: 'bus:block-task', // ({taskId, agentId, reason}) => Promise<Task>  workingâ†’blocked
+  resumeTask: 'bus:resume-task', // ({taskId, agentId, leaseMs?}) => Promise<Task>  blockedâ†’working
   send: 'bus:send', // (BusSendInput) => Promise<Message>  mailbox delivery; Main stamps from+ts
-  tasksChanged: 'bus:tasks-changed' // push → Task[]  (full board, on every board write)
+  tasksChanged: 'bus:tasks-changed' // push â†’ Task[]  (full board, on every board write)
 } as const
 
 export interface MorzBusApi {
@@ -207,7 +207,7 @@ export interface MorzBusApi {
 // declaration-merged into MorzApi above; optional because the preload attaches
 // it in its own w4/bus block after the base api literal is built. ONE
 // window.morz.bus = the board API (here) + the blackboard/chip UI API
-// (shared/bus-ipc.ts) — integration unified them.
+// (shared/bus-ipc.ts) â€” integration unified them.
 export interface MorzApi {
   bus?: MorzBusApi & import('./bus-ipc').MorzBusApi
 }
@@ -403,11 +403,11 @@ export interface OrganizerApi {
 }
 export interface MorzApi { organizer: OrganizerApi }
 
-// w5/adapters — APPEND-ONLY block, owner: Agent 4 (wave 5).
+// w5/adapters â€” APPEND-ONLY block, owner: Agent 4 (wave 5).
 // Normalized cross-CLI agent event stream. Every AgentAdapter (claude/codex/agy,
 // src/main/adapters/) maps its native output onto this union; the dispatcher
 // and future lane UIs consume ONLY these shapes. Raw CLI events keep flowing on
-// the existing ClaudeApi.event channel — this union is additive, not a rename.
+// the existing ClaudeApi.event channel â€” this union is additive, not a rename.
 export type AdapterCli = 'claude' | 'codex' | 'agy'
 export type AdapterEvent =
   | { type: 'init'; cli: AdapterCli; sessionId: string | null; model: string | null }
@@ -468,7 +468,7 @@ export interface PlannerBridge {
   approveAmendment(amendmentHash: string): Promise<StoredPlanAmendment>
   discardAmendment(amendmentHash: string): Promise<void>
 }
-// w5/dispatch — approved SpawnPlan → real running team (visible panes)
+// w5/dispatch â€” approved SpawnPlan â†’ real running team (visible panes)
 // SpawnPlan already imported by the w5/planner block above.
 import type { RunState, RunStatus } from './spawn-plan'
 export interface RunSummary {
@@ -483,9 +483,9 @@ export const RunApi = {
   dispatch: 'run:dispatch', // (SpawnPlan) => Promise<{runId}>  re-hash + verify vs stored approved plan
   list: 'run:list', // () => Promise<RunSummary[]>
   status: 'run:status', // (runId) => Promise<RunStatus | null>
-  stop: 'run:stop', // (runId) => Promise<RunStatus>  global Stop — kills every agent's process tree
+  stop: 'run:stop', // (runId) => Promise<RunStatus>  global Stop â€” kills every agent's process tree
   cleanup: 'run:cleanup', // (runId) => Promise<RunStatus>  removes run-tagged worktrees + branches
-  changed: 'run:changed' // push → RunStatus on every run/agent state change
+  changed: 'run:changed' // push â†’ RunStatus on every run/agent state change
 } as const
 export interface MorzRunApi {
   approvePlan(plan: SpawnPlan): Promise<{ planHash: string }>
@@ -647,7 +647,7 @@ export interface CostBridge {
   testTrack?(input: CostTestTrackInput): Promise<void>
 }
 
-// w6/assistant — APPEND-ONLY: bring-your-own assistant proposal source
+// w6/assistant â€” APPEND-ONLY: bring-your-own assistant proposal source
 export type AssistantProviderKind = 'hosted' | 'local'
 export interface AssistantProvider {
   id: string
@@ -677,7 +677,7 @@ export interface AssistantBridge {
   disconnect(): Promise<AssistantConnectionStatus>
   propose(goal: string, spaceRoot: string): Promise<StoredSpawnPlan>
 }
-// w6/pulse — append-only Daily Pulse contract.
+// w6/pulse â€” append-only Daily Pulse contract.
 export type PulseMode = 'manual' | 'assisted' | 'orchestrated'
 export type PulseTrigger = 'scheduled' | 'manual'
 
@@ -744,7 +744,7 @@ export interface PulseBridge {
   testNextFire?(time: string, now: number): Promise<number>
 }
 
-// w8/routing — append-only routing, local-model, and settings contract.
+// w8/routing â€” append-only routing, local-model, and settings contract.
 export type RoutingTarget = 'agy' | 'codex' | 'claude' | 'local'
 
 export interface RoutingRuleMatch {
@@ -809,7 +809,7 @@ export interface RoutingBridge {
   route(taskText: string, options?: RouteOptions): Promise<RouteDecision>
 }
 // end w8/routing
-// w8/voice — append-only local Whisper contract.
+// w8/voice â€” append-only local Whisper contract.
 export interface VoiceSettingsSnapshot {
   configured: boolean
   enginePath: string | null
@@ -831,7 +831,7 @@ export interface VoiceBridge {
   transcribe(audio: Uint8Array): Promise<string>
 }
 
-// w9/spaces — append-only native project-folder picker contract.
+// w9/spaces â€” append-only native project-folder picker contract.
 export const DialogApi = {
   pickFolder: 'dialog:pick-folder'
 } as const
@@ -840,7 +840,7 @@ export interface DialogBridge {
   pickFolder(): Promise<string | null>
 }
 // end w9/spaces
-// w9/browser — append-only embedded browser + CDP element-pick contract.
+// w9/browser â€” append-only embedded browser + CDP element-pick contract.
 export interface BrowserRect {
   x: number
   y: number
@@ -951,7 +951,7 @@ export interface UpdaterBridge {
   onChanged(callback: (snapshot: UpdaterSnapshot) => void): () => void
 }
 
-// w11/commit-ai — append-only commit intelligence contract.
+// w11/commit-ai â€” append-only commit intelligence contract.
 export interface CommitHistoryEntry extends CommitLogEntry {
   diff: string
 }
@@ -986,7 +986,7 @@ export interface CommitAiBridge {
   branchDiffVsBase(root: string): Promise<CommitBranchDiff>
 }
 // end w11/commit-ai
-// w11/lanes-runs — APPEND-ONLY live PTY process-identity contract.
+// w11/lanes-runs â€” APPEND-ONLY live PTY process-identity contract.
 export interface PaneInfo {
   paneId: string
   shell: string
@@ -1003,7 +1003,7 @@ export interface PaneInfoBridge {
   list(): Promise<PaneInfo[]>
 }
 // end w11/lanes-runs
-// w11/sessions — append-only per-project work-session history contract.
+// w11/sessions â€” append-only per-project work-session history contract.
 export type SessionHistorySource = 'morz' | 'claude'
 
 export interface SessionHistoryRecord {
@@ -1038,7 +1038,7 @@ export interface SessionHistoryBridge {
   current(spaceRoot: string): Promise<SessionHistoryRecord | null>
 }
 // end w11/sessions
-// w12/sessions-resume — append-only model, pin, and native resume contract.
+// w12/sessions-resume â€” append-only model, pin, and native resume contract.
 export interface SessionHistoryRecord {
   /** CLI-reported model when the native transcript exposes one. */
   model?: string
@@ -1080,8 +1080,8 @@ export interface SessionResumeTestBridge {
 }
 // end w12/sessions-resume
 
-// w12/orch-engine — append-only planner engine selection contract.
-// w15/planner-fast-default — 'fast' races Claude (Sonnet) against Codex
+// w12/orch-engine â€” append-only planner engine selection contract.
+// w15/planner-fast-default â€” 'fast' races Claude (Sonnet) against Codex
 // (GPT-5.5); first valid plan wins. Default engine for new installs.
 export type PlannerEngine = 'fast' | 'claude' | 'codex' | 'local'
 
@@ -1107,12 +1107,12 @@ export interface StoredSpawnPlan {
 }
 // end w12/orch-engine
 
-// w13/dispatch-visible — append-only dispatched-agent pane contract.
+// w13/dispatch-visible â€” append-only dispatched-agent pane contract.
 // A dispatched pane must be a REAL renderer pane before the CLI launch command
 // is typed: without a mounted xterm session nobody sends flow-control acks, so
 // the PTY pauses at the high watermark and the launch never executes. Main
 // pushes `created` when the dispatcher spawns an agent pane; the renderer adds
-// it to the layout, mounts the terminal, and acks with `attached` — only then
+// it to the layout, mounts the terminal, and acks with `attached` â€” only then
 // does the dispatcher write the launch command.
 export interface RunPaneCreated {
   paneId: string
@@ -1122,8 +1122,8 @@ export interface RunPaneCreated {
   cli: AdapterCli
 }
 export const RunPaneApi = {
-  created: 'run:pane-created', // push main→renderer: RunPaneCreated
-  attached: 'run:pane-attached' // renderer→main: (paneId) after xterm session attach
+  created: 'run:pane-created', // push mainâ†’renderer: RunPaneCreated
+  attached: 'run:pane-attached' // rendererâ†’main: (paneId) after xterm session attach
 } as const
 export interface RunPaneBridge {
   /** Dispatched-pane pushes. Returns an unsubscribe fn. */
@@ -1131,13 +1131,13 @@ export interface RunPaneBridge {
   notifyPaneAttached(paneId: string): void
 }
 // end w13/dispatch-visible
-// w13/planner-schema — non-fatal schema repairs the planner applied to accept
+// w13/planner-schema â€” non-fatal schema repairs the planner applied to accept
 // the plan (role truncation, branch slugify). Surface them; never hide them.
 export interface StoredSpawnPlan {
   warnings?: string[]
 }
 // end w13/planner-schema
-// w14/orch-scoped — APPEND-ONLY: the orchestrator is scoped per Space.
+// w14/orch-scoped â€” APPEND-ONLY: the orchestrator is scoped per Space.
 // Plans, blackboard tasks, and runs carry the space they were created in;
 // list queries accept an optional spaceRoot filter (no arg = unfiltered,
 // so every pre-w14 caller keeps its old behavior).
@@ -1161,7 +1161,7 @@ export interface MorzRunApi {
 }
 // end w14/orch-scoped
 
-// w14/multi-agent-plan — append-only team-proposal contract.
+// w14/multi-agent-plan â€” append-only team-proposal contract.
 // The planner model returns recommendedTeamSize + rationale alongside the
 // SpawnPlan JSON; Main strips them before schema validation and surfaces them
 // on the plan response. Plan requests may carry user team constraints (size /
@@ -1182,7 +1182,7 @@ export interface PlannerBridge {
 }
 // end w14/multi-agent-plan
 
-// w14/runs-clear — append-only history IPC contract.
+// w14/runs-clear â€” append-only history IPC contract.
 // Clearing only changes ledger visibility. It never removes panes, worktrees,
 // branches, or any other resource owned by the explicit cleanup action.
 export type RunHistoryPolicy = 'forever' | 'launch' | 'last-5'
@@ -1206,7 +1206,7 @@ export interface RunHistoryBridge {
 }
 // end w14/runs-clear
 
-// w15/model-choice — append-only per-CLI model selection contract.
+// w15/model-choice â€” append-only per-CLI model selection contract.
 // ModelChoice types live in shared/model-choice.ts; every launch surface
 // (lanes, dispatcher, planner, pulse, opencode) resolves through that engine.
 // cli-config choices route through the config-writer (diff-first, never a
@@ -1241,9 +1241,9 @@ export const ModelChoiceApi = {
   set: 'model-choice:set', // (ModelChoiceSetInput) => Promise<ModelChoiceSnapshot[]>
   clearOverride: 'model-choice:clear-override', // (cli, spaceRoot) => Promise<ModelChoiceSnapshot[]>
   refreshCatalogs: 'model-choice:refresh-catalogs', // () => Promise<void>
-  proposeConfig: 'model-choice:propose-config', // (cli, model) => Promise<ConfigWriterProposal> — diff only, never writes
+  proposeConfig: 'model-choice:propose-config', // (cli, model) => Promise<ConfigWriterProposal> â€” diff only, never writes
   applyConfig: 'model-choice:apply-config', // (proposalId) => Promise<ConfigWriterApplyResult>
-  changed: 'model-choice:changed', // push (no payload — re-list)
+  changed: 'model-choice:changed', // push (no payload â€” re-list)
   testLaneSpawnArgs: 'model-choice:e2e-lane-spawn-args' // MORZ_E2E only
 } as const
 
@@ -1259,3 +1259,7 @@ export interface MorzModelsBridge {
   testLaneSpawnArgs?(): Promise<string[] | null>
 }
 // end w15/model-choice
+// w15/context-hub â€” opt-in context-file matrix + proposal-only writes.
+export interface MorzApi {
+  contextHub?: import('./context-hub').ContextHubBridge
+}

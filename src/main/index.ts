@@ -650,6 +650,51 @@ registerCatalogIpc()
 // w4/config
 import { registerConfigWriterIpc } from './services/config-writer'
 app.whenReady().then(() => registerConfigWriterIpc(ipcMain))
+
+// w15/context-hub — handlers are inert until the opt-in renderer surface invokes scan.
+import { registerContextHubIpc } from './services/context-hub'
+import { listMemory as listContextMemories } from './memory/store'
+import { isContextModuleEnabled } from './services/context-module-gate'
+import { isContextSpaceRootAuthorized } from './services/context-space-authority'
+app.whenReady().then(() =>
+  registerContextHubIpc(ipcMain, {
+    templatesRoot: join(app.getAppPath(), 'resources', 'context-templates'),
+    isEnabled: isContextModuleEnabled,
+    isAuthorizedRoot: async (root) => {
+      if (process.env.MORZ_E2E === '1') {
+        try {
+          const roots = JSON.parse(process.env.MORZ_E2E_CONTEXT_ROOTS ?? '[]') as unknown
+          return Array.isArray(roots) && roots.includes(root)
+        } catch {
+          return false
+        }
+      }
+      return isContextSpaceRootAuthorized(root)
+    },
+    listMemories: (space) =>
+      listContextMemories().filter((entry) =>
+        entry.scope === 'global' ||
+        (entry.scope === 'project' && entry.scopeRef === space.root) ||
+        (entry.scope === 'space' && entry.scopeRef === space.id)
+      ),
+    statusSnapshot: (space) => {
+      const branchResult = spawnSync('git', ['branch', '--show-current'], {
+        cwd: space.root,
+        encoding: 'utf8',
+        windowsHide: true,
+        shell: false
+      })
+      const recentRuns = listContextRuns(space.root).slice(0, 5)
+      return {
+        branch: branchResult.status === 0 ? branchResult.stdout.trim() : '',
+        recentRuns,
+        // Run goals are not verification evidence. Until Morz persists actual
+        // command results, report the absence rather than inferring pass/fail.
+        e2eState: 'Unverified — Morz has no persisted E2E result'
+      }
+    }
+  })
+)
 // w4/obsidian
 import { registerObsidianIpc } from './services/obsidian'
 app.whenReady().then(() => registerObsidianIpc(ipcMain))
@@ -660,7 +705,12 @@ registerOrganizerIpc(ipcMain)
 /* ── w5/dispatch: dispatcher — approved SpawnPlan → worktrees + $PORT +
  * visible PTY panes, with global Stop + cleanup. The PTY bridge is injected
  * because hostRequest/ptyHost live in this module. ── */
-import { registerDispatchIpc, approvePlan, dispatch as dispatchPlan } from './orchestrator/dispatcher'
+import {
+  registerDispatchIpc,
+  approvePlan,
+  dispatch as dispatchPlan,
+  listRuns as listContextRuns
+} from './orchestrator/dispatcher'
 import { RunApi } from '../shared/ipc'
 import type { RunStatus } from '../shared/spawn-plan'
 app.whenReady().then(() =>

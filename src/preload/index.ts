@@ -161,6 +161,42 @@ api.configWriter = {
   apply: (proposalId) => ipcRenderer.invoke(ConfigWriterApi.apply, proposalId)
 }
 
+// w15/context-hub — no scan is sent until the disabled-by-default surface mounts.
+import {
+  ContextHubApi,
+  type ContextHubBridge,
+  type ContextMemoryBlockInput,
+  type ContextSharedBlockInput,
+  type ContextSpaceInput,
+  type ContextStatusBlockInput,
+  type ContextTemplateInput
+} from '../shared/context-hub'
+
+const contextHub: ContextHubBridge = {
+  scan: (spaces: ContextSpaceInput[]) => ipcRenderer.invoke(ContextHubApi.scan, spaces),
+  proposeTemplate: (input: ContextTemplateInput) =>
+    ipcRenderer.invoke(ContextHubApi.proposeTemplate, input),
+  proposeSharedBlock: (input: ContextSharedBlockInput) =>
+    ipcRenderer.invoke(ContextHubApi.proposeSharedBlock, input),
+  proposeMemoryBlock: (input: ContextMemoryBlockInput) =>
+    ipcRenderer.invoke(ContextHubApi.proposeMemoryBlock, input),
+  proposeStatusBlock: (input: ContextStatusBlockInput) =>
+    ipcRenderer.invoke(ContextHubApi.proposeStatusBlock, input),
+  applyProposal: (proposalId: string) =>
+    ipcRenderer.invoke(ContextHubApi.applyProposal, proposalId),
+  ...(process.env.MORZ_E2E === '1'
+    ? { testStats: () => ipcRenderer.invoke(ContextHubApi.testStats) }
+    : {})
+}
+api.contextHub = contextHub
+
+if (process.env.MORZ_E2E === '1') {
+  contextBridge.exposeInMainWorld(
+    'morzContextE2eEnabled',
+    process.env.MORZ_E2E_CONTEXT_ENABLED === '1'
+  )
+}
+
 /* ── w5/dispatch: window.morz.run — approved SpawnPlan → running team.
  * Attached BEFORE exposeInMainWorld (contextBridge snapshots the object at
  * expose time, same constraint the w4/bus block documents). ── */
