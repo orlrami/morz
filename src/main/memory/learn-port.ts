@@ -94,14 +94,16 @@ export function createInMemoryMemoryPort(): InMemoryMemoryPort {
  */
 import {
   listMemoryProposals,
-  proposeMemory,
+  proposeMemoryReconciled,
   resolveMemoryProposal as storeResolveProposal
 } from './index'
 import { MemoryInjection as storeInjection } from './store'
 
 export const memoryPort: MemoryPort = {
   async propose(proposal) {
-    return proposeMemory(proposal)
+    // w15/memory-opset — candidate writes reconcile against same-scope facts
+    // (ADD/UPDATE/DELETE/NOOP). NOOP comes back state 'rejected' with no card.
+    return proposeMemoryReconciled(proposal)
   },
   render(opts) {
     if (process.env.MORZ_MEMORY_STUB === '1') {

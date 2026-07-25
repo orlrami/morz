@@ -4,21 +4,61 @@ import {
   IconCheck,
   IconPencil,
   IconPlus,
+  IconRestore,
   IconSearch,
   IconTrash,
   IconX
 } from '@tabler/icons-react'
-import type { MemoryEntry, MemoryScope } from '@shared/memory'
+import type { MemoryEntry, MemoryOp, MemoryScope } from '@shared/memory'
 import { colors } from '@/lib/tokens'
 import { useMemoryStore } from '@/store/memoryStore'
 
 const SCOPES: MemoryScope[] = ['global', 'project', 'space', 'agent']
+
+/** w15/memory-opset — UPDATE/DELETE approval cards render the op diff. */
+function OpDiff({ op }: { op: MemoryOp }): JSX.Element | null {
+  if (op.kind !== 'update' && op.kind !== 'delete') return null
+  return (
+    <div
+      className="mt-2 rounded-md border p-2 text-[10px] leading-relaxed"
+      style={{ borderColor: 'var(--color-line-strong)' }}
+      aria-label={`${op.kind} details`}
+    >
+      <p
+        className="text-[9px] font-semibold uppercase tracking-[0.1em]"
+        style={{ color: op.kind === 'delete' ? colors.error : colors.bronzeHot }}
+      >
+        {op.kind === 'delete' ? 'Delete existing memory' : 'Update existing memory'}
+        {op.targetId && <span className="ml-1 normal-case tracking-normal" style={{ color: colors.quartzDim }}>#{op.targetId}</span>}
+      </p>
+      {op.old && (
+        <p className="mt-1 line-through" style={{ color: colors.error }}>
+          {op.old.title}
+          {op.old.body ? ` — ${op.old.body.slice(0, 160)}` : ''}
+        </p>
+      )}
+      {op.kind === 'update' && op.next && (
+        <p className="mt-1" style={{ color: colors.done }}>
+          {op.next.title}
+          {op.next.body ? ` — ${op.next.body.slice(0, 160)}` : ''}
+        </p>
+      )}
+      {op.reason && (
+        <p className="mt-1 italic" style={{ color: colors.quartzDim }}>{op.reason}</p>
+      )}
+      <p className="mt-1 text-[9px]" style={{ color: colors.quartzDim }}>
+        The old memory is kept expired and can be restored from this list.
+      </p>
+    </div>
+  )
+}
 
 function EntryCard({ entry }: { entry: MemoryEntry }): JSX.Element {
   const busy = useMemoryStore((state) => state.busy)
   const save = useMemoryStore((state) => state.save)
   const remove = useMemoryStore((state) => state.remove)
   const setEnabled = useMemoryStore((state) => state.setEnabled)
+  const restore = useMemoryStore((state) => state.restore)
   const [editing, setEditing] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [title, setTitle] = useState(entry.title)
@@ -96,19 +136,40 @@ function EntryCard({ entry }: { entry: MemoryEntry }): JSX.Element {
                 <span aria-hidden="true">·</span>
                 <span>{entry.scope}</span>
                 {entry.scopeRef && <span className="max-w-44 truncate normal-case tracking-normal">{entry.scopeRef}</span>}
+                {entry.expiredAt && (
+                  <span
+                    className="rounded-full border px-1.5 py-0.5"
+                    style={{ borderColor: 'rgba(213,106,106,0.45)', color: colors.error }}
+                  >
+                    expired {entry.expiredAt.slice(0, 10)}
+                  </span>
+                )}
               </div>
             </div>
-            <label className="flex min-h-7 cursor-pointer items-center gap-1.5 text-[9.5px]" style={{ color: colors.quartzDim }}>
-              <input
-                type="checkbox"
-                aria-label={`Enable ${entry.title}`}
-                checked={entry.enabled}
+            {entry.expiredAt ? (
+              <button
+                type="button"
+                aria-label={`Restore ${entry.title}`}
                 disabled={isBusy}
-                onChange={(event) => void setEnabled(entry.id, event.target.checked)}
-                className="size-3.5 accent-[#CBA25A]"
-              />
-              {entry.enabled ? 'On' : 'Off'}
-            </label>
+                onClick={() => void restore(entry.id)}
+                className="flex min-h-7 items-center gap-1 rounded-md border px-2 text-[9.5px] disabled:opacity-40"
+                style={{ borderColor: 'var(--color-line-strong)', color: colors.bronzeHot }}
+              >
+                <IconRestore size={11} /> Restore
+              </button>
+            ) : (
+              <label className="flex min-h-7 cursor-pointer items-center gap-1.5 text-[9.5px]" style={{ color: colors.quartzDim }}>
+                <input
+                  type="checkbox"
+                  aria-label={`Enable ${entry.title}`}
+                  checked={entry.enabled}
+                  disabled={isBusy}
+                  onChange={(event) => void setEnabled(entry.id, event.target.checked)}
+                  className="size-3.5 accent-[#CBA25A]"
+                />
+                {entry.enabled ? 'On' : 'Off'}
+              </label>
+            )}
           </div>
           {entry.body && (
             <p className="mt-2 line-clamp-3 whitespace-pre-wrap text-[10px] leading-relaxed" style={{ color: colors.quartzDim }}>
@@ -320,8 +381,22 @@ export function MemorySettings(): JSX.Element {
           <div className="mt-2 space-y-2">
             {pending.map((proposal) => (
               <article key={proposal.id} className="rounded-lg border p-2.5" style={{ background: colors.card, borderColor: 'rgba(203,162,90,0.35)' }}>
-                <p className="text-[11px] font-semibold">{proposal.entry.title}</p>
+                <p className="text-[11px] font-semibold">
+                  {proposal.op && proposal.op.kind !== 'add' && (
+                    <span
+                      className="mr-1.5 rounded-full border px-1.5 py-0.5 text-[8.5px] font-semibold uppercase tracking-[0.08em]"
+                      style={{
+                        borderColor: proposal.op.kind === 'delete' ? 'rgba(213,106,106,0.45)' : 'rgba(203,162,90,0.45)',
+                        color: proposal.op.kind === 'delete' ? colors.error : colors.bronzeHot
+                      }}
+                    >
+                      {proposal.op.kind}
+                    </span>
+                  )}
+                  {proposal.entry.title}
+                </p>
                 {proposal.entry.body && <p className="mt-1 text-[10px] leading-relaxed" style={{ color: colors.quartzDim }}>{proposal.entry.body}</p>}
+                {proposal.op && <OpDiff op={proposal.op} />}
                 <ul className="mt-2 space-y-1 border-l pl-2 text-[9.5px] leading-relaxed" style={{ borderColor: 'var(--color-line-strong)', color: colors.quartzDim }}>
                   {proposal.evidence.map((line, index) => <li key={`${proposal.id}-${index}`}>{line}</li>)}
                 </ul>

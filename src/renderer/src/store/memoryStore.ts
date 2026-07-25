@@ -26,6 +26,7 @@ interface MemoryState {
   remove(id: string): Promise<void>
   setEnabled(id: string, enabled: boolean): Promise<void>
   resolveProposal(id: string, approved: boolean): Promise<void>
+  restore(id: string): Promise<void>
 }
 
 type MemoryWindow = { morz?: { memory?: MorzMemoryApi } }
@@ -184,6 +185,17 @@ export const useMemoryStore = create<MemoryState>((set, get) => ({
     set({ busy: `proposal:${id}`, error: null })
     try {
       await bridge().resolveProposal(id, approved)
+      await get().refresh()
+    } catch (error) {
+      set({ error: errorMessage(error) })
+    } finally {
+      set({ busy: null })
+    }
+  },
+  restore: async (id) => {
+    set({ busy: `restore:${id}`, error: null })
+    try {
+      await bridge().restore(id)
       await get().refresh()
     } catch (error) {
       set({ error: errorMessage(error) })

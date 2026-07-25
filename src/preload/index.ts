@@ -452,6 +452,7 @@ contextBridge.exposeInMainWorld('morzPulse', pulseBridge)
 import {
   MemoryApi as MemoryChannels,
   type MemoryEntry,
+  type MemoryOpAuditRow,
   type MemoryProposal,
   type MemoryScope,
   type MorzMemoryApi
@@ -460,6 +461,8 @@ import {
 type MemoryE2eApi = MorzMemoryApi & {
   testPropose?(proposal: MemoryProposal): Promise<MemoryProposal>
   testRender?(opts: { projectRoot?: string; spaceId?: string; agentId?: string }): Promise<string>
+  testReconcile?(proposal: MemoryProposal): Promise<MemoryProposal>
+  testAudit?(): Promise<MemoryOpAuditRow[]>
 }
 
 const memoryApi: MemoryE2eApi = {
@@ -475,6 +478,7 @@ const memoryApi: MemoryE2eApi = {
   proposals: (): Promise<MemoryProposal[]> => ipcRenderer.invoke(MemoryChannels.proposals),
   resolveProposal: (id: string, approved: boolean): Promise<MemoryProposal> =>
     ipcRenderer.invoke(MemoryChannels.resolveProposal, { id, approved }),
+  restore: (id: string): Promise<MemoryEntry> => ipcRenderer.invoke(MemoryChannels.restore, id),
   onChanged: (callback) => {
     const listener = (): void => callback()
     ipcRenderer.on(MemoryChannels.changed, listener)
@@ -485,6 +489,8 @@ const memoryApi: MemoryE2eApi = {
 if (process.env.MORZ_E2E === '1') {
   memoryApi.testPropose = (proposal) => ipcRenderer.invoke('memory:e2e-propose', proposal)
   memoryApi.testRender = (opts) => ipcRenderer.invoke('memory:e2e-render', opts)
+  memoryApi.testReconcile = (proposal) => ipcRenderer.invoke('memory:e2e-reconcile', proposal)
+  memoryApi.testAudit = () => ipcRenderer.invoke('memory:e2e-audit')
 }
 
 const apiWithMemory = api as MorzApi & { memory: MorzMemoryApi }

@@ -35,6 +35,58 @@ export interface MemoryEntry {
   updatedAt: string
   /** Soft-disable without deleting. */
   enabled: boolean
+  /*
+   * w15/memory-opset — bi-temporal fields (Zep-style, all optional/additive).
+   * valid/invalid describe WORLD truth ("we used X until <date>");
+   * created/expired describe SYSTEM knowledge (soft-expiry keeps the row).
+   */
+  /** When the fact became true in the world (defaults to createdAt). */
+  validAt?: string
+  /** When the fact stopped being true (set when superseded/contradicted). */
+  invalidAt?: string
+  /** Soft-expiry marker — expired rows are kept, auditable, and restorable. */
+  expiredAt?: string
+  /** Provenance: the run/lane that produced this fact. */
+  sourceRunId?: string
+}
+
+/*
+ * w15/memory-opset — mem0-style op-set reconciliation. A candidate write is
+ * classified against same-scope facts as ADD / UPDATE / DELETE / NOOP; the op
+ * object IS the approval payload rendered on the proposal card.
+ */
+export type MemoryOpKind = 'add' | 'update' | 'delete' | 'noop'
+
+export interface MemoryOpSnapshot {
+  title: string
+  body: string
+}
+
+export interface MemoryOp {
+  kind: MemoryOpKind
+  /** Existing entry this op targets (update/delete/noop-duplicate). */
+  targetId?: string
+  /** Target's content at classification time (update/delete diff rendering). */
+  old?: MemoryOpSnapshot
+  /** Candidate content to write (add/update). */
+  next?: MemoryOpSnapshot
+  /** Why (delete/noop). */
+  reason?: string
+}
+
+/** One applied-op audit row (SQLite memory_ops_audit). */
+export interface MemoryOpAuditRow {
+  seq: number
+  op: 'add' | 'update' | 'delete' | 'restore'
+  memoryId: string
+  targetId: string | null
+  oldTitle: string | null
+  oldBody: string | null
+  newTitle: string | null
+  newBody: string | null
+  reason: string | null
+  source: string
+  ts: string
 }
 
 /** A staged write awaiting the user's approval (never auto-applied). */
@@ -46,6 +98,12 @@ export interface MemoryProposal {
   evidence: string[]
   ts: string
   state: 'pending' | 'approved' | 'rejected'
+  /**
+   * w15/memory-opset — how this proposal reconciles against existing facts.
+   * Absent = plain add (pre-opset proposals stay valid). NOOP ops never
+   * become stored proposals (no card).
+   */
+  op?: MemoryOp
 }
 
 export const MemoryApi = {
@@ -59,6 +117,8 @@ export const MemoryApi = {
   proposals: 'memory:proposals', // () => Promise<MemoryProposal[]>
   propose: 'memory:propose', // (proposal) => Promise<MemoryProposal>   main-side producers only
   resolveProposal: 'memory:resolve-proposal', // ({id, approved}) => Promise<MemoryProposal>
+  /** w15/memory-opset — un-expire a soft-expired row (undo for UPDATE/DELETE). */
+  restore: 'memory:restore', // (id) => Promise<MemoryEntry>
   changed: 'memory:changed' // push → void (store or proposals changed)
 } as const
 
@@ -83,5 +143,6 @@ export interface MorzMemoryApi {
   search(query: string, limit?: number): Promise<MemoryEntry[]>
   proposals(): Promise<MemoryProposal[]>
   resolveProposal(id: string, approved: boolean): Promise<MemoryProposal>
+  restore(id: string): Promise<MemoryEntry>
   onChanged(cb: () => void): () => void
 }
