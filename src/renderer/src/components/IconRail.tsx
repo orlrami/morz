@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { motion, useReducedMotion } from 'framer-motion'
 import {
   IconFolders,
   IconGitCommit,
@@ -13,6 +14,7 @@ import {
   IconWorld
 } from '@tabler/icons-react'
 import { MODULES, type ModuleId } from '@shared/modules'
+import { springs } from '@/lib/springs'
 import { colors } from '@/lib/tokens'
 import { useModulesStore } from '@/store/modulesStore'
 import { useSlotsStore } from '@/store/slotsStore' // w15/integration-slots
@@ -38,7 +40,7 @@ export type RailView =
   | 'settings'
   | 'workshop'
 
-/** Modules that own a center view, in rail order. Others (pulse/voice/obsidian) live in Settings. */
+/** Modules that own a center view, in rail order. Others (pulse/obsidian) live in Settings. */
 const MODULE_VIEWS: { module: ModuleId; view: RailView; label: string; icon: typeof IconTerminal2 }[] = [
   { module: 'commit', view: 'commit', label: 'Commit', icon: IconGitCommit },
   { module: 'review', view: 'review', label: 'Review', icon: IconShieldCheck },
@@ -147,6 +149,9 @@ function RailTab({
   active: boolean
   onClick(): void
 }): JSX.Element {
+  /* w16/polish-motion — the bronze active bar glides between tabs
+   * (shared layoutId) on the same layout spring as the rest of the shell. */
+  const reduceMotion = useReducedMotion()
   return (
     <button
       type="button"
@@ -159,7 +164,9 @@ function RailTab({
       style={{ color: active ? colors.quartz : colors.quartzDim }}
     >
       {active && (
-        <span
+        <motion.span
+          layoutId="rail-active-pill"
+          transition={reduceMotion ? { duration: 0 } : springs.layout}
           className="absolute bottom-1.5 left-0 top-1.5 w-[3px] rounded-r"
           style={{ background: colors.bronze }}
           aria-hidden

@@ -151,29 +151,16 @@ export function TitleBar({ onOpenPalette }: TitleBarProps): JSX.Element {
         </div>
       </nav>
 
+      {/* w16/polish-motion — palette = Spotlight: no persistent search bar,
+        * just an icon that opens the same Ctrl-K modal. Nothing expands inline. */}
       <button
         onClick={onOpenPalette}
-        className="flex cursor-pointer items-center gap-2 rounded-[10px] border px-3 py-1.5 text-xs transition-colors hover:border-[rgba(238,230,217,0.25)]"
-        style={
-          {
-            background: colors.page,
-            borderColor: 'var(--color-line-strong)',
-            color: colors.quartzDim,
-            WebkitAppRegion: 'no-drag'
-          } as React.CSSProperties
-        }
+        className="flex cursor-pointer items-center rounded-md p-1.5 transition-colors hover:bg-[#37332B] focus-visible:outline focus-visible:outline-2"
+        style={{ color: colors.quartzDim, ...noDrag }}
         aria-label="Open command palette"
+        title="Search & commands (Ctrl+K)"
       >
-        <IconSearch size={14} stroke={1.5} />
-        Search agents, files, actions
-        <span className="ml-2 flex gap-1">
-          <kbd className="rounded border px-1 text-[10px]" style={{ borderColor: 'var(--color-line-strong)' }}>
-            Ctrl
-          </kbd>
-          <kbd className="rounded border px-1 text-[10px]" style={{ borderColor: 'var(--color-line-strong)' }}>
-            K
-          </kbd>
-        </span>
+        <IconSearch size={15} stroke={1.5} />
       </button>
 
       <div className="flex gap-2 pl-1" aria-hidden>

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import { IconTerminal2, IconRobot, IconColumns, IconX, IconExternalLink } from '@tabler/icons-react'
 import { TitleBar } from './TitleBar'
 import { MorzSignal } from './Brand'
@@ -196,6 +197,7 @@ function layoutFromSnapshot(snap: SessionSnapshot | null): LayoutNode | null {
 /* Morz shell (w15 premium): titlebar / (icon rail | stage | explorer | dock) / statusbar. */
 export function Shell(): JSX.Element {
   const initial = initialFromUrl()
+  const reduceMotion = useReducedMotion() // w16/polish-motion
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [explorerOpen, setExplorerOpen] = useState(initial.explorer)
   /* Orchestrator dock is dial-owned: Manual mounts nothing, Assisted starts
@@ -766,6 +768,17 @@ export function Shell(): JSX.Element {
             )}
           </div>
 
+          {/* w16/polish-motion — fast crossfade between center views: the new
+            * view fades in over ~120ms (no exit pass, so zero layout shift and
+            * terminals never wait on an outgoing animation). */}
+          <motion.div
+            key={view}
+            className="flex min-h-0 min-w-0 flex-1 flex-col"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ duration: reduceMotion ? 0 : 0.12 }}
+            data-testid="center-view"
+          >
           {view === 'terminals' && (
             <div className="flex min-h-0 flex-1" style={{ background: colors.page }}>
                 {!hydrated && (
@@ -812,12 +825,17 @@ export function Shell(): JSX.Element {
             />
           )}
           {view === 'workshop' && <WorkshopPanel />}
+          </motion.div>
         </main>
 
-        {/* right side, in order: Explorer panel, then the dial-owned dock */}
+        {/* right side, in order: Explorer panel, then the dial-owned dock.
+          * w16/polish-motion — AnimatePresence lets the dock's exit slide play;
+          * the Manual gate still mounts NOTHING. */}
         <ExplorerPanel open={explorerOpen} onClose={() => setExplorerOpen(false)} />
 
-        {mode !== 'manual' && orchOpen && <OrchestratorPanel />}
+        <AnimatePresence>
+          {mode !== 'manual' && orchOpen && <OrchestratorPanel />}
+        </AnimatePresence>
       </div>
 
       <StatusBar

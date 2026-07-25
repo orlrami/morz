@@ -16,7 +16,6 @@ import { AssistantSettings } from './AssistantSettings' // w6/assistant
 import { PulseSettings } from './PulseSettings' // w6/pulse
 import { MemorySettings } from './MemorySettings'
 import { RoutingSettings } from './RoutingSettings' // w8/routing
-import { VoiceSettings } from './VoiceSettings'
 import { UpdateSettings } from './UpdateSettings'
 import { ConnectionsSettings } from './ConnectionsSettings' // w11/connections
 import { useConnectionsStore } from '@/store/connectionsStore'
@@ -284,8 +283,6 @@ export function SettingsPanel({ initialTab = 'limits' }: { initialTab?: Settings
                   </div>
                 ))}
               </div>
-              {/* // w8/voice — w15/modules-core */}
-              {modulesEnabled.voice && <VoiceSettings />}
             </div>
           )}
 

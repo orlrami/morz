@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { AnimatePresence, motion } from 'framer-motion'
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import {
   IconAdjustments,
   IconLayoutSidebar,
@@ -54,6 +54,7 @@ function fuzzyMatch(label: string, needle: string): boolean {
  * supplied by Shell so unavailable IPC capabilities never render as commands.
  */
 export function CommandPalette({ open, actions, onClose, onAction }: CommandPaletteProps): JSX.Element {
+  const reduceMotion = useReducedMotion()
   const [query, setQuery] = useState('')
   const [activeIndex, setActiveIndex] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -89,19 +90,24 @@ export function CommandPalette({ open, actions, onClose, onAction }: CommandPale
     <AnimatePresence>
       {open && (
         <motion.div
-          className="absolute inset-0 z-50 flex items-start justify-center pt-[12vh]"
+          className="absolute inset-0 z-50 flex items-start justify-center pt-[28vh]"
           initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0, transition: { duration: 0.12 } }}
-          style={{ background: 'rgba(20,18,12,0.55)', backdropFilter: 'blur(6px)' }}
+          animate={{ opacity: 1, transition: { duration: reduceMotion ? 0 : 0.12 } }}
+          exit={{ opacity: 0, transition: { duration: reduceMotion ? 0 : 0.12 } }}
+          style={{ background: 'rgba(20,18,12,0.45)' }}
           onClick={onClose}
         >
           <motion.div
             role="dialog"
             aria-label="Command palette"
-            initial={{ opacity: 0, y: -28, scale: 0.98 }}
-            animate={{ opacity: 1, y: 0, scale: 1, transition: springs.float }}
-            exit={{ opacity: 0, y: -16, scale: 0.98, transition: { duration: 0.12 } }}
+            initial={{ opacity: 0, y: -16, scale: 0.98 }}
+            animate={{
+              opacity: 1,
+              y: 0,
+              scale: 1,
+              transition: reduceMotion ? { duration: 0 } : springs.float
+            }}
+            exit={{ opacity: 0, y: -10, scale: 0.98, transition: { duration: reduceMotion ? 0 : 0.12 } }}
             className="w-[560px] overflow-hidden rounded-2xl border shadow-2xl"
             style={{ background: colors.panel, borderColor: 'var(--color-line-strong)' }}
             onClick={(event) => event.stopPropagation()}
@@ -163,12 +169,10 @@ export function CommandPalette({ open, actions, onClose, onAction }: CommandPale
               {results.map((action, index) => {
                 const Icon = GROUP_ICON[action.group] ?? IconSparkles
                 const active = index === activeIndex
+                // w16/polish-motion — no per-row stagger: long lists pushed the
+                // animation tail past the 250ms budget. The sheet moves, rows don't.
                 return (
-                  <motion.li
-                    key={action.id}
-                    initial={{ opacity: 0, y: 4 }}
-                    animate={{ opacity: 1, y: 0, transition: { ...springs.snappy, delay: index * 0.015 } }}
-                  >
+                  <li key={action.id}>
                     <button
                       id={`palette-action-${action.id}`}
                       type="button"
@@ -200,7 +204,7 @@ export function CommandPalette({ open, actions, onClose, onAction }: CommandPale
                         </span>
                       )}
                     </button>
-                  </motion.li>
+                  </li>
                 )
               })}
             </ul>

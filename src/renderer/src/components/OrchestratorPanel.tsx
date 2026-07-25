@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { AnimatePresence, motion } from 'framer-motion'
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import { IconClipboardList, IconFlask, IconHandStop, IconSparkles } from '@tabler/icons-react'
 import type { Message, Part, Task, TaskState } from '@shared/bus'
 import type {
@@ -12,9 +12,8 @@ import type {
   StoredSpawnPlan
 } from '@shared/ipc'
 import { colors } from '@/lib/tokens'
-import { staggerContainer, staggerItem } from '@/lib/springs'
+import { springs, staggerContainer, staggerItem } from '@/lib/springs'
 import { useModeStore } from '@/store/modeStore'
-import { useModulesStore } from '@/store/modulesStore' // w15/modules-core
 import { useBusStore, getBus } from '@/store/busStore'
 import { useLaneStore } from '@/store/laneStore'
 import { selectActiveSpace, selectActiveSpaceRoot, useSpaceStore } from '@/store/spaceStore'
@@ -22,7 +21,6 @@ import { AgentPillBar } from './AgentPillBar'
 import { ApprovalChip } from './ApprovalChip'
 import { AmendmentCard, PlanCard } from './PlanCard'
 import { RunsPanel } from './RunsPanel'
-import { VoiceInput } from './VoiceInput'
 import { MorzSignal } from './Brand'
 
 /*
@@ -45,14 +43,20 @@ const STATE_ORDER: TaskState[] = ['working', 'blocked', 'accepted', 'proposed', 
 
 export function OrchestratorPanel(): JSX.Element {
   const mode = useModeStore((s) => s.mode)
+  /* w16/polish-motion — the dock slides in from the right (Shell wraps the
+   * mount in AnimatePresence, so the exit plays too). Transform-only. */
+  const reduceMotion = useReducedMotion()
   return (
-    <aside
+    <motion.aside
+      initial={{ x: 32, opacity: 0 }}
+      animate={{ x: 0, opacity: 1, transition: reduceMotion ? { duration: 0 } : springs.panel }}
+      exit={{ x: 24, opacity: 0, transition: { duration: reduceMotion ? 0 : 0.12 } }}
       className="flex w-[330px] shrink-0 flex-col overflow-hidden border-l"
       style={{ background: colors.panel, borderColor: 'var(--color-line)' }}
       aria-label="Orchestrator"
     >
       {mode === 'manual' ? <ManualNotice /> : <LiveBlackboard showPlanner />}{/* w8/routing */}
-    </aside>
+    </motion.aside>
   )
 }
 
@@ -246,7 +250,6 @@ function getPlannerEngine(): PlannerEngineBridge | undefined {
 
 function PlannerFlow(): JSX.Element {
   const spaceRoot = useSpaceStore(selectActiveSpaceRoot)
-  const voiceOn = useModulesStore((s) => s.enabled.voice) // w15/modules-core
   const [goal, setGoal] = useState('')
   const goalComposerRef = useRef<HTMLTextAreaElement>(null)
   // w12/orch-engine
@@ -414,7 +417,7 @@ function PlannerFlow(): JSX.Element {
         }}
         className="flex items-end gap-1.5"
       >
-        {/* // w8/voice */}<div className="flex min-w-0 flex-1 items-end gap-1">
+        <div className="flex min-w-0 flex-1 items-end gap-1">
           <textarea
             ref={goalComposerRef}
             aria-label="Goal"
@@ -436,16 +439,6 @@ function PlannerFlow(): JSX.Element {
               '--tw-ring-color': colors.bronze
             } as React.CSSProperties}
           />
-          {/* w15/modules-core — dictation belongs to the voice module */}
-          {voiceOn && (
-            <VoiceInput
-              onText={(text) =>
-                setGoal((current) =>
-                  [current.trimEnd(), text.trim()].filter(Boolean).join(' ').slice(0, 100_000)
-                )
-              }
-            />
-          )}
         </div>
         {/* w12/orch-engine */}
         <select

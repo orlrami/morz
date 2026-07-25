@@ -23,7 +23,6 @@ const MODULE_CHANNEL_PREFIXES = [
   'organizer:',
   'browser:',
   'obsidian:',
-  'voice:',
   'commit:',
   'review:',
   'bus:',
@@ -167,6 +166,51 @@ test.describe.serial('modules: Orchestrated-dial interlock', () => {
     await expect(center).toBeVisible()
     await expect(center.locator('[data-notice-id="modules:orchestration-interlock"]')).toBeVisible()
     await expect(center.getByText('Autonomy dial dropped to Manual')).toBeVisible()
+  })
+})
+
+/*
+ * w16/polish-motion — the Voice module was removed from the registry. An old
+ * profile still carries a persisted modules_enabled row with id 'voice';
+ * hydration must ignore unknown ids (the isModuleId filter in ModulesStore.get)
+ * instead of crashing or resurrecting the module.
+ */
+test.describe.serial('modules: stale persisted ids survive module removal', () => {
+  let morz: MorzApp
+
+  test.afterAll(async () => {
+    if (morz) await closeMorz(morz.app)
+  })
+
+  test('a persisted voice row neither breaks hydration nor renders a toggle', async () => {
+    morz = await launchMorz()
+    await morz.app.evaluate(({ app }) => {
+      const getBuiltinModule = (process as typeof process & {
+        getBuiltinModule(id: string): unknown
+      }).getBuiltinModule
+      const { join } = getBuiltinModule('node:path') as typeof import('node:path')
+      const { createRequire } = getBuiltinModule('node:module') as typeof import('node:module')
+      const requireFromApp = createRequire(join(process.cwd(), 'package.json'))
+      const Database = requireFromApp('better-sqlite3') as typeof import('better-sqlite3')
+      const db = new Database(join(app.getPath('appData'), 'Morz', 'morz.db'))
+      db.prepare(
+        `INSERT INTO modules_enabled (id, enabled, updated_at) VALUES ('voice', 1, CURRENT_TIMESTAMP)
+         ON CONFLICT(id) DO UPDATE SET enabled = 1`
+      ).run()
+      db.close()
+    })
+    const appDataDir = morz.appDataDir
+    await closeMorz(morz.app)
+
+    morz = await launchMorz({ appDataDir })
+    const { page } = morz
+    // Shell hydrates normally with the stale row present…
+    await expect(page.getByRole('tab', { name: 'Terminals' })).toBeVisible()
+    // …and the drawer lists only known modules — no Voice toggle, no crash.
+    await page.getByRole('button', { name: 'Add modules' }).click()
+    await expect(page.getByTestId('module-drawer')).toBeVisible()
+    await expect(page.getByTestId('module-toggle-sessions')).toBeVisible()
+    await expect(page.getByTestId('module-toggle-voice')).toHaveCount(0)
   })
 })
 

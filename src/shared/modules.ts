@@ -17,7 +17,6 @@ export type ModuleId =
   | 'organizer'
   | 'workshop'
   | 'pulse'
-  | 'voice'
   | 'obsidian'
   | 'context'
 
@@ -38,7 +37,6 @@ export const MODULES: readonly ModuleDef[] = [
   { id: 'organizer', label: 'Organizer', defaultOn: false },
   { id: 'workshop', label: 'Workshop', defaultOn: false },
   { id: 'pulse', label: 'Daily Pulse', defaultOn: false },
-  { id: 'voice', label: 'Voice', defaultOn: false },
   { id: 'obsidian', label: 'Obsidian', defaultOn: false },
   { id: 'context', label: 'Context', defaultOn: false }
 ]

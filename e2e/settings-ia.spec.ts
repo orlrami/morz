@@ -120,7 +120,6 @@ test.describe.serial('Settings information architecture', () => {
       'MemorySettings',
       'RoutingSettings',
       'ObsidianSettings',
-      'VoiceSettings',
       'UpdateSettings'
     ]) {
       expect(source.split(`import { ${component} }`).length - 1).toBe(1)

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import {
   IconChevronDown,
   IconChevronRight,
@@ -9,6 +10,7 @@ import {
 } from '@tabler/icons-react'
 import type { FsEntry, GitFile } from '@shared/ipc'
 import { openFile as openFileThroughSlot } from '@/lib/open-file' // w15/integration-slots
+import { springs } from '@/lib/springs'
 import { colors } from '@/lib/tokens'
 import { getMorz, selectActiveSpace, selectActiveSpaceRoot, useSpaceStore } from '@/store/spaceStore'
 
@@ -65,6 +67,7 @@ function badgeForEntry(
  * fs:list service and file activation stays on the shared open-file event.
  */
 export function ExplorerPanel({ open, onClose }: ExplorerPanelProps): JSX.Element | null {
+  const reduceMotion = useReducedMotion() // w16/polish-motion — IdePane pattern
   const space = useSpaceStore(selectActiveSpace)
   const root = useSpaceStore(selectActiveSpaceRoot)
   const git = useSpaceStore((state) => (root ? state.gitByRoot[root] : undefined))
@@ -128,16 +131,22 @@ export function ExplorerPanel({ open, onClose }: ExplorerPanelProps): JSX.Elemen
     void openFileThroughSlot(path)
   }, [])
 
-  if (!open) return null
-
   const rootEntries = root ? childrenByPath[root] : undefined
+  /* w16/polish-motion — the panel slides in from the right on a spring (it used
+   * to pop). Transform-only so terminals re-layout once, never per frame; the
+   * tree rows themselves deliberately do NOT animate. */
   return (
-    <aside
-      className="flex w-[224px] shrink-0 flex-col overflow-hidden border-l"
-      style={{ background: colors.panel, borderColor: 'var(--color-line)' }}
-      aria-label="File explorer"
-      data-testid="explorer-panel"
-    >
+    <AnimatePresence>
+      {open && (
+        <motion.aside
+          initial={{ x: 32, opacity: 0 }}
+          animate={{ x: 0, opacity: 1, transition: reduceMotion ? { duration: 0 } : springs.panel }}
+          exit={{ x: 24, opacity: 0, transition: { duration: reduceMotion ? 0 : 0.12 } }}
+          className="flex w-[224px] shrink-0 flex-col overflow-hidden border-l"
+          style={{ background: colors.panel, borderColor: 'var(--color-line)' }}
+          aria-label="File explorer"
+          data-testid="explorer-panel"
+        >
       <div
         className="flex h-10 shrink-0 items-center gap-2 border-b px-3"
         style={{ borderColor: 'var(--color-line)' }}
@@ -190,7 +199,9 @@ export function ExplorerPanel({ open, onClose }: ExplorerPanelProps): JSX.Elemen
           />
         ))}
       </div>
-    </aside>
+        </motion.aside>
+      )}
+    </AnimatePresence>
   )
 }
 
