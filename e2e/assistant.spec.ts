@@ -59,7 +59,7 @@ process.stdout.write(JSON.stringify({ ok: true, outputs: [{ text: '\`\`\`json\n'
     const { page, app } = morz
 
     await page.getByRole('button', { name: 'Settings' }).evaluate((button: HTMLButtonElement) => button.click())
-    await page.getByRole('button', { name: 'Control' }).click()
+    await page.getByRole('button', { name: 'Planner' }).click()
 
     await expect(page.getByRole('textbox', { name: 'Ask your assistant' })).toHaveCount(0)
     const before = await app.evaluate(() =>

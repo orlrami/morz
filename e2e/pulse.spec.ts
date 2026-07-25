@@ -117,7 +117,7 @@ test.describe.serial('Daily Pulse', () => {
     const { page } = morz
     await page.getByRole('radio', { name: 'Assisted' }).click()
     await page.getByRole('button', { name: 'Settings' }).click()
-    await page.getByRole('button', { name: 'Control' }).click()
+    await page.getByRole('button', { name: 'Notifications', exact: true }).click()
 
     const enable = page.getByRole('checkbox', { name: 'Enable Daily Pulse' })
     await expect(enable).not.toBeChecked()

@@ -199,7 +199,7 @@ test.describe.serial('optional Obsidian integration', () => {
     expect(rejectedRedirect).toContain('Could not reach Obsidian')
 
     await page.getByRole('button', { name: 'Settings' }).evaluate((button: HTMLButtonElement) => button.click())
-    await page.getByRole('button', { name: 'Control' }).evaluate((button: HTMLButtonElement) => button.click())
+    await page.getByRole('button', { name: 'Integrations' }).evaluate((button: HTMLButtonElement) => button.click())
     await expect(page.getByText('Not connected', { exact: true })).toBeVisible()
     await page.getByLabel('Obsidian base URL').fill(fixture.baseUrl)
     await page.getByLabel('Obsidian API key').fill(API_KEY)
