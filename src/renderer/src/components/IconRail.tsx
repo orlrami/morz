@@ -14,6 +14,7 @@ import {
 import { MODULES, type ModuleId } from '@shared/modules'
 import { colors } from '@/lib/tokens'
 import { useModulesStore } from '@/store/modulesStore'
+import { ModuleDrawer } from './ModuleDrawer'
 
 /*
  * w15/shell-layout — 56px icon rail, the shell's only view switcher.
@@ -113,7 +114,7 @@ export function IconRail({ view, onSelectView, explorerOpen, onToggleExplorer }:
         />
       </div>
 
-      {drawerOpen && <ModuleDrawer onClose={() => setDrawerOpen(false)} />}
+      <ModuleDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} />
     </nav>
   )
 }
@@ -190,54 +191,4 @@ function RailButton({
   )
 }
 
-/*
- * Minimal module drawer (list + toggles). Agent 1's w15/modules-core ships the
- * real drawer component; at integration this popover body is replaced by it.
- */
-function ModuleDrawer({ onClose }: { onClose(): void }): JSX.Element {
-  const enabled = useModulesStore((s) => s.enabled)
-  const toggle = useModulesStore((s) => s.toggle)
-  const panelRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
-
-  return (
-    <>
-      <div className="fixed inset-0 z-40" onClick={onClose} aria-hidden />
-      <div
-        ref={panelRef}
-        role="dialog"
-        aria-label="Module drawer"
-        data-testid="module-drawer"
-        className="absolute bottom-2 left-14 z-50 w-52 rounded-xl border p-2 shadow-2xl"
-        style={{ background: colors.panel, borderColor: 'var(--color-line-strong)' }}
-      >
-        <p className="px-1.5 pb-1.5 text-[10px] font-semibold" style={{ color: colors.quartzDim }}>
-          Modules
-        </p>
-        {MODULES.map((def) => (
-          <label
-            key={def.id}
-            className="flex cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-[11px] hover:bg-[#37332B]"
-            style={{ color: colors.quartz }}
-          >
-            <input
-              type="checkbox"
-              checked={enabled[def.id]}
-              onChange={() => toggle(def.id)}
-              aria-label={`Module ${def.label}`}
-              style={{ accentColor: colors.bronze }}
-            />
-            {def.label}
-          </label>
-        ))}
-      </div>
-    </>
-  )
-}
+/* w15 integration — the rail's `+` opens the real ModuleDrawer (w15/modules-core). */
