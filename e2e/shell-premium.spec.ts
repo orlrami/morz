@@ -68,14 +68,14 @@ test.describe.serial('premium shell chrome (w15/shell-layout)', () => {
     await rail.getByRole('button', { name: 'Add modules' }).click()
     const drawer = page.getByTestId('module-drawer')
     await expect(drawer).toBeVisible()
-    await drawer.getByRole('checkbox', { name: 'Module Commit' }).uncheck()
+    await drawer.getByTestId('module-toggle-commit').click()
 
     // icon gone AND the active view fell back to Terminals
     await expect(rail.getByRole('tab', { name: 'Commit' })).toHaveCount(0)
     await expect(page.getByTestId('stage-header')).toContainText('Terminals')
 
     // re-enable → icon returns
-    await drawer.getByRole('checkbox', { name: 'Module Commit' }).check()
+    await drawer.getByTestId('module-toggle-commit').click()
     await expect(rail.getByRole('tab', { name: 'Commit' })).toBeVisible()
     await page.keyboard.press('Escape')
     await expect(drawer).toHaveCount(0)
