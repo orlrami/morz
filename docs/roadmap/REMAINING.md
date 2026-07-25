@@ -24,6 +24,9 @@ Scope: [`../in-progress/WAVE15.md`](../in-progress/WAVE15.md) · spec: [`0.0.5.m
 
 Exit: full e2e green → rebuild exe → dogfood.
 
+## 0.0.5.1 — "Polish & Fix" (NEXT — owner dogfood round 1 on 0.0.5)
+Scope: [`../in-progress/WAVE16.md`](../in-progress/WAVE16.md). Drawer portal, context-hub authority fix, draggable setup, dark dropdowns, version freshness + CLI update button, Spotlight palette, motion pass, voice module removed (Wispr Flow covers it), planner = any detected CLI (+OpenCode), memory bootstrap from existing .md files, version bump to 0.0.5.
+
 ## 0.0.6 — "Memory that Works" (memory v2 + assistant/vault deepening)
 Design locked by [`../research/MEMORY-SYSTEMS-RESEARCH.md`](../research/MEMORY-SYSTEMS-RESEARCH.md) (Honcho/mem0/Letta/Zep/Claude-Code study). Build order:
 1. **Op-set reconciliation** (mem0): candidate memory → ADD/UPDATE/DELETE/NOOP against similar existing facts; the op IS the approval card; hash pre-dedup; SQLite audit log.
