@@ -150,7 +150,7 @@ export function RunsPanel(): JSX.Element {
       }
     }
     void applyPolicy()
-  }, [activeSpaceRoot, evictRuns, loading, runs, setError])
+  }, [activeSpaceRoot, evictRuns, loading, runs, setError, launchHistoryPolicy])
 
   if (!available) {
     return (
@@ -234,8 +234,8 @@ export function RunsPanel(): JSX.Element {
   }
 
   const clear = async (): Promise<void> => {
-    if (!selected || !TERMINAL_RUN_STATES.includes(status?.state ?? selected.state)) return
-    const hasWorktrees = Object.values(status?.agentsDetail ?? {}).some((detail) => detail.worktree)
+    if (!selected || !status || !TERMINAL_RUN_STATES.includes(status.state)) return
+    const hasWorktrees = Object.values(status.agentsDetail ?? {}).some((detail) => detail.worktree)
     const warning = hasWorktrees
       ? ' Its worktrees and branches will remain. Use Cleanup first if you want them removed.'
       : ''

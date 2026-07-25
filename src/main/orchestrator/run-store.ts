@@ -30,6 +30,10 @@ import type {
 
 let db: Database.Database | null = null
 
+export function _setDbForTest(d: Database.Database): void {
+  db = d
+}
+
 function open(): Database.Database {
   if (db) return db
   const dir = join(app.getPath('appData'), 'Morz')
@@ -84,9 +88,10 @@ function open(): Database.Database {
   if (!runColumns.has('cleared_at')) {
     db.exec('ALTER TABLE orch_runs ADD COLUMN cleared_at TEXT')
   }
-  db.exec(
-    'CREATE INDEX IF NOT EXISTS orch_runs_history ON orch_runs (space_root, cleared_at, state, created_at)'
-  )
+  db.exec(`
+    DROP INDEX IF EXISTS orch_runs_history;
+    CREATE INDEX IF NOT EXISTS orch_runs_history_v2 ON orch_runs (cleared_at, space_root, state, created_at);
+  `)
   return db
 }
 
@@ -350,7 +355,7 @@ function clearRunInDb(d: Database.Database, runId: string): ClearedRun {
   }
   const clearedAt = run.cleared_at ?? nowIso()
   if (!run.cleared_at) {
-    d.prepare('UPDATE orch_runs SET cleared_at = ? WHERE run_id = ?').run(clearedAt, runId)
+    d.prepare('UPDATE orch_runs SET cleared_at = ? WHERE run_id = ? AND cleared_at IS NULL').run(clearedAt, runId)
   }
   return clearedRun(d, runId, clearedAt)
 }

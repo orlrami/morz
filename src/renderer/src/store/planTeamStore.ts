@@ -31,6 +31,16 @@ export const usePlanTeamStore = create<PlanTeamState>()(
         set((state) => ({ defaults: { ...state.defaults, [roleKey(role)]: cli } })),
       defaultFor: (role) => get().defaults[roleKey(role)] ?? null
     }),
-    { name: STORAGE_KEY, version: 1 }
+    {
+      name: STORAGE_KEY,
+      version: 1,
+      migrate: (persistedState: unknown, version: number) => {
+        if (version !== 1) {
+          console.warn(`[planTeamStore] Unknown version ${version}, resetting`)
+          return { defaults: {} }
+        }
+        return persistedState as PlanTeamState
+      }
+    }
   )
 )
