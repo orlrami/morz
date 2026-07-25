@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { IconTerminal2, IconRobot, IconColumns, IconX } from '@tabler/icons-react'
+﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { IconTerminal2, IconRobot, IconColumns, IconX, IconExternalLink } from '@tabler/icons-react'
 import { TitleBar } from './TitleBar'
 import { MorzSignal } from './Brand'
 import { IconRail, type RailView } from './IconRail'
@@ -44,16 +44,18 @@ import {
 } from '@/store/layoutStore'
 import { getMorz, selectActiveSpaceRoot, useSpaceStore } from '@/store/spaceStore'
 import { useSessionsStore } from '@/store/sessionsStore'
+import { useSlotsStore } from '@/store/slotsStore'
 import type { RunPaneBridge, RunPaneCreated, SessionSnapshot } from '@shared/ipc'
+import { findSlotProvider } from '@shared/slots'
 
-/* w13/dispatch-visible — preload bridge for dispatched agent panes. */
+/* w13/dispatch-visible â€” preload bridge for dispatched agent panes. */
 function getRunPane(): RunPaneBridge | undefined {
   return (window as unknown as { morzRunPane?: RunPaneBridge }).morzRunPane
 }
 
 type CenterView = RailView
 
-/* w15/shell-layout — Remote parked; the icon rail owns view icons now. */
+/* w15/shell-layout â€” Remote parked; the icon rail owns view icons now. */
 const VIEWS: { id: CenterView; label: string }[] = [
   { id: 'terminals', label: 'Terminals' },
   { id: 'commit', label: 'Commit' },
@@ -70,7 +72,7 @@ const VIEW_TITLES: Record<CenterView, string> = {
   workshop: 'Workshop'
 } as Record<CenterView, string>
 
-/* Views owned by a module — a disabled module's view falls back to terminals. */
+/* Views owned by a module â€” a disabled module's view falls back to terminals. */
 const VIEW_MODULE: Partial<Record<CenterView, ModuleId>> = {
   commit: 'commit',
   review: 'review',
@@ -101,7 +103,7 @@ function visibleCd(root: string): string {
   return `cd "${quoted}"\r`
 }
 
-/* ── session snapshot (Slice 2) ──────────────────────────────── */
+/* â”€â”€ session snapshot (Slice 2) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 function buildSnapshot(root: LayoutNode | null, panes: PaneDef[]): SessionSnapshot {
   return {
@@ -158,7 +160,7 @@ function parseNode(v: unknown): LayoutNode | null {
   return null
 }
 
-/** layout is opaque in the contract — try tree, then flat layout.panes, then snap.panes. */
+/** layout is opaque in the contract â€” try tree, then flat layout.panes, then snap.panes. */
 function layoutFromSnapshot(snap: SessionSnapshot | null): LayoutNode | null {
   if (!snap) return null
   const layout = snap.layout as { tree?: unknown; panes?: unknown } | null | undefined
@@ -210,6 +212,23 @@ export function Shell(): JSX.Element {
   const spaceBranch = useSpaceStore((state) =>
     spaceRoot ? state.gitByRoot[spaceRoot]?.branch ?? null : null
   )
+  const slotChoices = useSlotsStore((state) => state.choices)
+  const hydrateSlots = useSlotsStore((state) => state.hydrate)
+  const visibleViews = useMemo(
+    () =>
+      VIEWS.filter((item) => {
+        if (item.id === 'commit') return slotChoices.git === 'morz-commit'
+        if (item.id === 'review') return slotChoices.review === 'morz-reviewer'
+        return true
+      }),
+    [slotChoices.git, slotChoices.review]
+  )
+  const externalReview =
+    slotChoices.review === 'coderabbit' ||
+    slotChoices.review === 'greptile' ||
+    slotChoices.review === 'copilot'
+      ? findSlotProvider('review', slotChoices.review)
+      : undefined
   const activeLanes = lanes.filter((lane) => sameRoot(lane.cwd, spaceRoot))
   const sessionAgents = useMemo(
     () => [
@@ -223,10 +242,15 @@ export function Shell(): JSX.Element {
   const sessionAgentsKey = sessionAgents.join('|')
   const modulesEnabled = useModulesStore((s) => s.enabled)
 
-  /* w15/shell-layout — module map hydrates once (bridge or interim defaults). */
+  /* w15/shell-layout â€” module map hydrates once (bridge or interim defaults). */
   useEffect(() => {
     void useModulesStore.getState().hydrate()
   }, [])
+
+  /* w15/integration-slots â€” chosen providers hydrate alongside the modules. */
+  useEffect(() => {
+    void hydrateSlots()
+  }, [hydrateSlots])
 
   /* Dial owns the dock: Orchestrated auto-opens, Manual/Assisted reset closed. */
   useEffect(() => {
@@ -239,8 +263,18 @@ export function Shell(): JSX.Element {
     if (owner && !modulesEnabled[owner]) setView('terminals')
   }, [modulesEnabled, view])
 
-  /* w11/sessions — a space with an open pane owns exactly one live work record.
-   * w15/modules-core — the sessions module owns this: disabled means no record
+  /* w15/integration-slots â€” an external provider takes the Morz surface with it. */
+  useEffect(() => {
+    if (
+      (view === 'commit' && slotChoices.git !== 'morz-commit') ||
+      (view === 'review' && slotChoices.review !== 'morz-reviewer')
+    ) {
+      setView('terminals')
+    }
+  }, [slotChoices.git, slotChoices.review, view])
+
+  /* w11/sessions â€” a space with an open pane owns exactly one live work record.
+   * w15/modules-core â€” the sessions module owns this: disabled means no record
    * is ever written, not merely a hidden view. */
   useEffect(() => {
     const store = useSessionsStore.getState()
@@ -322,7 +356,7 @@ export function Shell(): JSX.Element {
       .catch(() => finish(null))
   }, [spaceRoot, spacesReady])
 
-  /* w13/space-cwd — an active space may arrive after the default PTYs spawned.
+  /* w13/space-cwd â€” an active space may arrive after the default PTYs spawned.
    * Keep the correction visible, and never redirect a pane the user touched. */
   useEffect(() => {
     if (!hydrated || !spaceRoot) return
@@ -374,9 +408,9 @@ export function Shell(): JSX.Element {
     }
   }, [])
 
-  /* w13/dispatch-visible — dispatched agent panes. Main pushes run:pane-created
+  /* w13/dispatch-visible â€” dispatched agent panes. Main pushes run:pane-created
    * when the dispatcher spawns an agent pane host-side; add it as a REAL
-   * terminal pane (mount → useTerminal reattaches to the live host pane),
+   * terminal pane (mount â†’ useTerminal reattaches to the live host pane),
    * surface the terminals view, and ack attachment so the dispatcher types the
    * CLI launch only into a live, acking xterm. */
   useEffect(() => {
@@ -396,7 +430,7 @@ export function Shell(): JSX.Element {
         attach(info)
         return
       }
-      // announced before session restore finished — defer until hydrated
+      // announced before session restore finished â€” defer until hydrated
       const unsub = useLayoutStore.subscribe((s) => {
         if (!s.hydrated) return
         unsub()
@@ -429,7 +463,7 @@ export function Shell(): JSX.Element {
     }
     const onFocusPane = ({ paneId }: { paneId: string }): void => {
       useLayoutStore.getState().setActivePane(paneId)
-      // xterm's hidden textarea owns keyboard input — focus it directly.
+      // xterm's hidden textarea owns keyboard input â€” focus it directly.
       document
         .querySelector<HTMLElement>(`[data-pane-id="${paneId}"] .xterm-helper-textarea`)
         ?.focus()
@@ -446,7 +480,7 @@ export function Shell(): JSX.Element {
 
   /* Claude lane trigger (Slices 5+6): Assisted only, one lane per space.
    * The lane itself calls claude:start on the first prompt (ClaudeLane owns
-   * the adapter handshake — start() is kill-and-respawn, so no double-start). */
+   * the adapter handshake â€” start() is kill-and-respawn, so no double-start). */
   const startClaudeLane = useCallback(
     (): void => {
       if (!claudeAllowed(useModeStore.getState().mode)) return
@@ -462,11 +496,15 @@ export function Shell(): JSX.Element {
   )
 
   const paletteActions = useMemo<PaletteAction[]>(() => {
-    // w15/modules-core — the palette only drives surfaces that actually exist:
-    // a disabled module's view is not a command.
+    // The palette only drives surfaces that actually exist: a disabled module
+    // (w15/modules-core) or a surface handed to an external provider
+    // (w15/integration-slots) is not a command.
     const actions: PaletteAction[] = VIEWS.filter((item) => {
       const owner = VIEW_MODULE[item.id]
-      return !owner || modulesEnabled[owner]
+      if (owner && !modulesEnabled[owner]) return false
+      if (item.id === 'commit' && slotChoices.git !== 'morz-commit') return false
+      if (item.id === 'review' && slotChoices.review !== 'morz-reviewer') return false
+      return true
     }).map((item) => ({
       id: `view-${item.id}`,
       group: 'view',
@@ -477,7 +515,7 @@ export function Shell(): JSX.Element {
       actions.push({ id: 'view-workshop', group: 'view', label: 'view: workshop' })
     }
 
-    // w15/modules-core — every module is toggleable by name from the palette.
+    // w15/modules-core â€” every module is toggleable by name from the palette.
     for (const def of MODULES) {
       actions.push({
         id: `module-toggle-${def.id}`,
@@ -536,7 +574,15 @@ export function Shell(): JSX.Element {
     }
 
     return actions
-  }, [activePaneId, activeLanes.length, mode, modulesEnabled, panes])
+  }, [
+    activePaneId,
+    activeLanes.length,
+    mode,
+    modulesEnabled,
+    panes,
+    slotChoices.git,
+    slotChoices.review
+  ])
 
   const openSettings = useCallback((tab: SettingsTab, focusMemory = false): void => {
     setSettingsTab(tab)
@@ -556,7 +602,9 @@ export function Shell(): JSX.Element {
       const centerView = id.startsWith('view-') ? id.slice('view-'.length) : ''
       if (
         centerView &&
-        [...VIEWS.map((item) => item.id), 'settings', 'workshop'].includes(centerView as CenterView)
+        [...visibleViews.map((item) => item.id), 'settings', 'workshop'].includes(
+          centerView as CenterView
+        )
       ) {
         setView(centerView as CenterView)
         return
@@ -567,7 +615,7 @@ export function Shell(): JSX.Element {
         return
       }
 
-      // w15/modules-core — palette parity with the module drawer.
+      // w15/modules-core â€” palette parity with the module drawer.
       if (id.startsWith('module-toggle-')) {
         const moduleId = id.slice('module-toggle-'.length) as ModuleId
         const store = useModulesStore.getState()
@@ -627,7 +675,7 @@ export function Shell(): JSX.Element {
         if (themes.some((theme) => theme.id === themeId)) useThemeStore.getState().setTheme(themeId)
       }
     },
-    [openSettings, spaceRoot, startClaudeLane]
+    [openSettings, spaceRoot, startClaudeLane, visibleViews]
   )
 
   return (
@@ -662,10 +710,25 @@ export function Shell(): JSX.Element {
               {VIEW_TITLES[view]}
             </span>
 
+            {/* w15/integration-slots â€” external reviewer keeps its PR status reachable. */}
+            {externalReview?.statusUrl && (view === 'commit' || view === 'sessions') && (
+              <a
+                href={externalReview.statusUrl}
+                target="_blank"
+                rel="noopener"
+                aria-label={`${externalReview.label} PR status`}
+                className="ml-auto mr-1 flex items-center gap-1 rounded-md px-2 py-1 text-[9.5px] hover:brightness-125"
+                style={{ color: colors.bronzeHot }}
+              >
+                PR status
+                <IconExternalLink size={11} stroke={1.5} />
+              </a>
+            )}
+
             {mode !== 'manual' && (
               <button
                 onClick={() => setOrchOpen((open) => !open)}
-                className="ml-auto flex cursor-pointer items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10.5px] font-semibold transition-colors hover:bg-[#37332B]"
+                className={`${externalReview?.statusUrl && (view === 'commit' || view === 'sessions') ? '' : 'ml-auto '}flex cursor-pointer items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10.5px] font-semibold transition-colors hover:bg-[#37332B]`}
                 title={`${orchOpen ? 'Hide' : 'Show'} orchestrator`}
                 aria-label="Toggle orchestrator"
                 aria-pressed={orchOpen}
@@ -688,7 +751,7 @@ export function Shell(): JSX.Element {
                     className="flex flex-1 items-center justify-center text-[11px]"
                     style={{ background: colors.page, color: colors.quartzDim }}
                   >
-                    Restoring session…
+                    Restoring sessionâ€¦
                   </div>
                 )}
                 {hydrated && root && (
@@ -711,8 +774,8 @@ export function Shell(): JSX.Element {
                 )}
             </div>
           )}
-          {view === 'commit' && <CommitPanel />}
-          {view === 'review' && <ReviewerPanel />}
+          {view === 'commit' && slotChoices.git === 'morz-commit' && <CommitPanel />}
+          {view === 'review' && slotChoices.review === 'morz-reviewer' && <ReviewerPanel />}
           {view === 'dag' && <DagView />}
           {view === 'browser' && <BrowserPanel />}
           {view === 'organizer' && <OrganizerPanel />}
@@ -733,11 +796,13 @@ export function Shell(): JSX.Element {
         {mode !== 'manual' && orchOpen && <OrchestratorPanel />}
       </div>
 
-      <StatusBar onOpenCommit={() => setView('commit')} />
+      <StatusBar
+        onOpenCommit={slotChoices.git === 'morz-commit' ? () => setView('commit') : undefined}
+      />
 
       <ToastHost />
 
-      {/* IDE editor pane — self-managed overlay; opens on ctrl-click 'open-file' events */}
+      {/* IDE editor pane â€” self-managed overlay; opens on ctrl-click 'open-file' events */}
       <IdePane />
 
       <CommandPalette
@@ -750,7 +815,7 @@ export function Shell(): JSX.Element {
   )
 }
 
-/* ── split tree ──────────────────────────────────────────────── */
+/* â”€â”€ split tree â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 function LayoutNodeView({
   node,
@@ -815,7 +880,7 @@ function SplitDivider({
         const ratio = row
           ? (e.clientX - rect.left) / rect.width
           : (e.clientY - rect.top) / rect.height
-        useLayoutStore.getState().setRatio(splitId, ratio) // store clamps 0.15–0.85
+        useLayoutStore.getState().setRatio(splitId, ratio) // store clamps 0.15â€“0.85
       }}
       onPointerUp={(e) => {
         e.currentTarget.releasePointerCapture(e.pointerId)
@@ -833,11 +898,11 @@ function SplitDivider({
   )
 }
 
-/* ── panes ───────────────────────────────────────────────────── */
+/* â”€â”€ panes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 /*
  * Live terminal pane: useTerminal spawns/reattaches the PTY with the pane's
- * saved shell+cwd (TerminalPane can't carry those — it's the Phase-0 mock
+ * saved shell+cwd (TerminalPane can't carry those â€” it's the Phase-0 mock
  * chrome). Header buttons emit the app-events seam Shell subscribes to.
  */
 function ShellTerminalPane({
@@ -865,7 +930,7 @@ function ShellTerminalPane({
         background: colors.page,
         boxShadow: active ? `inset 0 0 0 1px ${colors.bronze}66` : undefined
       }}
-      aria-label={`Terminal — ${pane.paneId}`}
+      aria-label={`Terminal â€” ${pane.paneId}`}
       data-pane-id={pane.paneId}
       onPointerDownCapture={() => useLayoutStore.getState().setActivePane(pane.paneId)}
     >
@@ -914,7 +979,7 @@ function ShellTerminalPane({
         </span>
       </div>
 
-      {/* xterm mount — pl-3 leaves room for the block accent strips */}
+      {/* xterm mount â€” pl-3 leaves room for the block accent strips */}
       <div
         ref={containerRef}
         className="min-h-0 flex-1 py-2 pl-3 pr-1"
@@ -930,7 +995,7 @@ function ShellTerminalPane({
 }
 
 /*
- * Claude lane slot. Manual mounts NOTHING that touches window.morz.claude —
+ * Claude lane slot. Manual mounts NOTHING that touches window.morz.claude â€”
  * lane panes are stripped on hydrate and on dial switch, so this branch is a
  * belt-and-braces placeholder, not a code path that talks to the adapter.
  */
@@ -943,7 +1008,7 @@ function LanePaneSlot({ pane, manual }: { pane: PaneDef; manual: boolean }): JSX
         background: colors.page,
         boxShadow: active ? `inset 0 0 0 1px ${colors.bronze}66` : undefined
       }}
-      aria-label={`Claude lane — ${pane.agentId ?? pane.paneId}`}
+      aria-label={`Claude lane â€” ${pane.agentId ?? pane.paneId}`}
       data-pane-id={pane.paneId}
       onPointerDownCapture={() => useLayoutStore.getState().setActivePane(pane.paneId)}
     >
@@ -974,7 +1039,7 @@ function LanePaneSlot({ pane, manual }: { pane: PaneDef; manual: boolean }): JSX
             className="flex h-full items-center justify-center rounded-xl border text-[11px]"
             style={{ background: colors.panel, borderColor: 'var(--color-line)', color: colors.quartzDim }}
           >
-            Manual mode — lane closed. Switch to Assisted to start one.
+            Manual mode â€” lane closed. Switch to Assisted to start one.
           </div>
         ) : (
           <ClaudeLane agentId={pane.agentId ?? pane.paneId} cwd={pane.cwd} />
@@ -983,3 +1048,4 @@ function LanePaneSlot({ pane, manual }: { pane: PaneDef; manual: boolean }): JSX
     </section>
   )
 }
+

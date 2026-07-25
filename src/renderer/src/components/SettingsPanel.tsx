@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+﻿import { useEffect, useMemo, useState } from 'react'
 import { motion } from 'framer-motion'
 import {
   IconAdjustments,
@@ -22,6 +22,7 @@ import { ConnectionsSettings } from './ConnectionsSettings' // w11/connections
 import { useConnectionsStore } from '@/store/connectionsStore'
 import { useModulesStore } from '@/store/modulesStore' // w15/modules-core
 import { ConnectionsModelsSettings } from './ConnectionsModelsSettings' // w15/model-choice
+import { IntegrationsSettings } from './IntegrationsSettings' // w15/integration-slots
 import {
   RUN_HISTORY_POLICIES,
   useRunsStore,
@@ -142,7 +143,7 @@ function SectionHeader({ section }: { section: SettingsSection }): JSX.Element {
 /* Settings: live usage availability, theme importer, and control defaults migrated into wave-15 IA. */
 export function SettingsPanel({ initialTab = 'limits' }: { initialTab?: SettingsTab }): JSX.Element {
   const [tab, setTab] = useState<SettingsSectionId>(() => normalizeSettingsTab(initialTab))
-  // w15/modules-core — a disabled module owns no settings surface either.
+  // w15/modules-core â€” a disabled module owns no settings surface either.
   const modulesEnabled = useModulesStore((s) => s.enabled)
   const { themeId, setTheme } = useThemeStore()
   const { connections, loading: connectionsLoading, start: startConnections } = useConnectionsStore()
@@ -156,9 +157,9 @@ export function SettingsPanel({ initialTab = 'limits' }: { initialTab?: Settings
   const autonomyRows = useMemo(
     () => [
       { label: 'Default mode for new spaces', value: 'Manual' },
-      { label: 'Orchestrator may propose plans', value: 'On — launch always needs approval' },
+      { label: 'Orchestrator may propose plans', value: 'On â€” launch always needs approval' },
       { label: 'Auto-answer known CLI prompts (watchdog)', value: 'Off' },
-      { label: 'Remote steering from phone', value: 'Off — enable per space' }
+      { label: 'Remote steering from phone', value: 'Off â€” enable per space' }
     ],
     []
   )
@@ -230,19 +231,16 @@ export function SettingsPanel({ initialTab = 'limits' }: { initialTab?: Settings
           {tab === 'connections-models' && (
             <div className="space-y-4">
               <ConnectionsSettings />
-              {/* w15/model-choice — per-CLI model selection, re-homed here by the IA */}
+              {/* w15/model-choice â€” per-CLI model selection, re-homed here by the IA */}
               <ConnectionsModelsSettings />
             </div>
           )}
 
           {tab === 'integrations' && (
             <div className="space-y-4">
-              <SettingsMountPoint
-                id="integrations"
-                label="Integrations"
-                description="Agent 8 mounts bring-your-own-tool slots here. Existing local integrations remain reachable below."
-              />
-              {/* // w4/obsidian — w15/modules-core: mounts only with the module on */}
+              {/* w15/integration-slots â€” bring-your-own-tool slots, re-homed here by the IA */}
+              <IntegrationsSettings />
+              {/* // w4/obsidian â€” w15/modules-core: mounts only with the module on */}
               {modulesEnabled.obsidian && <ObsidianSettings />}
             </div>
           )}
@@ -266,7 +264,7 @@ export function SettingsPanel({ initialTab = 'limits' }: { initialTab?: Settings
                   </div>
                 ))}
               </div>
-              {/* // w8/voice — w15/modules-core */}
+              {/* // w8/voice â€” w15/modules-core */}
               {modulesEnabled.voice && <VoiceSettings />}
             </div>
           )}
@@ -342,7 +340,7 @@ export function SettingsPanel({ initialTab = 'limits' }: { initialTab?: Settings
                   role="status"
                 >
                   <p className="text-xs font-semibold" style={{ fontFamily: 'var(--font-display)' }}>
-                    {connectionsLoading ? 'Checking CLI usage…' : 'No CLI usage data is available'}
+                    {connectionsLoading ? 'Checking CLI usageâ€¦' : 'No CLI usage data is available'}
                   </p>
                   <p className="mt-1 text-[10.5px] leading-relaxed" style={{ color: colors.quartzDim }}>
                     Morz shows a rolling usage bar only when an installed CLI exposes a real percentage locally.
@@ -381,13 +379,13 @@ export function SettingsPanel({ initialTab = 'limits' }: { initialTab?: Settings
             </label>
           )}
 
-          {/* w6/pulse — w15/modules-core */}
+          {/* w6/pulse â€” w15/modules-core */}
           {tab === 'notifications' && modulesEnabled.pulse && <PulseSettings />}
 
           {tab === 'appearance' && (
             <div>
               <p className="text-xs leading-relaxed" style={{ color: colors.quartzDim }}>
-                Import any base16, VS Code, or Ghostty theme — terminal and app chrome share one palette.
+                Import any base16, VS Code, or Ghostty theme â€” terminal and app chrome share one palette.
               </p>
               <div className="mt-4 grid grid-cols-3 gap-2.5">
                 {themes.map((t) => {
@@ -425,7 +423,7 @@ export function SettingsPanel({ initialTab = 'limits' }: { initialTab?: Settings
                 style={{ borderColor: 'var(--color-line-strong)', color: colors.quartzDim }}
               >
                 <IconUpload size={13} stroke={1.5} />
-                Import theme file — base16 / VS Code / Ghostty
+                Import theme file â€” base16 / VS Code / Ghostty
               </button>
             </div>
           )}
@@ -447,3 +445,4 @@ export function SettingsPanel({ initialTab = 'limits' }: { initialTab?: Settings
     </section>
   )
 }
+

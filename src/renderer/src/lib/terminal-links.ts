@@ -8,7 +8,7 @@
  * Agent 3's IDE pane renders them.
  */
 import type { IBufferLine, IDisposable, ILink, Terminal } from '@xterm/xterm'
-import { emit } from './app-events'
+import { openFile } from './open-file'
 import type { OpenFileEvent } from '@shared/ipc'
 import { colors } from './tokens'
 
@@ -149,7 +149,7 @@ function fileLinkProvider(term: Terminal) {
             decorations: { pointerCursor: false, underline: false },
             activate: (e: MouseEvent) => {
               if (!isGated(e)) return
-              emit('open-file', c.target)
+              void openFile(c.target.path, c.target.line)
             },
             hover: (e: MouseEvent, _t: string) => {
               if (isGated(e)) underline((e.target as HTMLElement) ?? undefined)
@@ -195,11 +195,10 @@ function activateOsc8(e: MouseEvent, uri: string): void {
       const u = new URL(uri)
       const path = u.searchParams.get('path')
       if (u.host === 'open' && path) {
-        emit('open-file', {
+        void openFile(
           path,
-          line: u.searchParams.get('line') ? Number(u.searchParams.get('line')) : undefined,
-          col: u.searchParams.get('col') ? Number(u.searchParams.get('col')) : undefined
-        })
+          u.searchParams.get('line') ? Number(u.searchParams.get('line')) : undefined
+        )
       }
     } catch {
       /* malformed morz:// — ignore */

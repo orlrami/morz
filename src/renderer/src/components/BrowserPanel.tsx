@@ -12,7 +12,7 @@ import {
 import { colors } from '@/lib/tokens'
 import { cliTint } from '@/lib/cli'
 import { springs } from '@/lib/springs'
-import { emit } from '@/lib/app-events'
+import { openFile } from '@/lib/open-file'
 import { useBrowserStore } from '@/store/browserStore'
 import type { BrowserAgentKind, ElementContext } from '@shared/ipc'
 
@@ -109,7 +109,10 @@ function PickedElementCard({ context }: { context: ElementContext }): JSX.Elemen
         {context.sourceLoc && isSafeRelativeSource(context.sourceLoc) && (
           <button
             type="button"
-            onClick={() => emit('open-file', sourceLocation(context.sourceLoc!))}
+            onClick={() => {
+              const target = sourceLocation(context.sourceLoc!)
+              void openFile(target.path, target.line)
+            }}
             className="cursor-pointer truncate rounded-md border px-2 py-1 text-left font-mono text-[9.5px] transition-colors hover:bg-white/[0.04] focus-visible:outline-none focus-visible:ring-2"
             style={{ borderColor: 'var(--color-line)', color: colors.quartz }}
             title="Open source location"

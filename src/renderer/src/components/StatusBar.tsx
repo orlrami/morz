@@ -82,22 +82,41 @@ export function StatusBar({ onOpenCommit }: StatusBarProps): JSX.Element {
           color: colors.quartzDim
         }}
       >
-        <button
-          className="flex cursor-pointer items-center gap-1 font-mono text-[10.5px] hover:brightness-125"
-          style={{ color: colors.quartzDim }}
-          onClick={onOpenCommit}
-          title={dirty ? 'Open commit panel (working tree dirty)' : 'Open commit panel'}
-        >
-          <IconGitBranch size={11} stroke={1.5} />
-          {branchLabel}
-          {dirty && (
-            <span
-              className="size-1.5 rounded-full"
-              style={{ background: statusColor.working }}
-              aria-label="Working tree dirty"
-            />
-          )}
-        </button>
+        {/* w15/integration-slots — with lazygit/gitui chosen there is no Morz
+          * commit panel to open, so the branch chip degrades to a label. */}
+        {onOpenCommit ? (
+          <button
+            className="flex cursor-pointer items-center gap-1 font-mono text-[10.5px] hover:brightness-125"
+            style={{ color: colors.quartzDim }}
+            onClick={onOpenCommit}
+            title={dirty ? 'Open commit panel (working tree dirty)' : 'Open commit panel'}
+          >
+            <IconGitBranch size={11} stroke={1.5} />
+            {branchLabel}
+            {dirty && (
+              <span
+                className="size-1.5 rounded-full"
+                style={{ background: statusColor.working }}
+                aria-label="Working tree dirty"
+              />
+            )}
+          </button>
+        ) : (
+          <span
+            className="flex items-center gap-1 font-mono text-[10.5px]"
+            style={{ color: colors.quartzDim }}
+          >
+            <IconGitBranch size={11} stroke={1.5} />
+            {branchLabel}
+            {dirty && (
+              <span
+                className="size-1.5 rounded-full"
+                style={{ background: statusColor.working }}
+                aria-label="Working tree dirty"
+              />
+            )}
+          </span>
+        )}
         <span className="whitespace-nowrap font-mono text-[10px]" data-testid="fleet-count">
           {panes.length} pane{panes.length === 1 ? '' : 's'} · {lanes.length} lane
           {lanes.length === 1 ? '' : 's'}

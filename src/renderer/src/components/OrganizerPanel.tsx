@@ -13,7 +13,7 @@ import {
   IconSparkles
 } from '@tabler/icons-react'
 import type { OrganizerOperation, OrganizerViolation } from '@shared/ipc'
-import { emit } from '@/lib/app-events'
+import { openFile } from '@/lib/open-file'
 import { colors } from '@/lib/tokens'
 import { useOrganizerStore } from '@/store/organizerStore'
 import { selectActiveSpaceRoot, useSpaceStore } from '@/store/spaceStore'
@@ -97,7 +97,7 @@ function ViolationRow({ violation, root }: { violation: OrganizerViolation; root
         </button>
         <button
           type="button"
-          onClick={() => emit('open-file', { path: absolutePath(root, violation.path) })}
+          onClick={() => void openFile(absolutePath(root, violation.path))}
           className="min-w-0 cursor-pointer truncate font-mono text-[10px] hover:underline"
           style={{ color: colors.quartz }}
           title={`Open ${violation.path}`}
