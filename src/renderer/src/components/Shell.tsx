@@ -6,7 +6,7 @@ import { IconRail, type RailView } from './IconRail'
 import { OrchestratorPanel } from './OrchestratorPanel'
 import { StatusBar } from './StatusBar'
 import { CommandPalette, type PaletteAction } from './CommandPalette'
-import { FileExplorer } from './FileExplorer'
+import { ExplorerPanel } from './ExplorerPanel'
 import { CommitPanel } from './CommitPanel'
 import { ReviewerPanel } from './ReviewerPanel'
 import { DagView } from './DagView'
@@ -723,8 +723,8 @@ export function Shell(): JSX.Element {
           {view === 'workshop' && <WorkshopPanel />}
         </main>
 
-        {/* right side, in order: Explorer panel (Agent 3 fills internals), then the dock */}
-        <FileExplorer open={explorerOpen} onClose={() => setExplorerOpen(false)} />
+        {/* right side, in order: Explorer panel, then the dial-owned dock */}
+        <ExplorerPanel open={explorerOpen} onClose={() => setExplorerOpen(false)} />
 
         {mode !== 'manual' && orchOpen && <OrchestratorPanel />}
       </div>
