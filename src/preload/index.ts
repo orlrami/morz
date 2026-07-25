@@ -836,3 +836,34 @@ const runHistoryBridge: RunHistoryBridge = {
 
 contextBridge.exposeInMainWorld('morzRunHistory', runHistoryBridge)
 // end w14/runs-clear
+
+// w15/integration-slots
+import {
+  SlotsApi,
+  type SlotAvailability,
+  type SlotChoices,
+  type SlotExternalOpen,
+  type SlotId,
+  type SlotsBridge,
+  type SlotsTestBridge
+} from '../shared/slots'
+
+const slotsBridge: SlotsBridge = {
+  get: (): Promise<SlotChoices> => ipcRenderer.invoke(SlotsApi.get),
+  set: (id: SlotId, providerId: string): Promise<SlotChoices> =>
+    ipcRenderer.invoke(SlotsApi.set, { id, providerId }),
+  availability: (): Promise<SlotAvailability> => ipcRenderer.invoke(SlotsApi.availability),
+  openExternal: (path: string, line?: number): Promise<void> =>
+    ipcRenderer.invoke(SlotsApi.openExternal, { path, line })
+}
+
+contextBridge.exposeInMainWorld('morzSlots', slotsBridge)
+
+if (process.env.MORZ_E2E === '1') {
+  const slotsTestBridge: SlotsTestBridge = {
+    externalOpens: (): Promise<SlotExternalOpen[]> =>
+      ipcRenderer.invoke(SlotsApi.testExternalOpens)
+  }
+  contextBridge.exposeInMainWorld('morzSlotsTest', slotsTestBridge)
+}
+// end w15/integration-slots

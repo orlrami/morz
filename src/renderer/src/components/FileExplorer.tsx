@@ -10,7 +10,7 @@ import {
   IconExternalLink
 } from '@tabler/icons-react'
 import type { FsEntry } from '@shared/ipc'
-import { emit } from '@/lib/app-events'
+import { openFile as routeOpenFile } from '@/lib/open-file'
 import { useSpaceStore, getMorz, selectActiveSpace, selectActiveSpaceRoot } from '@/store/spaceStore'
 import { colors } from '@/lib/tokens'
 import { springs } from '@/lib/springs'
@@ -78,7 +78,7 @@ export function FileExplorer({ open, onClose }: FileExplorerProps): JSX.Element 
   )
 
   const openFile = useCallback((path: string): void => {
-    emit('open-file', { path })
+    void routeOpenFile(path)
   }, [])
 
   const rootEntries = root ? childrenByPath[root] : undefined

@@ -11,7 +11,7 @@ import {
   IconWand
 } from '@tabler/icons-react'
 import type { ReviewFinding, ReviewSeverity } from '@shared/ipc'
-import { emit } from '@/lib/app-events'
+import { openFile } from '@/lib/open-file'
 import { colors } from '@/lib/tokens'
 import { staggerContainer, staggerItem, springs } from '@/lib/springs'
 import { useReviewStore } from '@/store/reviewStore'
@@ -91,10 +91,7 @@ export function ReviewerPanel(): JSX.Element {
 
   const openFinding = (finding: ReviewFinding): void => {
     if (!result) return
-    emit('open-file', {
-      path: absolutePath(result.cwd, finding.file),
-      line: finding.line
-    })
+    void openFile(absolutePath(result.cwd, finding.file), finding.line)
   }
 
   return (

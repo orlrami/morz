@@ -18,6 +18,7 @@ export const TUI_PROCESSES: readonly TuiProcess[] = [
   { id: 'htop', executables: ['htop'] },
   { id: 'btop', executables: ['btop', 'btop4win'] },
   { id: 'lazygit', executables: ['lazygit'] },
+  { id: 'gitui', executables: ['gitui'] },
   { id: 'tig', executables: ['tig'] },
   { id: 'ssh', executables: ['ssh', 'mosh'] },
   { id: 'python-repl', executables: ['python', 'python3', 'py', 'ipython'] },

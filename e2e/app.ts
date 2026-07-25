@@ -43,7 +43,10 @@ let launchSeq = 0
  * user's real %APPDATA%\Morz\morz.db. Pass a previous appDataDir to relaunch
  * against the same store (session-restore scenarios).
  */
-export async function launchMorz(opts?: { appDataDir?: string }): Promise<MorzApp> {
+export async function launchMorz(opts?: {
+  appDataDir?: string
+  env?: Record<string, string>
+}): Promise<MorzApp> {
   if (!existsSync(MAIN_JS)) {
     throw new Error(`Missing ${MAIN_JS} — run \`npm run build\` before the E2E suite.`)
   }
@@ -58,6 +61,7 @@ export async function launchMorz(opts?: { appDataDir?: string }): Promise<MorzAp
   // resolves it) — MORZ_USER_DATA is the main-process isolation hook.
   env['APPDATA'] = appDataDir
   env['MORZ_USER_DATA'] = appDataDir
+  Object.assign(env, opts?.env)
 
   const app = await _electron.launch({
     executablePath: ELECTRON_EXE,

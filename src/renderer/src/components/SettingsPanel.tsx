@@ -6,7 +6,8 @@ import {
   IconAdjustments,
   IconPlugConnected,
   IconSparkles,
-  IconUpload
+  IconUpload,
+  IconArrowsExchange
 } from '@tabler/icons-react'
 import { colors } from '@/lib/tokens'
 import { springs } from '@/lib/springs'
@@ -26,12 +27,20 @@ import {
   type RunHistoryPolicy
 } from '@/store/runsStore'
 import { ReportSettings } from './ReportSettings' // w11/report-engine
+import { IntegrationsSettings } from './IntegrationsSettings'
 
-export type SettingsTab = 'limits' | 'connections' | 'appearance' | 'control' | 'reports'
+export type SettingsTab =
+  | 'limits'
+  | 'connections'
+  | 'integrations'
+  | 'appearance'
+  | 'control'
+  | 'reports'
 
 const TABS: { id: SettingsTab; label: string; icon: typeof IconGauge }[] = [
   { id: 'limits', label: 'Limits & usage', icon: IconGauge },
   { id: 'connections', label: 'Connections', icon: IconPlugConnected },
+  { id: 'integrations', label: 'Integrations', icon: IconArrowsExchange },
   { id: 'appearance', label: 'Appearance', icon: IconPalette },
   { id: 'control', label: 'Control', icon: IconAdjustments },
   { id: 'reports', label: 'AI reports', icon: IconSparkles }
@@ -163,6 +172,7 @@ export function SettingsPanel({ initialTab = 'limits' }: { initialTab?: Settings
         )}
 
         {tab === 'connections' && <ConnectionsSettings />}
+        {tab === 'integrations' && <IntegrationsSettings />}
 
         {tab === 'appearance' && (
           <div className="mx-auto w-full max-w-[560px]">

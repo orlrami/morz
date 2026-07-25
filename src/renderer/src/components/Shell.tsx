@@ -13,7 +13,8 @@ import {
   IconRobot,
   IconColumns,
   IconX,
-  IconHistory
+  IconHistory,
+  IconExternalLink
 } from '@tabler/icons-react'
 import { TitleBar } from './TitleBar'
 import { MorzSignal } from './Brand'
@@ -60,7 +61,9 @@ import {
 } from '@/store/layoutStore'
 import { getMorz, selectActiveSpaceRoot, useSpaceStore } from '@/store/spaceStore'
 import { useSessionsStore } from '@/store/sessionsStore'
+import { useSlotsStore } from '@/store/slotsStore'
 import type { RunPaneBridge, RunPaneCreated, SessionSnapshot } from '@shared/ipc'
+import { findSlotProvider } from '@shared/slots'
 
 /* w13/dispatch-visible — preload bridge for dispatched agent panes. */
 function getRunPane(): RunPaneBridge | undefined {
@@ -208,6 +211,23 @@ export function Shell(): JSX.Element {
   const spaceBranch = useSpaceStore((state) =>
     spaceRoot ? state.gitByRoot[spaceRoot]?.branch ?? null : null
   )
+  const slotChoices = useSlotsStore((state) => state.choices)
+  const hydrateSlots = useSlotsStore((state) => state.hydrate)
+  const visibleViews = useMemo(
+    () =>
+      VIEWS.filter((item) => {
+        if (item.id === 'commit') return slotChoices.git === 'morz-commit'
+        if (item.id === 'review') return slotChoices.review === 'morz-reviewer'
+        return true
+      }),
+    [slotChoices.git, slotChoices.review]
+  )
+  const externalReview =
+    slotChoices.review === 'coderabbit' ||
+    slotChoices.review === 'greptile' ||
+    slotChoices.review === 'copilot'
+      ? findSlotProvider('review', slotChoices.review)
+      : undefined
   const activeLanes = lanes.filter((lane) => sameRoot(lane.cwd, spaceRoot))
   const sessionAgents = useMemo(
     () => [
@@ -219,6 +239,19 @@ export function Shell(): JSX.Element {
     [activeLanes.length, activeSpace?.agents]
   )
   const sessionAgentsKey = sessionAgents.join('|')
+
+  useEffect(() => {
+    void hydrateSlots()
+  }, [hydrateSlots])
+
+  useEffect(() => {
+    if (
+      (view === 'commit' && slotChoices.git !== 'morz-commit') ||
+      (view === 'review' && slotChoices.review !== 'morz-reviewer')
+    ) {
+      setView('terminals')
+    }
+  }, [slotChoices.git, slotChoices.review, view])
 
   /* w11/sessions — a space with an open pane owns exactly one live work record. */
   useEffect(() => {
@@ -431,7 +464,7 @@ export function Shell(): JSX.Element {
   )
 
   const paletteActions = useMemo<PaletteAction[]>(() => {
-    const actions: PaletteAction[] = VIEWS.map((item) => ({
+    const actions: PaletteAction[] = visibleViews.map((item) => ({
       id: `view-${item.id}`,
       group: 'view',
       label: `view: ${item.label.toLowerCase()}`
@@ -486,7 +519,7 @@ export function Shell(): JSX.Element {
     }
 
     return actions
-  }, [activePaneId, activeLanes.length, mode, panes])
+  }, [activePaneId, activeLanes.length, mode, panes, visibleViews])
 
   const openSettings = useCallback((tab: SettingsTab, focusMemory = false): void => {
     setSettingsTab(tab)
@@ -506,7 +539,9 @@ export function Shell(): JSX.Element {
       const centerView = id.startsWith('view-') ? id.slice('view-'.length) : ''
       if (
         centerView &&
-        [...VIEWS.map((item) => item.id), 'settings', 'workshop'].includes(centerView as CenterView)
+        [...visibleViews.map((item) => item.id), 'settings', 'workshop'].includes(
+          centerView as CenterView
+        )
       ) {
         setView(centerView as CenterView)
         return
@@ -567,7 +602,7 @@ export function Shell(): JSX.Element {
         if (themes.some((theme) => theme.id === themeId)) useThemeStore.getState().setTheme(themeId)
       }
     },
-    [openSettings, spaceRoot, startClaudeLane]
+    [openSettings, spaceRoot, startClaudeLane, visibleViews]
   )
 
   return (
@@ -595,7 +630,7 @@ export function Shell(): JSX.Element {
               role="tablist"
               aria-label="Center view"
             >
-              {VIEWS.map((v) => {
+              {visibleViews.map((v) => {
                 const active = view === v.id
                 const Icon = v.icon
                 return (
@@ -623,6 +658,20 @@ export function Shell(): JSX.Element {
                 )
               })}
             </nav>
+
+            {externalReview?.statusUrl && (view === 'commit' || view === 'sessions') && (
+              <a
+                href={externalReview.statusUrl}
+                target="_blank"
+                rel="noopener"
+                aria-label={`${externalReview.label} PR status`}
+                className="mr-1 flex items-center gap-1 rounded-md px-2 py-1 text-[9.5px] hover:brightness-125"
+                style={{ color: colors.bronzeHot }}
+              >
+                PR status
+                <IconExternalLink size={11} stroke={1.5} />
+              </a>
+            )}
 
             <button
               onClick={() => setView('workshop')}
@@ -688,8 +737,8 @@ export function Shell(): JSX.Element {
               </div>
             </>
           )}
-          {view === 'commit' && <CommitPanel />}
-          {view === 'review' && <ReviewerPanel />}
+          {view === 'commit' && slotChoices.git === 'morz-commit' && <CommitPanel />}
+          {view === 'review' && slotChoices.review === 'morz-reviewer' && <ReviewerPanel />}
           {view === 'dag' && <DagView />}
           {view === 'browser' && <BrowserPanel />}
           {view === 'remote' && <RemotePanel />}
@@ -710,7 +759,9 @@ export function Shell(): JSX.Element {
         <FileExplorer open={explorerOpen} onClose={() => setExplorerOpen(false)} />
       </div>
 
-      <StatusBar onOpenCommit={() => setView('commit')} />
+      <StatusBar
+        onOpenCommit={slotChoices.git === 'morz-commit' ? () => setView('commit') : undefined}
+      />
 
       <ToastHost />
 

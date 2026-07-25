@@ -76,15 +76,25 @@ export function StatusBar({ onOpenCommit }: StatusBarProps): JSX.Element {
           color: colors.quartzDim
         }}
       >
-        <button
-          className="flex cursor-pointer items-center gap-1 font-mono text-[10.5px] hover:brightness-125"
-          style={{ color: colors.quartzDim }}
-          onClick={onOpenCommit}
-          title="Open commit panel"
-        >
-          <IconGitBranch size={11} stroke={1.5} />
-          {branchLabel}
-        </button>
+        {onOpenCommit ? (
+          <button
+            className="flex cursor-pointer items-center gap-1 font-mono text-[10.5px] hover:brightness-125"
+            style={{ color: colors.quartzDim }}
+            onClick={onOpenCommit}
+            title="Open commit panel"
+          >
+            <IconGitBranch size={11} stroke={1.5} />
+            {branchLabel}
+          </button>
+        ) : (
+          <span
+            className="flex items-center gap-1 font-mono text-[10.5px]"
+            style={{ color: colors.quartzDim }}
+          >
+            <IconGitBranch size={11} stroke={1.5} />
+            {branchLabel}
+          </span>
+        )}
         <Count color={statusColor.working} label={`${activeAgents} active`} />
         <Count color={statusColor.blocked} label={`${blockedAgents} blocked`} />
         <Count color={statusColor.done} label={`${doneAgents} done`} />
