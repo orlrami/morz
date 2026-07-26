@@ -1,4 +1,4 @@
-export type ContextProjectType = 'node' | 'python' | 'generic'
+export type ContextProjectType = 'node' | 'python' | 'rust' | 'go' | 'generic'
 
 export type ContextFileKind =
   | 'claude'

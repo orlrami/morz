@@ -8,7 +8,7 @@
 
 **ETH Zurich study (arXiv 2602.11988, 138 instances, 12 repos, 3 agents):** **LLM-generated context files HURT** (−0.5 to −2 pts); human-written helped ~+4 pts; every context file costs 14–22% more tokens; **repository overviews specifically did not help**. Why: human files contain information that exists nowhere else; generated files duplicate the README. → Morz ships fill-in scaffolds, never auto-generated prose.
 
-**agents.md standard (Linux Foundation / Agentic AI Foundation):** nearest-file-wins nesting; Codex chain `~/.codex/AGENTS.override.md → AGENTS.md → repo root→cwd`, 32KiB cap; **Claude Code does not read AGENTS.md** — the documented bridge is `@AGENTS.md` as CLAUDE.md's first line (symlinks need Admin/Dev-Mode on Windows → import is the only safe default for Morz). Antigravity reads AGENTS.md + GEMINI.md (merge precedence unverified — do not build on it yet).
+**agents.md standard (Linux Foundation / Agentic AI Foundation):** nearest-file-wins nesting; Codex chain `~/.codex/AGENTS.override.md → AGENTS.md → repo root→cwd`, 32KiB cap; **Claude Code does not read AGENTS.md** — the documented bridge is `@AGENTS.md` as CLAUDE.md's first line (symlinks need Admin/Dev-Mode on Windows → import is the only safe default for Morz). Antigravity reportedly reads AGENTS.md + GEMINI.md, but this rests on secondary blogs only (support and merge precedence both unverified — check the shipping build before Morz leans on it).
 
 **HumanLayer ("Writing a good CLAUDE.md"):** "never send an LLM to do a linter's job"; under 300 lines (their own: under 60); instruction budget ~150–200 with ~50 already spent by the system prompt; progressive disclosure (pointer docs the agent chooses to read); "prefer pointers to copies"; against `/init`-style generation.
 

@@ -1,6 +1,7 @@
 # AGENTS.md
 
-<!-- Single source of truth for every coding agent in this repo (Claude Code, Codex, Antigravity). -->
+<!-- Single source of truth for every coding agent in this repo. Codex reads it natively; -->
+<!-- Claude Code via CLAUDE.md's @AGENTS.md import; Antigravity support is reported but unverified. -->
 <!-- Target: under 150 lines. Only facts an agent CANNOT infer by reading the code. -->
 <!-- No codebase overviews or directory listings: agents discover structure themselves, and -->
 <!-- measured results (arXiv 2602.11988) show overviews cost tokens without improving outcomes. -->
@@ -12,6 +13,7 @@
 
 <!-- Ordered by blast radius: the worst mistake first. -->
 
+- Use <pnpm>. Never <npm> or <yarn> — it rewrites the lockfile.
 - Never edit <generated path> by hand. Regenerate with <command>.
 - Never commit directly to <main>. Branch as <type>/<short-description>.
 - <Anything irreversible an agent could plausibly do: drop a table, force-push, rotate a key, deploy.>
@@ -20,8 +22,9 @@
 
 <!-- Exact, copy-pasteable, including any activation prefix. The highest-value section in this file. -->
 
-- Install:       <pnpm install | npm install>   <!-- pick ONE manager and forbid the others above -->
+- Install:       <pnpm install>
 - Build:         <pnpm build>
+- Dev server:    <pnpm dev> (port <N>)
 - Test (one):    <pnpm vitest run path/to/file.test.ts>   <!-- prefer this -->
 - Test (all):    <pnpm test>                <!-- if slow, say how slow, so agents don't reach for it -->
 - Lint + format: <pnpm lint>
@@ -44,6 +47,8 @@ Do not report a task complete on the basis that the code looks correct.
 
 <!-- Grow this from real friction: add an entry the SECOND time an agent makes the same mistake. -->
 <!-- This section is what separates context files that help from ones that only cost tokens. -->
+<!-- Best sources: anything that cost you >15 min to diagnose, and anything an agent -->
+<!-- "fixed" that was deliberate. If a linter or hook can catch it, do that instead. -->
 
 - <e.g. Tests need a service running: start it with <command> first.>
 - <e.g. The dev server's output is not visible to you; read <path/to/dev.log> instead.>

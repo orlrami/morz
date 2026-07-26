@@ -96,6 +96,21 @@ test('scan detects Python projects and does not recurse outside known locations'
   assert.equal(matrix.scannedAt.length > 0, true)
 })
 
+test('scan detects rust and go projects, outranking a sidecar package.json', async () => {
+  const service = createContextHubService()
+
+  const rustRoot = tempProject('rust')
+  writeFileSync(join(rustRoot, 'Cargo.toml'), '[package]\nname = "fixture"\n')
+  writeFileSync(join(rustRoot, 'package.json'), '{"name":"docs-site"}\n')
+  const rust = await service.scan([{ id: 'rust', name: 'Rust', root: rustRoot }])
+  assert.equal(rust.spaces[0].projectType, 'rust')
+
+  const goRoot = tempProject('go')
+  writeFileSync(join(goRoot, 'go.mod'), 'module fixture\n')
+  const go = await service.scan([{ id: 'go', name: 'Go', root: goRoot }])
+  assert.equal(go.spaces[0].projectType, 'go')
+})
+
 test('scan rejects malformed or non-directory roots', async () => {
   const root = tempProject('invalid')
   const file = join(root, 'not-a-directory')

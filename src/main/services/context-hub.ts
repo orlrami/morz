@@ -144,6 +144,10 @@ async function projectType(root: string): Promise<ContextProjectType> {
       return false
     }
   }
+  // Root Cargo.toml/go.mod outranks package.json: rust/go repos often carry a
+  // JS sidecar (docs site, wasm bindings) but the reverse is rare.
+  if (await exists('Cargo.toml')) return 'rust'
+  if (await exists('go.mod')) return 'go'
   if (await exists('package.json')) return 'node'
   if (
     await exists('pyproject.toml') ||
