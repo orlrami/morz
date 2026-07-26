@@ -28,6 +28,8 @@ export interface CliConnection {
   detectedAt: number
   /** A failed probe kept the last known version; never present it as fresh. */
   versionStale: boolean
+  /** Lower-version duplicate installs found on PATH; surfaced, never silent (w16). */
+  duplicates?: string[]
   /** Null unless a newer version was reported and a safe updater is known. */
   update: CliUpdateState | null
   /** Logged in / usable (best-effort probe; null = unknown). */

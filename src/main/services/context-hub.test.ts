@@ -227,14 +227,18 @@ test('missing CLAUDE.md is proposed from the detected project template before cr
   })
   await service.scan([{ id: 'fixture', name: 'Fixture App', root }])
 
-  const proposal = await service.proposeTemplate({ spaceId: 'fixture', kind: 'claude' })
+  // w16.1 presets: AGENTS.md is the interpolated source of truth; CLAUDE.md is
+  // the cross-CLI shim whose first line imports it (research-backed presets).
+  const agents = await service.proposeTemplate({ spaceId: 'fixture', kind: 'agents' })
+  assert.match(agents.unifiedDiff, /Fixture App/)
+  assert.match(agents.unifiedDiff, /Non-negotiables/)
 
-  assert.match(proposal.unifiedDiff, /Fixture App/)
-  assert.match(proposal.unifiedDiff, /npm run typecheck/)
+  const proposal = await service.proposeTemplate({ spaceId: 'fixture', kind: 'claude' })
+  assert.match(proposal.unifiedDiff, /@AGENTS\.md/)
   assert.equal(readFileSync(join(root, 'package.json'), 'utf8'), '{"name":"fixture"}\n')
   const applied = await service.applyProposal(proposal.proposalId)
   assert.equal(applied.created, true)
-  assert.match(readFileSync(join(root, 'CLAUDE.md'), 'utf8'), /Fixture App/)
+  assert.match(readFileSync(join(root, 'CLAUDE.md'), 'utf8'), /@AGENTS\.md/)
 })
 
 test('proposal ids stay scoped to the service that produced them', async () => {

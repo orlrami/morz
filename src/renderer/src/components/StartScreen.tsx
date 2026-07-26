@@ -234,7 +234,7 @@ export function StartScreen({
       <div
         data-testid="start-drag-strip"
         aria-hidden
-        className="absolute inset-x-0 top-0 z-10 h-10"
+        className="absolute inset-x-0 top-0 z-10 h-20"
         style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
       />
       <main

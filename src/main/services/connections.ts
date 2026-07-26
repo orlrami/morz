@@ -180,32 +180,46 @@ async function runCli(executable: string, args: readonly string[]): Promise<Comm
   return runFile(commandProcessor, ['/d', '/s', '/c', command], true)
 }
 
-async function resolveOnPath(executable: string): Promise<string | null> {
+/** Shim kinds Windows can actually execute; extensionless sh-shims (npm writes
+ * one next to its .cmd for git-bash) are skipped — CreateProcess can't run them. */
+const WINDOWS_RUNNABLE_EXTENSIONS = new Set(['.exe', '.com', '.cmd', '.bat'])
+
+/**
+ * ALL PATH matches, in PATH order. Duplicate installs are real (npm shim vs a
+ * stale chocolatey exe was found live, 2026-07-25 — PATH order made Morz probe
+ * a 2.1.187 leftover while the user's shell ran 2.1.220), so the caller probes
+ * every candidate instead of trusting the first hit.
+ */
+async function resolveCandidatesOnPath(executable: string): Promise<string[]> {
   if (process.platform === 'win32') {
     const whereExe = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'where.exe')
     const result = await runFile(whereExe, [executable])
-    if (!result.ok) return null
-    // runFile intentionally returns only the first non-empty line.
-    return result.output
+    if (!result.ok) return []
+    return result.fullOutput
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0)
+      .filter((line) => WINDOWS_RUNNABLE_EXTENSIONS.has(extname(line).toLowerCase()))
   }
 
+  const candidates: string[] = []
   const pathValue = process.env.PATH ?? ''
   for (const dir of pathValue.split(delimiter)) {
     if (!dir) continue
     const candidate = join(dir, executable)
     try {
       await access(candidate, constants.X_OK)
-      return candidate
+      candidates.push(candidate)
     } catch {
       // Continue through PATH. A missing or non-executable entry is not fatal.
     }
   }
-  return null
+  return candidates
 }
 
-async function resolveExecutable(id: CliId, executable: string): Promise<string | null> {
-  const resolved = await resolveOnPath(executable)
-  return resolved && cliOfExecutable(resolved) === id ? resolved : null
+async function resolveExecutables(id: CliId, executable: string): Promise<string[]> {
+  const resolved = await resolveCandidatesOnPath(executable)
+  return resolved.filter((candidate) => cliOfExecutable(candidate) === id)
 }
 
 async function exists(path: string): Promise<boolean> {
@@ -600,7 +614,7 @@ function parseJsonOutput(value: string): unknown {
 async function npmCodexUpdate(
   currentVersion: string
 ): Promise<CliConnection['update']> {
-  const npm = await resolveOnPath('npm')
+  const [npm] = await resolveCandidatesOnPath('npm')
   if (!npm) return null
   const installed = await runCli(npm, ['ls', '-g', '@openai/codex', '--depth=0', '--json'])
   let installedVersion: string | null = null
@@ -668,8 +682,8 @@ async function detectConnection(
 ): Promise<CliConnection> {
   const detectedAt = Date.now()
   updateCommands.delete(spec.id)
-  const executable = await resolveExecutable(spec.id, spec.executable)
-  if (!executable) {
+  const candidates = await resolveExecutables(spec.id, spec.executable)
+  if (candidates.length === 0) {
     if (previous?.installed && previous.version) {
       return { ...previous, detectedAt, versionStale: true, update: null }
     }
@@ -688,9 +702,38 @@ async function detectConnection(
     }
   }
 
+  /* Probe every PATH candidate and adopt the NEWEST working install: PATH
+   * order lies when package managers leave stale duplicates behind. Lower-
+   * version duplicates are surfaced, never silently ignored. */
+  const probes = await Promise.all(
+    candidates.slice(0, 4).map(async (path) => {
+      const result = await runCli(path, ['--version'])
+      const token = result.ok && result.output ? versionToken(result.output) : null
+      return { path, result, token }
+    })
+  )
+  const working = probes.filter((probe) => probe.result.ok && probe.result.output)
+  const best =
+    working.reduce<(typeof probes)[number] | null>((current, probe) => {
+      if (!current) return probe
+      if (!probe.token) return current
+      if (!current.token) return probe
+      return compareVersions(probe.token, current.token) > 0 ? probe : current
+    }, null) ?? probes[0]
+  const executable = best.path
+  const versionProbe = best.result
+  const duplicates = working
+    .filter(
+      (probe) =>
+        probe !== best &&
+        probe.token &&
+        best.token &&
+        compareVersions(probe.token, best.token) < 0
+    )
+    .map((probe) => `${probe.token} · ${probe.path}`)
+
   const home = connectionHome()
-  const [versionProbe, authed, plan, configured, telemetry] = await Promise.all([
-    runCli(executable, ['--version']),
+  const [authed, plan, configured, telemetry] = await Promise.all([
     authStatus(spec.id, executable, home),
     planFor(spec.id, home),
     configuredModel(spec.id, home),
@@ -706,6 +749,7 @@ async function detectConnection(
     version,
     detectedAt,
     versionStale: versionFailed,
+    duplicates: duplicates.length > 0 ? duplicates : undefined,
     update,
     authed,
     plan,

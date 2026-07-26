@@ -60,13 +60,15 @@ test.describe.serial('context hub', () => {
     await cell.getByRole('button', { name: 'Create CLAUDE.md from template' }).click()
 
     const dialog = page.getByTestId('context-diff-dialog')
-    await expect(dialog).toContainText('npm run typecheck')
+    await expect(dialog).toContainText('@AGENTS.md') // w16.1 presets: CLAUDE.md is the cross-CLI shim
     expect(() => readFileSync(join(firstRoot, 'CLAUDE.md'), 'utf8')).toThrow()
     await dialog.getByRole('button', { name: 'Apply 1 selected' }).click()
     await expect(dialog).toBeHidden()
 
     await expect(cell).toContainText('Present')
-    expect(readFileSync(join(firstRoot, 'CLAUDE.md'), 'utf8')).toContain('First fixture context')
+    // w16.1 presets: the CLAUDE.md template is the @AGENTS.md shim (project
+    // interpolation lives in the AGENTS.md preset, asserted in the unit test).
+    expect(readFileSync(join(firstRoot, 'CLAUDE.md'), 'utf8')).toContain('@AGENTS.md')
   })
 
   test('shared block targeting two spaces presents two individual diffs', async () => {

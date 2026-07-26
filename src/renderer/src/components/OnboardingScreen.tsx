@@ -90,8 +90,10 @@ export function OnboardingScreen({
       style={{ background: colors.page }}
       aria-label="First-run setup"
     >
-      {/* Frameless window: this full-window surface covers the titlebar, so it
-       * carries its own drag strip (pattern from TitleBar.tsx). */}
+      {/* Frameless window: this full-window surface covers the titlebar. The
+       * top padding AND the whole 68px header drag the window (owner feedback
+       * w16.1 — a thin strip was too small to find); interactive children opt
+       * out individually. */}
       <div
         data-testid="onboarding-drag-strip"
         aria-hidden
@@ -100,7 +102,11 @@ export function OnboardingScreen({
       />
       <header
         className="flex h-[68px] shrink-0 items-center justify-between border-b px-7"
-        style={{ background: colors.panel, borderColor: 'var(--color-line)' }}
+        style={{
+          background: colors.panel,
+          borderColor: 'var(--color-line)',
+          WebkitAppRegion: 'drag'
+        } as React.CSSProperties}
       >
         <div className="flex items-center gap-3">
           <MorzSignal className="h-7 w-10" style={{ color: colors.quartz }} />

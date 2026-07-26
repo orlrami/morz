@@ -108,6 +108,17 @@ export function ConnectionsSettings(): JSX.Element {
                       {checkedAgo(connection.detectedAt, now)}
                       {connection.versionStale ? ' · stale — last known version' : ''}
                     </p>
+                    {/* w16 — duplicate installs are surfaced, never silently outvoted by PATH order */}
+                    {connection.duplicates?.map((duplicate) => (
+                      <p
+                        key={duplicate}
+                        className="mt-0.5 truncate font-mono text-[8.5px]"
+                        style={{ color: colors.warning }}
+                        title={duplicate}
+                      >
+                        older install also on PATH: {duplicate}
+                      </p>
+                    ))}
                   </div>
                   <span
                     className="rounded-full border px-2 py-0.5 text-[8.5px] font-bold"
