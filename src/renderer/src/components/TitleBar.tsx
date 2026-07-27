@@ -112,13 +112,14 @@ export function TitleBar({ onOpenPalette }: TitleBarProps): JSX.Element {
         <MorzWordmark className="text-[15px] leading-none" />
       </div>
 
-      <nav className="min-w-0 flex-1 self-end overflow-hidden" aria-label="Space navigation" style={noDrag}>
+      {/* The wrappers stay draggable; only the tabs and buttons inside opt out,
+        * so every empty stretch of the bar moves the window. */}
+      <nav className="min-w-0 flex-1 self-end overflow-hidden" aria-label="Space navigation">
         <div
           role="tablist"
           aria-label="Spaces"
           onKeyDown={navigateTabs}
           className="flex max-w-full items-end gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-          style={noDrag}
         >
           {spaces.map((space) => (
             <SpaceTab
