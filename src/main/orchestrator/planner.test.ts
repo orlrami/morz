@@ -155,12 +155,19 @@ test('SpawnPlan 1.0 normalizes missing models while 1.1 round-trips an explicit 
   const current = {
     ...structuredClone(basePlan),
     version: '1.1',
-    agents: [{ ...structuredClone(basePlan.agents[0]), model: 'opus' }]
+    agents: [
+      {
+        ...structuredClone(basePlan.agents[0]),
+        cli: 'opencode',
+        model: 'anthropic/claude-sonnet-4-5'
+      }
+    ]
   }
   const roundTripped = validateSpawnPlan(current)
   assert.equal(roundTripped.ok, true)
   assert.equal(roundTripped.value?.version, '1.1')
-  assert.equal(roundTripped.value?.agents[0].model, 'opus')
+  assert.equal(roundTripped.value?.agents[0].cli, 'opencode')
+  assert.equal(roundTripped.value?.agents[0].model, 'anthropic/claude-sonnet-4-5')
 })
 
 test('planner prompt lists only detected CLIs and corrects an undetected model proposal', async () => {

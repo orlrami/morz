@@ -776,7 +776,7 @@ function e2ePlannerResponse(
         : engine === 'opencode'
           ? 'OpenCode'
           : 'Local'
-  const cli = engine === 'local' ? 'agy' : engine === 'opencode' ? 'codex' : engine
+  const cli = engine === 'local' ? 'agy' : engine
   // w13/planner-schema markers: exercise the repair + hard-reject paths.
   const repair = goal.includes('MORZ_E2E_REPAIR')
   const broken = goal.includes('MORZ_E2E_BROKEN')
