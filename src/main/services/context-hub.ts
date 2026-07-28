@@ -20,6 +20,7 @@ import type {
 } from '../../shared/context-hub'
 import type { RunSummary } from '../../shared/ipc'
 import type { MemoryEntry } from '../../shared/memory'
+import { escapeMorzMarkers, renderMemoryBlock } from '../memory/render'
 import {
   createConfigWriter,
   type ConfigWriter,
@@ -311,7 +312,12 @@ function replaceManagedBlock(
   closeMarker: string,
   body: string
 ): string {
-  const block = `${openMarker}\n${body.trim()}\n${closeMarker}`
+  // An empty body is the marker pair alone. Padding it with a blank line makes
+  // the "empty block" three lines, which overruns the renderer's line budget.
+  const content = body.trim()
+  const block = content
+    ? `${openMarker}\n${content}\n${closeMarker}`
+    : `${openMarker}\n${closeMarker}`
   if (openMarker.startsWith('<!-- morz:block:')) {
     const matches = sharedBlockRanges(source).filter((range) => range.openMarker === openMarker)
     if (matches.length > 1) throw new Error('Managed block marker is duplicated')
@@ -338,51 +344,20 @@ function replaceManagedBlock(
   return `${source.slice(0, start)}${block}${source.slice(end + closeMarker.length)}`
 }
 
-function safeMemoryText(value: string): string {
-  return value
-    .replace(/<!--\s*\/?morz:/gi, (marker) => marker.replace('<!--', '&lt;!--'))
-}
-
-function renderMemories(entries: MemoryEntry[]): string {
-  const priority: Record<MemoryEntry['kind'], number> = { rule: 0, skill: 1, fact: 2 }
-  const ordered = entries
-    .filter((entry) => entry.enabled)
-    .sort((left, right) =>
-      priority[left.kind] - priority[right.kind] ||
-      right.updatedAt.localeCompare(left.updatedAt) ||
-      left.id.localeCompare(right.id)
-    )
-  if (ordered.length === 0) throw new Error('No approved enabled memories are available')
-  return [
-    '## Morz memory',
-    '',
-    'Approved context shared with every CLI in this space.',
-    '',
-    ...ordered.flatMap((entry) => [
-      `### ${safeMemoryText(entry.title)}`,
-      '',
-      `_${entry.kind} · ${entry.scope}_`,
-      '',
-      safeMemoryText(entry.body).trim(),
-      ''
-    ])
-  ].join('\n').trim()
-}
-
 function renderStatus(snapshot: ContextStatusSnapshot): string {
-  const branch = safeMemoryText(snapshot.branch).trim() || '(detached or unavailable)'
+  const branch = escapeMorzMarkers(snapshot.branch).trim() || '(detached or unavailable)'
   const runs = snapshot.recentRuns.slice(0, 5)
   return [
     '## Morz status',
     '',
     `- Branch: \`${branch.replaceAll('`', '\\`')}\``,
-    `- E2E: ${safeMemoryText(snapshot.e2eState).trim() || 'No recorded E2E run'}`,
+    `- E2E: ${escapeMorzMarkers(snapshot.e2eState).trim() || 'No recorded E2E run'}`,
     '',
     '### Recent Morz runs',
     '',
     ...(runs.length > 0
       ? runs.map((run) =>
-          `- ${run.createdAt.slice(0, 10)} · ${run.state} · ${safeMemoryText(run.goal).replace(/\s+/g, ' ').trim()}`
+          `- ${run.createdAt.slice(0, 10)} · ${run.state} · ${escapeMorzMarkers(run.goal).replace(/\s+/g, ' ').trim()}`
         )
       : ['- No recorded runs for this Space.'])
   ].join('\n')
@@ -524,7 +499,7 @@ export function createContextHubService(options: ContextHubServiceOptions = {}):
       return Promise.all(selected.map(async (space) => {
         const file = requireFile(space, 'claude')
         const source = await readCurrent(file.path)
-        const body = renderMemories(options.listMemories?.(space) ?? [])
+        const body = renderMemoryBlock(options.listMemories?.(space) ?? [])
         const next = replaceManagedBlock(
           source,
           '<!-- morz:memory -->',

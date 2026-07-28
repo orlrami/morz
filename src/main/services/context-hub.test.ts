@@ -372,6 +372,24 @@ test('memory export replaces one managed CLAUDE.md block and re-proposes determi
   assert.doesNotMatch(content, /\nPrefer focused tests\n/)
 })
 
+test('a store with nothing enabled exports a two-line empty marker pair', async () => {
+  const root = tempProject('memory-empty')
+  writeFileSync(join(root, 'CLAUDE.md'), '# Fixture\n')
+  const service = createContextHubService({ listMemories: () => [] })
+  await service.scan([{ id: 'fixture', name: 'Fixture', root }])
+
+  // The old renderer threw here, killing the proposal outright.
+  const [proposal] = await service.proposeMemoryBlock({ spaceIds: ['fixture'] })
+  await service.applyProposal(proposal.proposalId)
+
+  const content = readFileSync(join(root, 'CLAUDE.md'), 'utf8')
+  // Exactly two lines: padding the empty body with a blank line made it three,
+  // which overruns the budget the renderer reserves those markers against.
+  assert.match(content, /<!-- morz:memory -->\n<!-- \/morz:memory -->/)
+  assert.equal((content.match(/<!-- morz:memory -->/g) ?? []).length, 1)
+  assert.equal((content.match(/<!-- \/morz:memory -->/g) ?? []).length, 1)
+})
+
 test('memory export neutralizes paired, unpaired, and nested Morz control markers', async () => {
   const root = tempProject('memory-markers')
   writeFileSync(join(root, 'CLAUDE.md'), '# Fixture\n')

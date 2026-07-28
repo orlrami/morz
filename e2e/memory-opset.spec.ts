@@ -130,7 +130,8 @@ test.describe.serial('Memory op-set reconciliation', () => {
     )
     expect(next?.expiredAt).toBeFalsy()
 
-    // Search never surfaces expired rows; injection renders a validity window.
+    // Search never surfaces expired rows. Superseded facts stay queryable by
+    // id (asserted above) but never enter a prompt — w17/renderer-core law.
     const matches = await morz.page.evaluate(() =>
       (window as unknown as MemoryWindow).morz.memory.search('pnpm dependencies')
     )
@@ -138,7 +139,13 @@ test.describe.serial('Memory op-set reconciliation', () => {
     const rendered = await morz.page.evaluate(() =>
       (window as unknown as MemoryWindow).morz.memory.testRender({})
     )
-    expect(rendered).toMatch(/superseded rule:.*used until \d{4}-\d{2}-\d{2}/)
+    expect(rendered).not.toMatch(/superseded/i)
+    expect(rendered).not.toMatch(/used until/)
+    // Only the live successor renders, not the expired row it replaced.
+    const bullets = rendered
+      .split('\n')
+      .filter((line) => line.includes('Use pnpm for JavaScript dependencies'))
+    expect(bullets).toHaveLength(1)
 
     // Every applied op lands in the SQLite audit table.
     const audit = await morz.page.evaluate(() =>

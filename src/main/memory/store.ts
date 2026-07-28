@@ -22,9 +22,9 @@ import {
   ensureMemoryAuditTable,
   expireEntry,
   migrateMemoryFtsSchema,
-  renderInjectionLines,
   restoreEntry
 } from './opset'
+import { renderMemoryPreamble } from './render'
 
 const SCOPES = new Set<MemoryScope>(['global', 'project', 'space', 'agent'])
 const KINDS = new Set<MemoryKind>(['rule', 'skill', 'fact'])
@@ -34,7 +34,6 @@ const MAX_ID = 120
 const MAX_TITLE = 240
 const MAX_BODY = 50_000
 const MAX_SCOPE_REF = 2_000
-const INJECTION_BUDGET = 2_000
 
 let db: Database.Database | null = null
 let initialized = false
@@ -441,9 +440,9 @@ function renderInjection(opts: { projectRoot?: string; spaceId?: string; agentId
     ...(opts.spaceId ? listMemory('space', opts.spaceId) : []),
     ...(opts.agentId ? listMemory('agent', opts.agentId) : [])
   ]
-  // w15/memory-opset — pure renderer handles dedup, priority, the budget, and
-  // validity windows for superseded facts ("used X until <date>").
-  return renderInjectionLines(chain, INJECTION_BUDGET)
+  // w17/renderer-core — the canonical renderer handles dedup, priority, and
+  // the budget. Superseded facts are excluded there, not here.
+  return renderMemoryPreamble(chain)
 }
 
 export const MemoryInjection: MemoryInjectionContract = {
