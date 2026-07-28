@@ -505,7 +505,9 @@ test('an empty memory store proposes an empty managed block instead of throwing'
   await service.applyProposal(proposal.proposalId)
 
   const content = readFileSync(join(root, 'CLAUDE.md'), 'utf8')
-  assert.match(content, /<!-- morz:memory -->\n\n<!-- \/morz:memory -->/)
+  // w17/renderer-core round 2 — an empty body renders the exact two-line
+  // marker pair (open\nclose), not a three-line block with a blank between.
+  assert.match(content, /<!-- morz:memory -->\n<!-- \/morz:memory -->/)
 })
 
 test('a read-only memory block rejects the proposal instead of rewriting the file', async () => {
