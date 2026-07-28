@@ -148,6 +148,40 @@ export interface MemoryBootstrapApplyResult {
   skipped: number
 }
 
+export type MemoryEventSessionKind = 'lane' | 'dispatched' | 'planner'
+export type MemoryEventCli = 'claude' | 'codex' | 'agy' | 'opencode'
+export type MemoryEventType = 'spawn' | 'exit' | 'tool' | 'block' | 'interrupt'
+export type MemoryEventOutcome = 'ok' | 'error' | 'blocked' | 'unknown'
+
+/** Allowlisted event metadata. Raw args, env, prompts and file contents never cross this contract. */
+export interface MemoryEventMeta {
+  exitCode?: number
+  signal?: string
+  phase?: 'start' | 'result'
+  source?: 'structured' | 'pty' | '[redacted]'
+  model?: string
+  cwd?: string
+}
+
+export interface MemoryInvocationEvent {
+  v: 1
+  ts: number
+  sessionKind: MemoryEventSessionKind
+  cli: MemoryEventCli
+  agentId?: string
+  spaceId?: string
+  event: MemoryEventType
+  name?: string
+  outcome?: MemoryEventOutcome
+  durationMs?: number
+  meta?: MemoryEventMeta
+}
+
+export interface MemoryEventLogStats {
+  count: number
+  bytes: number
+}
+
 export const MemoryApi = {
   list: 'memory:list', // (scope?: MemoryScope, scopeRef?: string) => Promise<MemoryEntry[]>
   get: 'memory:get', // (id) => Promise<MemoryEntry | null>
@@ -163,6 +197,8 @@ export const MemoryApi = {
   restore: 'memory:restore', // (id) => Promise<MemoryEntry>
   bootstrap: 'memory:bootstrap',
   applyBootstrap: 'memory:apply-bootstrap',
+  eventLogStats: 'memory:event-log-stats',
+  clearEventLog: 'memory:event-log-clear',
   changed: 'memory:changed' // push → void (store or proposals changed)
 } as const
 
@@ -190,5 +226,7 @@ export interface MorzMemoryApi {
   restore(id: string): Promise<MemoryEntry>
   bootstrap(spaces: MemoryBootstrapSpace[]): Promise<MemoryBootstrapReview>
   applyBootstrap(reviewId: string, selectedIds: string[]): Promise<MemoryBootstrapApplyResult>
+  eventLogStats(): Promise<MemoryEventLogStats>
+  clearEventLog(): Promise<void>
   onChanged(cb: () => void): () => void
 }

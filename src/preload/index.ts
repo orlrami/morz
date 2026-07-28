@@ -514,6 +514,8 @@ import {
   type MemoryBootstrapReview,
   type MemoryBootstrapSpace,
   type MemoryEntry,
+  type MemoryEventLogStats,
+  type MemoryInvocationEvent,
   type MemoryOpAuditRow,
   type MemoryProposal,
   type MemoryScope,
@@ -525,6 +527,7 @@ type MemoryE2eApi = MorzMemoryApi & {
   testRender?(opts: { projectRoot?: string; spaceId?: string; agentId?: string }): Promise<string>
   testReconcile?(proposal: MemoryProposal): Promise<MemoryProposal>
   testAudit?(): Promise<MemoryOpAuditRow[]>
+  testLog?(event: MemoryInvocationEvent): Promise<boolean>
 }
 
 const memoryApi: MemoryE2eApi = {
@@ -548,6 +551,9 @@ const memoryApi: MemoryE2eApi = {
     selectedIds: string[]
   ): Promise<MemoryBootstrapApplyResult> =>
     ipcRenderer.invoke(MemoryChannels.applyBootstrap, { reviewId, selectedIds }),
+  eventLogStats: (): Promise<MemoryEventLogStats> =>
+    ipcRenderer.invoke(MemoryChannels.eventLogStats),
+  clearEventLog: (): Promise<void> => ipcRenderer.invoke(MemoryChannels.clearEventLog),
   onChanged: (callback) => {
     const listener = (): void => callback()
     ipcRenderer.on(MemoryChannels.changed, listener)
@@ -560,6 +566,9 @@ if (process.env.MORZ_E2E === '1') {
   memoryApi.testRender = (opts) => ipcRenderer.invoke('memory:e2e-render', opts)
   memoryApi.testReconcile = (proposal) => ipcRenderer.invoke('memory:e2e-reconcile', proposal)
   memoryApi.testAudit = () => ipcRenderer.invoke('memory:e2e-audit')
+  if (process.env.MORZ_E2E_MEMORY_EVENT_LOG === '1') {
+    memoryApi.testLog = (event) => ipcRenderer.invoke('memory:e2e-event-log', event)
+  }
 }
 
 const apiWithMemory = api as MorzApi & { memory: MorzMemoryApi }

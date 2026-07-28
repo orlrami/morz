@@ -1,4 +1,4 @@
-import { app, ipcMain } from 'electron'
+import { app, ipcMain, type IpcMainInvokeEvent } from 'electron'
 import { randomUUID } from 'crypto'
 import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'fs'
 import { basename, dirname, join } from 'path'
@@ -9,6 +9,7 @@ import {
   type MemoryBootstrapReviewItem,
   type MemoryBootstrapSpace,
   type MemoryEntry,
+  type MemoryInvocationEvent,
   type MemoryKind,
   type MemoryOp,
   type MemoryOpSnapshot,
@@ -40,11 +41,17 @@ import {
   type OpClassifier
 } from './opset'
 import { scanBootstrapMarkdown, splitMarkdownCandidates } from './bootstrap'
+import {
+  clearEventLog,
+  eventLogStats,
+  logMemoryEvent
+} from './event-log'
 
 const MEMORY_E2E_PROPOSE = 'memory:e2e-propose'
 const MEMORY_E2E_RENDER = 'memory:e2e-render'
 const MEMORY_E2E_RECONCILE = 'memory:e2e-reconcile'
 const MEMORY_E2E_AUDIT = 'memory:e2e-audit'
+const MEMORY_E2E_EVENT_LOG = 'memory:e2e-event-log'
 const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 const SCOPES = new Set<MemoryScope>(['global', 'project', 'space', 'agent'])
 const KINDS = new Set<MemoryKind>(['rule', 'skill', 'fact'])
@@ -59,6 +66,19 @@ let activeBootstrapReview:
       appliedIds: Set<string>
     }
   | null = null
+
+function assertTrustedEventLogSender(event: IpcMainInvokeEvent): void {
+  if (!event.senderFrame || event.senderFrame !== event.sender.mainFrame) {
+    throw new Error('Memory event log rejected an untrusted frame')
+  }
+  const url = new URL(event.senderFrame.url)
+  const localDev =
+    (url.protocol === 'http:' || url.protocol === 'https:') &&
+    (url.hostname === 'localhost' || url.hostname === '127.0.0.1')
+  if (url.protocol !== 'file:' && !localDev) {
+    throw new Error('Memory event log rejected an untrusted renderer origin')
+  }
+}
 
 interface StoredProposal {
   proposal: MemoryProposal
@@ -625,12 +645,24 @@ export function registerMemoryIpc(): void {
       const input = payload as Record<string, unknown>
       return applyMemoryBootstrap(input.reviewId, input.selectedIds)
     }))
+  ipcMain.handle(MemoryApi.eventLogStats, (event) => {
+    assertTrustedEventLogSender(event)
+    return eventLogStats()
+  })
+  ipcMain.handle(MemoryApi.clearEventLog, (event) => {
+    assertTrustedEventLogSender(event)
+    clearEventLog()
+  })
 
   if (process.env.MORZ_E2E === '1') {
     ipcMain.handle(MEMORY_E2E_PROPOSE, (_event, proposal: unknown) => proposeMemory(proposal))
     ipcMain.handle(MEMORY_E2E_RECONCILE, (_event, proposal: unknown) =>
       proposeMemoryReconciled(proposal))
     ipcMain.handle(MEMORY_E2E_AUDIT, () => listMemoryOpAudit(memoryDatabase()))
+    if (process.env.MORZ_E2E_MEMORY_EVENT_LOG === '1') {
+      ipcMain.handle(MEMORY_E2E_EVENT_LOG, (_event, value: unknown) =>
+        logMemoryEvent(value as MemoryInvocationEvent))
+    }
     ipcMain.handle(MEMORY_E2E_RENDER, (_event, opts: unknown) => guarded('e2e-render', () => {
       if (!opts || typeof opts !== 'object') throw new Error('Invalid render options')
       const input = opts as Record<string, unknown>

@@ -10,50 +10,35 @@ import {
 } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import type {
+  MemoryEventCli,
+  MemoryEventLogStats,
+  MemoryEventMeta,
+  MemoryEventOutcome,
+  MemoryEventSessionKind,
+  MemoryEventType,
+  MemoryInvocationEvent
+} from '../../shared/memory'
 
 export const EVENT_LOG_FILE = 'memory-events.jsonl'
 export const EVENT_LOG_MAX_BYTES = 5 * 1024 * 1024
 export const EVENT_LOG_MAX_RECORD_BYTES = 64 * 1024
 export const EVENT_LOG_KEEP_FILES = 2
 
-export type MemoryEventSessionKind = 'lane' | 'dispatched' | 'planner'
-export type MemoryEventCli = 'claude' | 'codex' | 'agy' | 'opencode'
-export type MemoryEventType = 'spawn' | 'exit' | 'tool' | 'block' | 'interrupt'
-export type MemoryEventOutcome = 'ok' | 'error' | 'blocked' | 'unknown'
 export type MemoryEventMode = 'manual' | 'assisted' | 'orchestrated'
-
-/** Deliberately small: raw args, environment, prompts and file contents have no slot. */
-export interface MemoryEventMeta {
-  exitCode?: number
-  signal?: string
-  phase?: 'start' | 'result'
-  source?: 'structured' | 'pty' | '[redacted]'
-  model?: string
-  cwd?: string
-}
-
-export interface MemoryInvocationEvent {
-  v: 1
-  ts: number
-  sessionKind: MemoryEventSessionKind
-  cli: MemoryEventCli
-  agentId?: string
-  spaceId?: string
-  event: MemoryEventType
-  name?: string
-  outcome?: MemoryEventOutcome
-  durationMs?: number
-  meta?: MemoryEventMeta
-}
+export type {
+  MemoryEventCli,
+  MemoryEventLogStats,
+  MemoryEventMeta,
+  MemoryEventOutcome,
+  MemoryEventSessionKind,
+  MemoryEventType,
+  MemoryInvocationEvent
+} from '../../shared/memory'
 
 export interface MemoryEventFilter {
   since?: number
   cli?: MemoryEventCli
-}
-
-export interface MemoryEventLogStats {
-  count: number
-  bytes: number
 }
 
 export interface MemoryEventWriteContext {
