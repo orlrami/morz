@@ -146,12 +146,17 @@ function validatePlan(plan: SpawnPlan): void {
     ) {
       throw new Error(`[dispatch] unknown cli: ${String(agent.cli)}`)
     }
-    if (
-      agent.model !== undefined &&
-      agent.model !== null &&
-      (typeof agent.model !== 'string' || !isPlannerModel(agent.cli, agent.model))
-    ) {
-      throw new Error(`[dispatch] invalid model for ${agent.cli}: ${JSON.stringify(agent.model)}`)
+    if (agent.model !== undefined && agent.model !== null) {
+      // Per-agent models arrived with SpawnPlan 1.1; a 1.0 plan carrying one
+      // was never validated against the catalog, so it does not dispatch.
+      if (plan.version === LEGACY_SPAWN_PLAN_VERSION) {
+        throw new Error(
+          `[dispatch] SpawnPlan ${LEGACY_SPAWN_PLAN_VERSION} has no per-agent model: ${JSON.stringify(agent.model)}`
+        )
+      }
+      if (typeof agent.model !== 'string' || !isPlannerModel(agent.cli, agent.model)) {
+        throw new Error(`[dispatch] invalid model for ${agent.cli}: ${JSON.stringify(agent.model)}`)
+      }
     }
     if (typeof agent.cwd !== 'string' || isAbsolute(agent.cwd) || agent.cwd.split(/[\\/]/).includes('..')) {
       throw new Error(`[dispatch] agent cwd must stay inside its worktree: ${JSON.stringify(agent.cwd)}`)

@@ -22,8 +22,13 @@ export interface PlannedAgent {
   /** Becomes the lane/bus AgentId once dispatched. */
   agentId: AgentId
   cli: PlannedCli
-  /** Exact per-run model; null respects the user's effective CLI default. */
-  model: string | null
+  /**
+   * Exact per-run model (SpawnPlan 1.1); null respects the user's effective
+   * CLI default. Optional at the compatibility boundary: a 1.0 plan has no
+   * model field at all, and a 1.0 payload that carries one is ignored rather
+   * than honored (see validateSpawnPlan).
+   */
+  model?: string | null
   /** Human-readable role ("builder: PTY host", "reviewer"). */
   role: string
   /** Branch the dispatcher creates the worktree on (e.g. run/<tag>/<agent>). */

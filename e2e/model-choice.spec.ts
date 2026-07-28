@@ -226,7 +226,8 @@ test('dispatched agent launch command prefers the explicit plan model over the u
     )
 
     const plan = {
-      version: '1.0',
+      // per-agent models arrived with SpawnPlan 1.1; a 1.0 plan carries none
+      version: '1.1',
       id: 'plan-model-choice-e2e',
       goal: 'prove the model flag rides the dispatch launch',
       agents: [
