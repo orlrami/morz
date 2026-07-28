@@ -185,6 +185,8 @@ export interface MemoryInvocationEvent {
 export interface MemoryEventLogStats {
   count: number
   bytes: number
+  /** Events this session failed to persist (invalid, oversized, or writer lock busy). */
+  dropped: number
 }
 
 export const MemoryApi = {

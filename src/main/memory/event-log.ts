@@ -1,19 +1,9 @@
 import { app } from 'electron'
-import { createHash } from 'node:crypto'
-import {
-  appendFileSync,
-  closeSync,
-  existsSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  readSync,
-  renameSync,
-  rmSync,
-  statSync,
-  truncateSync
-} from 'node:fs'
+import { createHash, randomBytes } from 'node:crypto'
+import { existsSync, readFileSync, statSync } from 'node:fs'
+import { appendFile, mkdir, open, readFile, rename, rm, stat } from 'node:fs/promises'
 import { join } from 'node:path'
+import { setTimeout as delay } from 'node:timers/promises'
 import type {
   MemoryEventCli,
   MemoryEventLogStats,
@@ -35,6 +25,19 @@ export const EVENT_LOG_KEEP_FILES = 2
 export const EVENT_LOG_LOCK_STALE_MS = 30_000
 /** Total time an append waits for another instance before giving up (fail-closed). */
 export const EVENT_LOG_LOCK_WAIT_MS = 1_000
+
+/**
+ * Why a write did or did not land. Callers fire and forget, so the honest
+ * outcome has to be reportable rather than collapsed into a boolean:
+ * `skipped-mode` is the expected Manual/E2E gate, every `dropped-*` is a real
+ * event the log failed to keep.
+ */
+export type MemoryEventWriteStatus =
+  | 'ok'
+  | 'skipped-mode'
+  | 'dropped-invalid'
+  | 'dropped-oversized'
+  | 'dropped-lock'
 
 export type {
   MemoryEventCli,
@@ -103,11 +106,15 @@ const SECRET_PATTERNS: RegExp[] = [
 ]
 
 /**
- * Profile roots on all three platforms, so a path that reaches a persisted
- * field never carries the account name. Deliberately independent of
- * `homedir()`, which only matches one separator form and only this machine.
+ * Profile roots on all three platforms, so a path in a free-form message never
+ * carries the account name. Deliberately independent of `homedir()`, which only
+ * matches one separator form and only this machine.
+ *
+ * Anchored to an actual absolute-path boundary: the root has to start the
+ * string or follow a delimiter, so `mcp/Users/list` and a URL path like
+ * `https://example.com/home/alice` are left alone.
  */
-const PROFILE_ROOT = /(?:[A-Za-z]:)?[\\/]{1,2}(?:Users|home)[\\/]+[^\\/\s"']+/gi
+const PROFILE_ROOT = /(^|[\s"'`(<[,;=])(?:[A-Za-z]:)?[\\/]{1,2}(?:Users|home)[\\/]+[^\\/\s"'`)\]>]+/gi
 
 /*
  * Canonicalization must run before any pattern: NFKC folds compatibility
@@ -142,11 +149,20 @@ function canonicalize(value: string): string {
   return value.normalize('NFKC').replace(DEFAULT_IGNORABLE, '')
 }
 
-function containsSecret(value: string): boolean {
+function matchesSecret(value: string): boolean {
   return SECRET_PATTERNS.some((pattern) => {
     pattern.lastIndex = 0
     return pattern.test(value)
   })
+}
+
+/**
+ * Also scans a whitespace-compacted view. Canonicalization removes invisible
+ * separators but keeps ordinary spaces and newlines, so a key wrapped as
+ * `sk-proj-\n1234...` would otherwise read as two harmless fragments.
+ */
+function containsSecret(value: string): boolean {
+  return matchesSecret(value) || matchesSecret(value.replace(/\s+/g, ''))
 }
 
 /** Decodes a base64/base64url run to text, or undefined when it is not text. */
@@ -187,9 +203,19 @@ function hashIdentifier(value: string): string {
  */
 export function redactText(value: string, maxLength: number): string {
   let clean = value.replace(/\u0000/g, '').replace(/\r\n/g, '\n')
-  clean = canonicalize(clean).replace(PROFILE_ROOT, '~')
+  clean = canonicalize(clean)
   for (const pattern of SECRET_PATTERNS) clean = clean.replace(pattern, '[redacted]')
   return redactEncodedSecrets(clean).slice(0, maxLength)
+}
+
+/**
+ * For free-form text such as an error message, the only place a real filesystem
+ * path still travels. Enum- and shape-checked fields deliberately skip the
+ * profile rewrite: a tool name like `mcp/Users/list` is not a path, and
+ * rewriting it would turn a legitimate name into `[redacted]`.
+ */
+export function redactMessage(value: string, maxLength: number): string {
+  return redactText(value, maxLength).replace(PROFILE_ROOT, '$1~')
 }
 
 function cleanIdentifier(value: unknown, maxLength: number): string | undefined {
@@ -264,53 +290,105 @@ function normalizeEvent(value: unknown): MemoryInvocationEvent | null {
 }
 
 /*
- * Serializing writers. Every log operation is synchronous, so within one
- * process the only way to re-enter is nesting (append -> rotate); `heldLocks`
- * covers that and keeps a second store instance from taking the lockfile it
- * already owns. The lockfile is what stops a second Morz instance from
- * rotating, repairing or truncating the same file concurrently.
+ * Serializing writers, in two layers.
+ *
+ * In-process: one promise chain per directory. Now that writes are async they
+ * really can interleave, and two stores sharing a directory must not burn each
+ * other's lock wait.
+ *
+ * Cross-process: an ownership-stamped lockfile. Never stat-then-unlink — two
+ * contenders can both read the same lock as stale, and a blind unlink would let
+ * the loser delete the winner's fresh lock. Takeover instead goes through an
+ * atomic rename to a private tombstone, which exactly one contender can win,
+ * and release only ever removes a lock still carrying our own token.
  */
-const heldLocks = new Set<string>()
-const sleepSignal = new Int32Array(new SharedArrayBuffer(4))
+const directoryQueues = new Map<string, Promise<unknown>>()
 
-function sleepSync(ms: number): void {
-  Atomics.wait(sleepSignal, 0, 0, ms)
+function enqueue<T>(directory: string, fn: () => Promise<T>): Promise<T> {
+  const previous = directoryQueues.get(directory) ?? Promise.resolve()
+  const next = previous.then(fn, fn)
+  directoryQueues.set(directory, next.catch(() => undefined))
+  return next
 }
 
-function lockIsStale(path: string): boolean {
+function errorCode(error: unknown): string | undefined {
+  return (error as NodeJS.ErrnoException | undefined)?.code
+}
+
+async function isStale(path: string): Promise<boolean> {
   try {
-    return Date.now() - statSync(path).mtimeMs > EVENT_LOG_LOCK_STALE_MS
+    return Date.now() - (await stat(path)).mtimeMs > EVENT_LOG_LOCK_STALE_MS
   } catch {
     return false // It vanished; the next create attempt wins it honestly.
   }
 }
 
-/** Runs `fn` as the only writer for `directory`, or returns `fallback` if the wait expires. */
-function withDirectoryLock<T>(directory: string, fallback: T, fn: () => T): T {
-  if (heldLocks.has(directory)) return fn()
-  const path = join(directory, EVENT_LOG_LOCK_FILE)
+/**
+ * Claims an abandoned lock by renaming it out of the way. Rename of a missing
+ * source fails, so of any number of contenders exactly one takes it and the
+ * rest fall back to a plain create attempt.
+ */
+async function claimAbandoned(path: string, token: string): Promise<void> {
+  const tombstone = `${path}.${token}`
+  try {
+    await rename(path, tombstone)
+  } catch {
+    return // Someone else claimed it first; retry the create.
+  }
+  await rm(tombstone, { force: true })
+}
+
+async function acquire(path: string, token: string): Promise<boolean> {
   const deadline = Date.now() + EVENT_LOG_LOCK_WAIT_MS
   for (;;) {
     try {
-      closeSync(openSync(path, 'wx'))
-      break
+      const handle = await open(path, 'wx')
+      try {
+        await handle.writeFile(token, 'utf8')
+      } finally {
+        await handle.close()
+      }
+      // Read back: only a lock still carrying our token is ours to release.
+      return (await readFile(path, 'utf8')) === token
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
-      if (lockIsStale(path)) {
-        rmSync(path, { force: true })
+      if (errorCode(error) !== 'EEXIST') throw error
+      if (await isStale(path)) {
+        await claimAbandoned(path, token)
+        // Bounded even if a skewed clock makes every lock look abandoned.
+        if (Date.now() >= deadline) return false
         continue
       }
-      if (Date.now() >= deadline) return fallback
-      sleepSync(25)
+      if (Date.now() >= deadline) return false
+      await delay(25)
     }
   }
-  heldLocks.add(directory)
+}
+
+async function release(path: string, token: string): Promise<void> {
   try {
-    return fn()
-  } finally {
-    heldLocks.delete(directory)
-    rmSync(path, { force: true })
+    if ((await readFile(path, 'utf8')) !== token) return
+  } catch {
+    return
   }
+  await rm(path, { force: true })
+}
+
+/** Runs `fn` as the only writer for `directory`, or returns `fallback` if the wait expires. */
+function withDirectoryLock<T>(
+  directory: string,
+  fallback: T,
+  fn: () => Promise<T>
+): Promise<T> {
+  return enqueue(directory, async () => {
+    const path = join(directory, EVENT_LOG_LOCK_FILE)
+    const token = `${process.pid}-${randomBytes(8).toString('hex')}`
+    if (!(await acquire(path, token))) return fallback
+    try {
+      return await fn()
+    } finally {
+      await release(path, token)
+    }
+  })
 }
 
 function writeAllowed(getMode: () => MemoryEventMode): boolean {
@@ -324,11 +402,20 @@ function writeAllowed(getMode: () => MemoryEventMode): boolean {
   return process.env.MORZ_E2E !== '1' || process.env.MORZ_E2E_MEMORY_EVENT_LOG === '1'
 }
 
+async function fileBytes(path: string): Promise<number> {
+  try {
+    return (await stat(path)).size
+  } catch {
+    return 0
+  }
+}
+
 export class MemoryEventLog {
   private readonly maxFileBytes: number
   private readonly maxRecordBytes: number
   private readonly keepFiles: number
   private readonly getMode: () => MemoryEventMode
+  private droppedEvents = 0
 
   constructor(private readonly options: MemoryEventLogOptions) {
     this.maxFileBytes = Math.max(1, Math.floor(options.maxFileBytes ?? EVENT_LOG_MAX_BYTES))
@@ -337,23 +424,38 @@ export class MemoryEventLog {
     this.getMode = options.getMode ?? (() => 'manual')
   }
 
-  append(value: MemoryInvocationEvent): boolean {
-    if (!writeAllowed(this.getMode)) return false
+  /**
+   * Async on purpose: the lock wait used to park the Electron main thread, and
+   * every caller already fires and forgets, so awaiting costs them nothing.
+   */
+  async append(value: MemoryInvocationEvent): Promise<MemoryEventWriteStatus> {
+    if (!writeAllowed(this.getMode)) return 'skipped-mode'
     const normalized = normalizeEvent(value)
-    if (!normalized) return false
+    if (!normalized) return this.drop('dropped-invalid')
     const line = `${JSON.stringify(normalized)}\n`
     const bytes = Buffer.byteLength(line, 'utf8')
-    if (bytes > this.maxRecordBytes || bytes > this.maxFileBytes) return false
+    if (bytes > this.maxRecordBytes || bytes > this.maxFileBytes) return this.drop('dropped-oversized')
 
-    mkdirSync(this.options.directory, { recursive: true })
-    return withDirectoryLock(this.options.directory, false, () => {
-      const current = this.pathFor(0)
-      this.repairTruncatedTail(current)
-      const currentBytes = existsSync(current) ? statSync(current).size : 0
-      if (currentBytes > 0 && currentBytes + bytes > this.maxFileBytes) this.rotate()
-      appendFileSync(current, line, { encoding: 'utf8', mode: 0o600 })
-      return true
-    })
+    await mkdir(this.options.directory, { recursive: true })
+    const status = await withDirectoryLock<MemoryEventWriteStatus>(
+      this.options.directory,
+      'dropped-lock',
+      async () => {
+        const current = this.pathFor(0)
+        await this.repairTruncatedTail(current)
+        const currentBytes = await fileBytes(current)
+        if (currentBytes > 0 && currentBytes + bytes > this.maxFileBytes) await this.rotate()
+        await appendFile(current, line, { encoding: 'utf8', mode: 0o600 })
+        return 'ok'
+      }
+    )
+    return status === 'ok' ? status : this.drop(status)
+  }
+
+  /** Drops are counted, never silent — Settings surfaces the total. */
+  private drop(status: MemoryEventWriteStatus): MemoryEventWriteStatus {
+    this.droppedEvents += 1
+    return status
   }
 
   readEvents(filter: MemoryEventFilter = {}): MemoryInvocationEvent[] {
@@ -384,47 +486,54 @@ export class MemoryEventLog {
       const path = this.pathFor(generation)
       if (existsSync(path)) bytes += statSync(path).size
     }
-    return { count: this.readEvents().length, bytes }
+    return { count: this.readEvents().length, bytes, dropped: this.droppedEvents }
   }
 
-  clear(): void {
-    if (!existsSync(this.options.directory)) return
-    withDirectoryLock(this.options.directory, undefined, () => {
-      for (let generation = 0; generation < this.keepFiles; generation++) {
-        rmSync(this.pathFor(generation), { force: true })
-      }
-    })
+  /** Rejects rather than pretending, when another writer holds the lock. */
+  async clear(): Promise<void> {
+    if (existsSync(this.options.directory)) {
+      const cleared = await withDirectoryLock(this.options.directory, false, async () => {
+        for (let generation = 0; generation < this.keepFiles; generation++) {
+          await rm(this.pathFor(generation), { force: true })
+        }
+        return true
+      })
+      if (!cleared) throw new Error('Event log is busy: clear timed out waiting for the writer lock')
+    }
+    this.droppedEvents = 0
   }
 
-  private rotate(): void {
+  private async rotate(): Promise<void> {
     if (this.keepFiles === 1) {
-      rmSync(this.pathFor(0), { force: true })
+      await rm(this.pathFor(0), { force: true })
       return
     }
-    rmSync(this.pathFor(this.keepFiles - 1), { force: true })
+    await rm(this.pathFor(this.keepFiles - 1), { force: true })
     for (let generation = this.keepFiles - 2; generation >= 0; generation--) {
-      const source = this.pathFor(generation)
-      if (existsSync(source)) renameSync(source, this.pathFor(generation + 1))
+      try {
+        await rename(this.pathFor(generation), this.pathFor(generation + 1))
+      } catch (error) {
+        if (errorCode(error) !== 'ENOENT') throw error
+      }
     }
   }
 
-  private repairTruncatedTail(path: string): void {
-    if (!existsSync(path)) return
-    const size = statSync(path).size
+  private async repairTruncatedTail(path: string): Promise<void> {
+    const size = await fileBytes(path)
     if (size === 0) return
 
-    const fd = openSync(path, 'r')
-    let truncateAt: number | undefined
+    const handle = await open(path, 'r+')
     try {
       const finalByte = Buffer.allocUnsafe(1)
-      readSync(fd, finalByte, 0, 1, size - 1)
+      await handle.read(finalByte, 0, 1, size - 1)
       if (finalByte[0] === 0x0a) return
 
+      let truncateAt: number | undefined
       const chunkBytes = 64 * 1024
       for (let cursor = size; cursor > 0;) {
         const start = Math.max(0, cursor - chunkBytes)
         const chunk = Buffer.allocUnsafe(cursor - start)
-        readSync(fd, chunk, 0, chunk.length, start)
+        await handle.read(chunk, 0, chunk.length, start)
         const newline = chunk.lastIndexOf(0x0a)
         if (newline >= 0) {
           truncateAt = start + newline + 1
@@ -432,11 +541,10 @@ export class MemoryEventLog {
         }
         cursor = start
       }
-      truncateAt ??= 0
+      await handle.truncate(truncateAt ?? 0)
     } finally {
-      closeSync(fd)
+      await handle.close()
     }
-    truncateSync(path, truncateAt)
   }
 
   private pathFor(generation: number): string {
@@ -601,17 +709,36 @@ function defaultLog(): MemoryEventLog {
   return activeLog
 }
 
+/** One line per window, so a jammed lock cannot flood the console. */
+const DROP_WARNING_INTERVAL_MS = 60_000
+let lastDropWarningAt = 0
+let dropsSinceWarning = 0
+
+function warnAboutDrop(status: MemoryEventWriteStatus): void {
+  dropsSinceWarning += 1
+  const now = Date.now()
+  if (now - lastDropWarningAt < DROP_WARNING_INTERVAL_MS) return
+  lastDropWarningAt = now
+  console.warn(
+    `[morz] memory event log dropped ${dropsSinceWarning} event(s); most recent: ${status}`
+  )
+  dropsSinceWarning = 0
+}
+
 /** Fire-and-forget call sites use this fail-closed wrapper; events never break a run. */
-export function logMemoryEvent(
+export async function logMemoryEvent(
   value: MemoryInvocationEvent
-): boolean {
+): Promise<MemoryEventWriteStatus> {
+  let status: MemoryEventWriteStatus
   try {
-    return defaultLog().append(value)
+    status = await defaultLog().append(value)
   } catch (error) {
-    const message = error instanceof Error ? redactText(error.message, 200) : 'unknown error'
+    const message = error instanceof Error ? redactMessage(error.message, 200) : 'unknown error'
     console.warn(`[morz] memory event log write failed: ${message}`)
-    return false
+    return 'dropped-invalid'
   }
+  if (status !== 'ok' && status !== 'skipped-mode') warnAboutDrop(status)
+  return status
 }
 
 export function readEvents(filter: MemoryEventFilter = {}): MemoryInvocationEvent[] {
@@ -622,23 +749,23 @@ export function eventLogStats(): MemoryEventLogStats {
   return defaultLog().stats()
 }
 
-export function clearEventLog(): void {
-  defaultLog().clear()
+export function clearEventLog(): Promise<void> {
+  return defaultLog().clear()
 }
 
 export function logDispatchedSpawn(
   paneId: string,
   context: DispatchedInvocationContext
 ): void {
-  logMemoryEvent(dispatchedTracker.spawn(paneId, context))
+  void logMemoryEvent(dispatchedTracker.spawn(paneId, context))
 }
 
 export function logDispatchedExit(paneId: string, exitCode: number | null): void {
   const event = dispatchedTracker.exit(paneId, exitCode)
-  if (event) logMemoryEvent(event)
+  if (event) void logMemoryEvent(event)
 }
 
 export function logDispatchedInterrupt(paneId: string): void {
   const event = dispatchedTracker.interrupt(paneId)
-  if (event) logMemoryEvent(event)
+  if (event) void logMemoryEvent(event)
 }

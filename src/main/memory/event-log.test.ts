@@ -19,6 +19,7 @@ import {
   EVENT_LOG_LOCK_FILE,
   EVENT_LOG_LOCK_STALE_MS,
   MemoryEventLog,
+  redactMessage,
   redactText,
   type MemoryEventLogOptions,
   type MemoryInvocationEvent
@@ -50,10 +51,10 @@ function event(overrides: Partial<MemoryInvocationEvent> = {}): MemoryInvocation
   }
 }
 
-test('event log round-trips the v1 schema and filters by time and CLI', () => {
+test('event log round-trips the v1 schema and filters by time and CLI', async () => {
   const log = createLog({ directory: fixture('round-trip') })
-  assert.equal(log.append(event()), true)
-  assert.equal(log.append(event({
+  assert.equal(await log.append(event()), 'ok')
+  assert.equal(await log.append(event({
     ts: 1_753_680_001_000,
     sessionKind: 'dispatched',
     cli: 'codex',
@@ -61,7 +62,7 @@ test('event log round-trips the v1 schema and filters by time and CLI', () => {
     outcome: 'ok',
     durationMs: 1_000,
     meta: { exitCode: 0, source: 'pty' }
-  })), true)
+  })), 'ok')
 
   assert.deepEqual(log.readEvents(), [
     event(),
@@ -114,24 +115,24 @@ const SECRET_CORPUS = [
   }
 ]
 
-test('redaction corpus never reaches disk through permitted metadata fields', () => {
+test('redaction corpus never reaches disk through permitted metadata fields', async () => {
   const directory = fixture('redaction')
   const log = createLog({ directory })
 
   for (const [index, { payload }] of SECRET_CORPUS.entries()) {
-    assert.equal(log.append(event({
+    assert.equal(await log.append(event({
       ts: event().ts + index,
       event: 'tool',
       agentId: `C:/Users/Alice.Smith/${payload}`,
       meta: { phase: 'result', source: 'structured', model: `safe-prefix-${payload}` }
-    })), true)
+    })), 'ok')
   }
   const legitimate = event({
     ts: event().ts + SECRET_CORPUS.length,
     event: 'tool',
     meta: { phase: 'result', source: 'structured', model: 'claude-fable-5' }
   })
-  assert.equal(log.append(legitimate), true)
+  assert.equal(await log.append(legitimate), 'ok')
 
   const raw = readFileSync(join(directory, EVENT_LOG_FILE), 'utf8')
   for (const { marker } of SECRET_CORPUS) assert.equal(raw.includes(marker), false)
@@ -177,17 +178,38 @@ test('redaction canonicalizes before scanning and decodes wrapped secrets', () =
     assert.notEqual(scanned, wrapped)
     assert.match(scanned, /\[redacted\]/)
   }
+  // Ordinary whitespace inside a decoded payload must not read as two
+  // harmless fragments.
+  for (const separator of ['\n', ' ', '\r\n', '\t']) {
+    const wrapped = Buffer.from(`sk-proj-${separator}1234567890abcdefghijklmnop`, 'utf8')
+      .toString('base64url')
+    assert.match(redactText(wrapped, 512), /\[redacted\]/)
+  }
+
   // Ordinary long tokens are not touched by the decode pass.
   assert.equal(redactText('Tool-name-that-is-quite-long-but-benign', 512), 'Tool-name-that-is-quite-long-but-benign')
-
-  // Profile roots lose the account name on every platform spelling.
-  assert.equal(redactText('C:\\Users\\Alice.Smith\\Projects\\x', 512), '~\\Projects\\x')
-  assert.equal(redactText('C:/Users/Alice.Smith/Projects/x', 512), '~/Projects/x')
-  assert.equal(redactText('/home/alice/projects/x', 512), '~/projects/x')
-  assert.equal(redactText('/Users/alice/projects/x', 512), '~/projects/x')
 })
 
-test('a secret split across two records is contained by the record shape, not by scanning', () => {
+test('profile paths are rewritten in messages only, never in enum-shaped fields', () => {
+  // Profile roots lose the account name on every platform spelling.
+  assert.equal(redactMessage('C:\\Users\\Alice.Smith\\Projects\\x', 512), '~\\Projects\\x')
+  assert.equal(redactMessage('C:/Users/Alice.Smith/Projects/x', 512), '~/Projects/x')
+  assert.equal(redactMessage('/home/alice/projects/x', 512), '~/projects/x')
+  assert.equal(redactMessage('/Users/alice/projects/x', 512), '~/projects/x')
+  assert.equal(
+    redactMessage("EACCES: permission denied, open 'C:\\Users\\Alice\\.env'", 512),
+    "EACCES: permission denied, open '~\\.env'"
+  )
+
+  // A path root has to actually start a path. These are not paths.
+  for (const benign of ['mcp/Users/list', 'https://example.com/home/alice', 'a/home/b']) {
+    assert.equal(redactMessage(benign, 512), benign)
+  }
+  // Tool and model names never get the profile rewrite at all.
+  assert.equal(redactText('mcp/Users/list', 512), 'mcp/Users/list')
+})
+
+test('a secret split across two records is contained by the record shape, not by scanning', async () => {
   const directory = fixture('split-record')
   const log = createLog({ directory })
   // Honest limitation: per-record scanning cannot join halves. The mitigation
@@ -195,11 +217,11 @@ test('a secret split across two records is contained by the record shape, not by
   // dropped by shape validation rather than caught by a pattern.
   const halves = ['sk-proj-1234567890', 'abcdefghijklmnop']
   for (const [index, half] of halves.entries()) {
-    assert.equal(log.append(event({
+    assert.equal(await log.append(event({
       ts: event().ts + index,
       event: 'tool',
       meta: { phase: 'result', source: 'structured', model: `prefix ${half}` }
-    })), true)
+    })), 'ok')
   }
 
   const raw = readFileSync(join(directory, EVENT_LOG_FILE), 'utf8')
@@ -207,36 +229,58 @@ test('a secret split across two records is contained by the record shape, not by
   assert.deepEqual(log.readEvents().map((entry) => entry.meta?.model), [undefined, undefined])
 })
 
-test('metadata enums reject values outside their fixed sets', () => {
+test('an encoded secret cannot ride into a record through a safe-looking identifier', async () => {
+  const directory = fixture('encoded-identifier')
+  const log = createLog({ directory })
+  // base64url is made entirely of identifier-safe characters, so shape
+  // validation alone would have waved this straight through.
+  const wrapped = Buffer.from('sk-proj-\n1234567890abcdefghijklmnop', 'utf8').toString('base64url')
+  assert.match(wrapped, /^[A-Za-z0-9_-]+$/)
+  assert.equal(await log.append(event({ agentId: wrapped })), 'ok')
+
+  const raw = readFileSync(join(directory, EVENT_LOG_FILE), 'utf8')
+  assert.equal(raw.includes(wrapped), false)
+  assert.equal(raw.includes('1234567890abcdefghijklmnop'), false)
+  assert.match(log.readEvents()[0]?.agentId ?? '', /^h-[0-9a-f]{16}$/)
+})
+
+test('a tool name that merely looks like a path is kept intact', async () => {
+  const directory = fixture('path-like-name')
+  const log = createLog({ directory })
+  assert.equal(await log.append(event({ event: 'tool', name: 'mcp/Users/list' })), 'ok')
+  assert.equal(log.readEvents()[0]?.name, 'mcp/Users/list')
+})
+
+test('metadata enums reject values outside their fixed sets', async () => {
   const directory = fixture('meta-enums')
   const log = createLog({ directory })
-  assert.equal(log.append(event({
+  assert.equal(await log.append(event({
     event: 'exit',
     meta: { signal: 'SIGKILL', source: 'pty' }
-  })), true)
-  assert.equal(log.append(event({
+  })), 'ok')
+  assert.equal(await log.append(event({
     ts: event().ts + 1,
     event: 'exit',
     meta: { signal: 'sk-proj-1234567890abcdefghijklmnop', source: 'pty' }
-  })), true)
+  })), 'ok')
 
   assert.deepEqual(log.readEvents().map((entry) => entry.meta?.signal), ['SIGKILL', undefined])
 })
 
-test('append repairs a malformed or truncated final JSONL line', () => {
+test('append repairs a malformed or truncated final JSONL line', async () => {
   const directory = fixture('truncated-tail')
   const log = createLog({ directory })
-  assert.equal(log.append(event()), true)
+  assert.equal(await log.append(event()), 'ok')
   const path = join(directory, EVENT_LOG_FILE)
   writeFileSync(path, `${readFileSync(path, 'utf8')}{"v":1,"ts":`, 'utf8')
 
   assert.deepEqual(log.readEvents(), [event()])
   const next = event({ ts: event().ts + 1, event: 'exit', outcome: 'ok' })
-  assert.equal(log.append(next), true)
+  assert.equal(await log.append(next), 'ok')
   assert.deepEqual(log.readEvents(), [event(), next])
 })
 
-test('rotation caps files and keeps only the newest configured generations', () => {
+test('rotation caps files and keeps only the newest configured generations', async () => {
   const directory = fixture('rotation')
   const log = createLog({
     directory,
@@ -245,13 +289,13 @@ test('rotation caps files and keeps only the newest configured generations', () 
     keepFiles: 2
   })
   for (let index = 0; index < 20; index++) {
-    assert.equal(log.append(event({
+    assert.equal(await log.append(event({
       ts: event().ts + index,
       event: 'tool',
       name: `Tool${index}`,
       outcome: 'ok',
       meta: { phase: 'result', source: 'structured' }
-    })), true)
+    })), 'ok')
   }
 
   const files = readdirSync(directory).filter((name) => name.startsWith('memory-events'))
@@ -264,26 +308,28 @@ test('rotation caps files and keeps only the newest configured generations', () 
   assert.equal(events.at(-1)?.name, 'Tool19')
   assert.deepEqual(log.stats(), {
     count: events.length,
-    bytes: files.reduce((total, name) => total + readFileSync(join(directory, name)).byteLength, 0)
+    bytes: files.reduce((total, name) => total + readFileSync(join(directory, name)).byteLength, 0),
+    dropped: 0
   })
 })
 
-test('two stores sharing a directory rotate without clobbering each other', () => {
+test('two stores sharing a directory rotate without clobbering each other', async () => {
   const directory = fixture('concurrent-rotation')
   const options = { directory, maxFileBytes: 420, maxRecordBytes: 400, keepFiles: 2 }
   const first = createLog(options)
   const second = createLog(options)
 
-  for (let index = 0; index < 20; index++) {
-    const log = index % 2 === 0 ? first : second
-    assert.equal(log.append(event({
+  // Fired concurrently on purpose: appends are async now, so the in-process
+  // queue is what keeps two stores from interleaving a rotation.
+  const statuses = await Promise.all(Array.from({ length: 20 }, (_, index) =>
+    (index % 2 === 0 ? first : second).append(event({
       ts: event().ts + index,
       event: 'tool',
       name: `Tool${index}`,
       outcome: 'ok',
       meta: { phase: 'result', source: 'structured' }
-    })), true)
-  }
+    }))))
+  assert.deepEqual(new Set(statuses), new Set(['ok']))
 
   const files = readdirSync(directory).filter((name) => name.startsWith('memory-events'))
   assert.equal(files.length, 2)
@@ -297,48 +343,61 @@ test('two stores sharing a directory rotate without clobbering each other', () =
   assert.equal(existsSync(join(directory, EVENT_LOG_LOCK_FILE)), false)
 })
 
-test('a live lock blocks the write; a stale one is taken over', () => {
+test('locking is ownership-aware: a live lock is untouched, a stale one is claimed', async () => {
   const directory = fixture('lock')
   const log = createLog({ directory })
   const lock = join(directory, EVENT_LOG_LOCK_FILE)
   mkdirSync(directory, { recursive: true })
-  writeFileSync(lock, '', 'utf8')
+  writeFileSync(lock, 'another-process', 'utf8')
 
-  // Another process is mid-rotation: fail closed rather than race it.
-  assert.equal(log.append(event()), false)
+  // Another process is mid-rotation: fail closed, and never delete its lock.
+  assert.equal(await log.append(event()), 'dropped-lock')
   assert.equal(existsSync(join(directory, EVENT_LOG_FILE)), false)
+  assert.equal(readFileSync(lock, 'utf8'), 'another-process')
+  assert.equal(log.stats().dropped, 1)
 
   const abandoned = (Date.now() - EVENT_LOG_LOCK_STALE_MS - 1_000) / 1_000
   utimesSync(lock, abandoned, abandoned)
-  assert.equal(log.append(event()), true)
-  assert.equal(existsSync(lock), false)
+  assert.equal(await log.append(event()), 'ok')
+  // Lock released and the takeover left no tombstone behind.
+  assert.deepEqual(readdirSync(directory), [EVENT_LOG_FILE])
 })
 
-test('single oversized records are dropped without rotating away valid data', () => {
+test('single oversized records are dropped without rotating away valid data', async () => {
   const directory = fixture('oversized')
   const log = createLog({
     directory,
     maxFileBytes: 512,
     maxRecordBytes: 160
   })
-  assert.equal(log.append(event()), true)
+  assert.equal(await log.append(event()), 'ok')
   const before = readFileSync(join(directory, EVENT_LOG_FILE), 'utf8')
 
-  assert.equal(log.append(event({
+  assert.equal(await log.append(event({
     ts: event().ts + 1,
     event: 'tool',
     name: 'x'.repeat(500),
     spaceId: 'y'.repeat(250)
-  })), false)
+  })), 'dropped-oversized')
   assert.equal(readFileSync(join(directory, EVENT_LOG_FILE), 'utf8'), before)
   assert.deepEqual(log.readEvents(), [event()])
+  assert.equal(log.stats().dropped, 1)
 })
 
-test('Manual mode and default E2E mode are provably inert', () => {
+test('an unusable record is dropped and counted, never counted as written', async () => {
+  const log = createLog({ directory: fixture('invalid') })
+  assert.equal(
+    await log.append({ ...event(), cli: 'not-a-cli' } as unknown as MemoryInvocationEvent),
+    'dropped-invalid'
+  )
+  assert.deepEqual(log.stats(), { count: 0, bytes: 0, dropped: 1 })
+})
+
+test('Manual mode and default E2E mode are provably inert', async () => {
   const directory = fixture('gating')
   let mode: 'manual' | 'assisted' = 'manual'
   const log = new MemoryEventLog({ directory, getMode: () => mode })
-  assert.equal(log.append(event()), false)
+  assert.equal(await log.append(event()), 'skipped-mode')
   assert.equal(existsSync(join(directory, EVENT_LOG_FILE)), false)
 
   const previousE2e = process.env.MORZ_E2E
@@ -347,8 +406,10 @@ test('Manual mode and default E2E mode are provably inert', () => {
   delete process.env.MORZ_E2E_MEMORY_EVENT_LOG
   try {
     mode = 'assisted'
-    assert.equal(log.append(event()), false)
+    assert.equal(await log.append(event()), 'skipped-mode')
     assert.equal(existsSync(join(directory, EVENT_LOG_FILE)), false)
+    // A gated write is expected behaviour, not a lost event.
+    assert.equal(log.stats().dropped, 0)
   } finally {
     if (previousE2e === undefined) delete process.env.MORZ_E2E
     else process.env.MORZ_E2E = previousE2e
@@ -357,7 +418,7 @@ test('Manual mode and default E2E mode are provably inert', () => {
   }
 })
 
-test('Clear removes every generation and resets counters', () => {
+test('Clear removes every generation and resets counters', async () => {
   const directory = fixture('clear')
   const log = createLog({
     directory,
@@ -366,15 +427,25 @@ test('Clear removes every generation and resets counters', () => {
     keepFiles: 2
   })
   for (let index = 0; index < 4; index++) {
-    assert.equal(log.append(event({ ts: event().ts + index, name: `Tool${index}` })), true)
+    assert.equal(await log.append(event({ ts: event().ts + index, name: `Tool${index}` })), 'ok')
   }
   assert.ok(log.stats().count > 0)
 
-  log.clear()
+  await log.clear()
 
-  assert.deepEqual(log.stats(), { count: 0, bytes: 0 })
+  assert.deepEqual(log.stats(), { count: 0, bytes: 0, dropped: 0 })
   assert.deepEqual(log.readEvents(), [])
   assert.deepEqual(readdirSync(directory), [])
+})
+
+test('Clear reports failure instead of pretending when another writer holds the lock', async () => {
+  const directory = fixture('clear-locked')
+  const log = createLog({ directory })
+  assert.equal(await log.append(event()), 'ok')
+  writeFileSync(join(directory, EVENT_LOG_LOCK_FILE), 'another-process', 'utf8')
+
+  await assert.rejects(() => log.clear(), /busy/)
+  assert.deepEqual(log.readEvents(), [event()])
 })
 
 test('Claude structured tool_use and tool_result map to honest invocation outcomes', () => {
