@@ -6,6 +6,9 @@
  * Under MORZ_E2E the classifier is the deterministic heuristic (no LLM).
  */
 import { expect, test } from '@playwright/test'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
 import type {
   MemoryEntry,
   MemoryOpAuditRow,
@@ -44,32 +47,35 @@ function proposal(
 
 test.describe.serial('Memory op-set reconciliation', () => {
   let morz: MorzApp
+  let appDataDir: string
 
   test.beforeAll(async () => {
     process.env.MORZ_E2E = '1'
-    morz = await launchMorz()
-
-    const now = new Date().toISOString()
-    const seed: MemoryEntry = {
-      id: 'prefer-pnpm',
-      scope: 'global',
-      kind: 'rule',
-      title: 'Use pnpm for JavaScript dependencies',
-      body: 'Use pnpm unless the repository selects another package manager.',
-      origin: 'user',
-      createdAt: now,
-      updatedAt: now,
-      enabled: true
-    }
-    await morz.page.evaluate(
-      (value) => (window as unknown as MemoryWindow).morz.memory.save(value),
-      seed
-    )
+    appDataDir = mkdtempSync(join(tmpdir(), 'morz-memory-supersession-'))
+    const memoryDir = join(appDataDir, 'Morz', 'memory', 'global')
+    mkdirSync(memoryDir, { recursive: true })
+    // d374a68-era fixture: no supersedesId/supersededBy fields. Startup must
+    // load and index it without a rewrite or migration warning.
+    writeFileSync(join(memoryDir, 'prefer-pnpm.md'), [
+      '---',
+      'id: "prefer-pnpm"',
+      'scope: "global"',
+      'kind: "rule"',
+      'title: "Use pnpm for JavaScript dependencies"',
+      'origin: "user"',
+      'createdAt: "2026-07-01T00:00:00.000Z"',
+      'updatedAt: "2026-07-01T00:00:00.000Z"',
+      'enabled: true',
+      '---',
+      'Use pnpm unless the repository selects another package manager.'
+    ].join('\n'), 'utf8')
+    morz = await launchMorz({ appDataDir })
   })
 
   test.afterAll(async () => {
     delete process.env.MORZ_E2E
     if (morz) await closeMorz(morz.app)
+    if (appDataDir) rmSync(appDataDir, { recursive: true, force: true })
   })
 
   test('duplicate candidate reconciles to NOOP with no proposal card', async () => {
@@ -117,18 +123,37 @@ test.describe.serial('Memory op-set reconciliation', () => {
     )
     expect(approved.state).toBe('approved')
 
-    // The superseded row is kept (soft-expired), the successor is active.
-    const old = await morz.page.evaluate(
-      (id) => (window as unknown as MemoryWindow).morz.memory.get(id),
-      'prefer-pnpm'
+    // The live fact keeps its clean id. The old revision moves to a derived id
+    // and both rows link to one another.
+    const entries = await morz.page.evaluate(() =>
+      (window as unknown as MemoryWindow).morz.memory.list()
     )
+    const old = entries.find((entry) => entry.supersededBy === 'learned-bun')
     expect(old?.expiredAt).toBeTruthy()
     expect(old?.invalidAt).toBeTruthy()
+    expect(old?.id).toMatch(/^prefer-pnpm-rev-[a-f0-9]{12}$/)
     const next = await morz.page.evaluate(
       (id) => (window as unknown as MemoryWindow).morz.memory.get(id),
       'learned-bun'
     )
     expect(next?.expiredAt).toBeFalsy()
+    expect(next?.supersedesId).toBe(old?.id)
+    const restoreError = await morz.page.evaluate(async (id) => {
+      try {
+        await (window as unknown as MemoryWindow).morz.memory.restore(id)
+        return null
+      } catch (error) {
+        return error instanceof Error ? error.message : String(error)
+      }
+    }, old!.id)
+    expect(restoreError).toContain('Cannot restore memory while its successor is active')
+
+    await morz.page.getByRole('button', { name: 'Settings' }).click()
+    await morz.page.getByRole('button', { name: 'Memory' }).click()
+    const settings = morz.page.getByRole('region', { name: 'Learning memory' })
+    await expect(settings.getByText(
+      new RegExp(`Replaced #${old?.id} on \\d{4}-\\d{2}-\\d{2}`)
+    )).toBeVisible()
 
     // Search never surfaces expired rows; injection renders a validity window.
     const matches = await morz.page.evaluate(() =>
@@ -148,6 +173,112 @@ test.describe.serial('Memory op-set reconciliation', () => {
     expect(updateRow?.targetId).toBe('prefer-pnpm')
     expect(updateRow?.oldTitle).toBe('Use pnpm for JavaScript dependencies')
     expect(updateRow?.newBody).toContain('bun')
+  })
+
+  test('second concurrent approval stays pending and shows the re-propose error', async () => {
+    const now = new Date().toISOString()
+    await morz.page.evaluate(
+      (value) => (window as unknown as MemoryWindow).morz.memory.save(value),
+      {
+        id: 'format-biome',
+        scope: 'global',
+        kind: 'rule',
+        title: 'Format TypeScript with Biome',
+        body: 'Run Biome with the repository defaults.',
+        origin: 'user',
+        createdAt: now,
+        updatedAt: now,
+        enabled: true
+      } satisfies MemoryEntry
+    )
+    const [proposalA, proposalB] = await Promise.all([
+      morz.page.evaluate(
+        (value) => (window as unknown as MemoryWindow).morz.memory.testReconcile(value),
+        proposal('op-format-a', {
+          id: 'format-biome-a',
+          title: 'Format TypeScript with Biome',
+          body: 'Run Biome and apply the shared strict preset.'
+        })
+      ),
+      morz.page.evaluate(
+        (value) => (window as unknown as MemoryWindow).morz.memory.testReconcile(value),
+        proposal('op-format-b', {
+          id: 'format-biome-b',
+          title: 'Format TypeScript with Biome',
+          body: 'Run Biome but keep the relaxed preset.'
+        })
+      )
+    ])
+    expect(proposalA.op?.targetRevision).toBeTruthy()
+    expect(proposalB.op?.targetRevision).toBe(proposalA.op?.targetRevision)
+
+    await morz.page.evaluate(
+      (id) => (window as unknown as MemoryWindow).morz.memory.resolveProposal(id, true),
+      proposalA.id
+    )
+
+    const settings = morz.page.getByRole('region', { name: 'Learning memory' })
+    await settings.getByRole('button', { name: `Approve ${proposalB.entry.title}` }).click()
+    await expect(settings.getByRole('alert')).toContainText(
+      'Memory changed since this was proposed — re-propose.'
+    )
+    const stillPending = await morz.page.evaluate(
+      (id) => (window as unknown as MemoryWindow).morz.memory.proposals()
+        .then((items) => items.find((item) => item.id === id)?.state),
+      proposalB.id
+    )
+    expect(stillPending).toBe('pending')
+  })
+
+  test('manual save and delete use pre-approved reconciliation with audit', async () => {
+    const now = new Date().toISOString()
+    const original: MemoryEntry = {
+      id: 'manual-format-rule',
+      scope: 'global',
+      kind: 'rule',
+      title: 'Format TypeScript before commit',
+      body: 'Run the repository formatter.',
+      origin: 'user',
+      createdAt: now,
+      updatedAt: now,
+      enabled: true
+    }
+    await morz.page.evaluate(
+      (value) => (window as unknown as MemoryWindow).morz.memory.save(value),
+      original
+    )
+    const beforeProposals = await morz.page.evaluate(() =>
+      (window as unknown as MemoryWindow).morz.memory.proposals()
+    )
+    const successor = await morz.page.evaluate(
+      (value) => (window as unknown as MemoryWindow).morz.memory.save(value),
+      { ...original, body: 'Run Biome before every commit.' }
+    )
+    expect(successor.id).toBe(original.id)
+    expect(successor.supersedesId).toMatch(/^manual-format-rule-rev-[a-f0-9]{12}$/)
+    const afterProposals = await morz.page.evaluate(() =>
+      (window as unknown as MemoryWindow).morz.memory.proposals()
+    )
+    expect(afterProposals.filter((item) => item.state === 'pending')).toHaveLength(
+      beforeProposals.filter((item) => item.state === 'pending').length
+    )
+    expect(afterProposals.some((item) =>
+      item.id.startsWith('manual-') && item.state === 'approved')).toBe(true)
+
+    await morz.page.evaluate(
+      (id) => (window as unknown as MemoryWindow).morz.memory.remove(id),
+      successor.id
+    )
+    const removed = await morz.page.evaluate(
+      (id) => (window as unknown as MemoryWindow).morz.memory.get(id),
+      successor.id
+    )
+    expect(removed?.expiredAt).toBeTruthy()
+    const audit = await morz.page.evaluate(() =>
+      (window as unknown as MemoryWindow).morz.memory.testAudit()
+    )
+    expect(audit.some((row) => row.op === 'update' && row.memoryId === original.id)).toBe(true)
+    expect(audit.some((row) => row.op === 'delete' && row.memoryId === original.id)).toBe(true)
   })
 
   test('applied DELETE keeps the row expired and restorable', async () => {
