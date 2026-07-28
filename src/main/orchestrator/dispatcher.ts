@@ -32,12 +32,15 @@ import type { IpcMain } from 'electron'
 import { RunApi, type TerminalSpawnOpts } from '../../shared/ipc'
 import {
   canonicalPlanJson,
+  LEGACY_SPAWN_PLAN_VERSION,
   SPAWN_PLAN_VERSION,
   type PlannedAgent,
   type PlannedCli,
   type RunStatus,
   type SpawnPlan
 } from '../../shared/spawn-plan'
+import { launchCommandModelSuffix } from '../../shared/model-choice'
+import { isPlannerModel } from '../../shared/models'
 import { MORZ_AGENT_ID, type AgentId } from '../../shared/bus'
 import { acceptTask, createTask } from '../bus/board'
 import { journalEntries } from '../store/db'
@@ -115,7 +118,7 @@ const SAFE_BRANCH = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/
 
 function validatePlan(plan: SpawnPlan): void {
   if (!plan || typeof plan !== 'object') throw new Error('[dispatch] not a SpawnPlan')
-  if (plan.version !== SPAWN_PLAN_VERSION) {
+  if (plan.version !== SPAWN_PLAN_VERSION && plan.version !== LEGACY_SPAWN_PLAN_VERSION) {
     throw new Error(`[dispatch] unsupported plan version: ${String(plan.version)}`)
   }
   if (!plan.id || typeof plan.id !== 'string') throw new Error('[dispatch] plan needs an id')
@@ -135,8 +138,20 @@ function validatePlan(plan: SpawnPlan): void {
     if (!SAFE_BRANCH.test(agent.branch) || agent.branch.includes('..')) {
       throw new Error(`[dispatch] unsafe branch name: ${JSON.stringify(agent.branch)}`)
     }
-    if (agent.cli !== 'claude' && agent.cli !== 'codex' && agent.cli !== 'agy') {
+    if (
+      agent.cli !== 'claude' &&
+      agent.cli !== 'codex' &&
+      agent.cli !== 'agy' &&
+      agent.cli !== 'opencode'
+    ) {
       throw new Error(`[dispatch] unknown cli: ${String(agent.cli)}`)
+    }
+    if (
+      agent.model !== undefined &&
+      agent.model !== null &&
+      (typeof agent.model !== 'string' || !isPlannerModel(agent.cli, agent.model))
+    ) {
+      throw new Error(`[dispatch] invalid model for ${agent.cli}: ${JSON.stringify(agent.model)}`)
     }
     if (typeof agent.cwd !== 'string' || isAbsolute(agent.cwd) || agent.cwd.split(/[\\/]/).includes('..')) {
       throw new Error(`[dispatch] agent cwd must stay inside its worktree: ${JSON.stringify(agent.cwd)}`)
@@ -185,9 +200,12 @@ function git(cwd: string, args: string[]): Promise<string> {
  * w15/model-choice: a session-flag ModelChoice (space override wins) appends
  * the per-CLI model flag; inherit adds NOTHING. Model ids are SAFE_MODEL_RE-
  * validated at save time, so the suffix can never carry shell metacharacters. */
-function launchCommand(cli: PlannedCli, seedPath: string, spaceRoot: string): string {
+function launchCommand(agent: PlannedAgent, seedPath: string, spaceRoot: string): string {
+  const { cli } = agent
   const quoted = `'${seedPath.replace(/'/g, "''")}'`
-  const modelSuffix = launchSuffixFor(cli, spaceRoot)
+  const modelSuffix = agent.model
+    ? launchCommandModelSuffix({ cli, model: agent.model, source: 'session-flag' })
+    : launchSuffixFor(cli, spaceRoot)
   // w13/dispatch-visible test hook: substitute a fake CLI executable so the e2e
   // suite can prove real end-to-end execution (pane visible, command actually
   // runs, output streams) without spending LLM tokens. The model suffix rides
@@ -204,7 +222,7 @@ function launchCommand(cli: PlannedCli, seedPath: string, spaceRoot: string): st
       // bracketed paste once the TUI is up (Agent 4's lane).
       return `agy${modelSuffix}`
     case 'opencode':
-      return `opencode${modelSuffix} run "$(Get-Content -Raw ${quoted})"`
+      return `opencode run${modelSuffix} "$(Get-Content -Raw ${quoted})"`
   }
 }
 
@@ -372,7 +390,7 @@ async function launchAgent(
         `[dispatch] renderer never attached pane ${paneId} — refusing to launch into a stalled PTY`
       )
     }
-    h.writePane(paneId, `${launchCommand(agent.cli, seedPath, plan.spaceRoot)}\r`)
+    h.writePane(paneId, `${launchCommand(agent, seedPath, plan.spaceRoot)}\r`)
   }
   agentTransition(runId, agent.agentId, 'running')
   push(runId)

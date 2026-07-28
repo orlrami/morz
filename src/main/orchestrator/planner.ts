@@ -783,8 +783,9 @@ function e2ePlannerResponse(
   const agent: Record<string, unknown> = {
     agentId: `${engine}-planner`,
     cli,
-    model:
-      cli === 'claude'
+    model: goal.includes('MORZ_E2E_NO_MODEL')
+      ? null
+      : cli === 'claude'
         ? 'sonnet'
         : cli === 'codex'
           ? 'gpt-5.6-sol'

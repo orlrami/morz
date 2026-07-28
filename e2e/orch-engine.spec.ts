@@ -54,6 +54,9 @@ test.describe.serial('Orchestrator planner engine', () => {
 
     const card = morz.page.getByRole('region', { name: 'Spawn plan' })
     await expect(card).toContainText('MORZ_E2E Codex planner')
+    await expect(
+      card.getByRole('combobox', { name: 'Agent model for MORZ_E2E Codex planner' })
+    ).toHaveValue('gpt-5.6-sol')
 
     const appDataDir = morz.appDataDir
     await closeMorz(morz.app)
@@ -62,6 +65,18 @@ test.describe.serial('Orchestrator planner engine', () => {
     await expect(morz.page.getByRole('combobox', { name: 'Planner engine' })).toHaveValue('codex')
     await morz.page.getByRole('region', { name: 'Spawn plan' }).getByRole('button', { name: 'Discard' }).click()
     await expect(morz.page.getByRole('region', { name: 'Spawn plan' })).toHaveCount(0)
+  })
+
+  test('a plan without a model leaves the per-agent chip at user default', async () => {
+    await morz.page.getByRole('combobox', { name: 'Planner engine' }).selectOption('claude')
+    await morz.page.getByRole('textbox', { name: 'Goal' }).fill('MORZ_E2E_NO_MODEL default')
+    await morz.page.getByRole('button', { name: 'Plan team' }).click()
+
+    const card = morz.page.getByRole('region', { name: 'Spawn plan' })
+    await expect(
+      card.getByRole('combobox', { name: 'Agent model for MORZ_E2E Claude planner' })
+    ).toHaveValue('')
+    await card.getByRole('button', { name: 'Discard' }).click()
   })
 
   test('Claude schema failure retries once then falls back to Codex with notice', async () => {

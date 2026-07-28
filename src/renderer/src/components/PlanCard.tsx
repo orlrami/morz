@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import { IconCheck, IconRefresh, IconTrash, IconUserMinus, IconUserPlus } from '@tabler/icons-react'
 import type { PlannedAgent, PlannedCli, SpawnPlan } from '@shared/spawn-plan'
+import { PLANNER_MODEL_CATALOG } from '@shared/models'
 import type {
   PlanTeamOptions,
   RouteDecision,
@@ -165,9 +166,29 @@ export function PlanCard({
     if (!agent || agent.cli === cli) return
     rememberDefault(agent.role, cli)
     void onUpdate(
-      { ...draft, agents: draft.agents.map((item, i) => (i === index ? { ...item, cli } : item)) },
+      {
+        ...draft,
+        agents: draft.agents.map((item, i) =>
+          i === index ? { ...item, cli, model: null } : item
+        )
+      },
       record.plan.planHash
     )
+  }
+
+  const editModel = (index: number, model: string): void => {
+    setDraft((current) => ({
+      ...current,
+      agents: current.agents.map((agent, i) =>
+        i === index ? { ...agent, model: model.trim() || null } : agent
+      )
+    }))
+  }
+
+  const saveModel = (index: number): void => {
+    const model = draft.agents[index]?.model ?? null
+    if (model === (record.plan.agents[index]?.model ?? null)) return
+    void onUpdate(draft, record.plan.planHash)
   }
 
   // w14/multi-agent-plan — append a blank specialist the user seeds via prompt.
@@ -354,6 +375,30 @@ export function PlanCard({
                   </option>
                 ))}
               </select>
+              <input
+                aria-label={`Agent model for ${agent.role}`}
+                data-testid={`plan-agent-model-${agent.agentId}`}
+                list={`plan-agent-models-${agent.agentId}`}
+                value={agent.model ?? ''}
+                placeholder="User default"
+                disabled={busy || record.state !== 'PROPOSED'}
+                onChange={(event) => editModel(index, event.target.value)}
+                onBlur={() => saveModel(index)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') event.currentTarget.blur()
+                }}
+                className="w-[112px] shrink-0 rounded-md border bg-black/10 px-1.5 py-0.5 font-mono text-[8.5px] outline-none focus:ring-1 disabled:opacity-50"
+                style={{
+                  borderColor: 'var(--color-line-strong)',
+                  color: colors.quartz,
+                  '--tw-ring-color': colors.bronze
+                } as React.CSSProperties}
+              />
+              <datalist id={`plan-agent-models-${agent.agentId}`}>
+                {PLANNER_MODEL_CATALOG[agent.cli].models.map((model) => (
+                  <option key={model} value={model} />
+                ))}
+              </datalist>
               {record.state === 'PROPOSED' && (
                 <button
                   type="button"
