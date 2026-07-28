@@ -157,6 +157,53 @@ test('an older message from the same publisher is ignored; a new publisher takes
   assert.deepEqual(spaceRegistry().spaces.map((space) => space.id), ['first'])
 })
 
+/*
+ * Codex round-2 MEDIUM: comparing generations only WITHIN one publisher let a
+ * delayed message from a replaced renderer pose as a brand-new publisher and
+ * win — r1:g2 → r2:g1 → r1:g3 used to end on r1's spaces, resurrecting Spaces
+ * the user had removed. A replaced publisher is now fenced permanently.
+ */
+test('a replaced publisher can never speak again, however new its generation', () => {
+  const stale = tempRoot('fence-stale')
+  const live = tempRoot('fence-live')
+  const publish = (id: string, root: string, publisherId: string, generation: number): void => {
+    setSpaceRegistry({ spaces: [{ id, root }], activeSpaceId: id, publisherId, generation })
+  }
+
+  publish('stale', stale, 'r1', 2)
+  publish('live', live, 'r2', 1) // the reload takes over
+  publish('stale', stale, 'r1', 3) // r1's delayed message arrives late
+
+  assert.deepEqual(spaceRegistry().spaces.map((space) => space.id), ['live'])
+  assert.equal(spaceRegistry().activeSpaceId, 'live')
+  assert.equal(resolveSpaceId({ root: stale }), undefined)
+  assert.equal(resolveSpaceId({ root: live }), 'live')
+
+  // and it stays fenced however long it keeps trying
+  publish('stale', stale, 'r1', 99)
+  assert.deepEqual(spaceRegistry().spaces.map((space) => space.id), ['live'])
+})
+
+test('the owning publisher id is bound to the webContents that claimed it', () => {
+  const owned = tempRoot('owner')
+  const forged = tempRoot('forged')
+  const publish = (id: string, root: string, generation: number, webContentsId: number): void => {
+    setSpaceRegistry(
+      { spaces: [{ id, root }], activeSpaceId: id, publisherId: 'r1', generation },
+      webContentsId
+    )
+  }
+
+  publish('owned', owned, 1, 7)
+  // another webContents reusing the owner's publisher id is not the owner
+  publish('forged', forged, 99, 9)
+  assert.deepEqual(spaceRegistry().spaces.map((space) => space.id), ['owned'])
+
+  // the real owner still moves forward from its own webContents
+  publish('forged', forged, 2, 7)
+  assert.deepEqual(spaceRegistry().spaces.map((space) => space.id), ['forged'])
+})
+
 test('readiness flips on the first accepted publish and is awaitable', async () => {
   const root = tempRoot('ready')
   assert.equal(spaceRegistryReady(), false)

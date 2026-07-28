@@ -20,7 +20,8 @@
  * roots are canonicalized on disk and two Spaces may not claim the same one,
  * because `C:\Projects\morz` published twice — or once as `C:\Projects\.\morz`
  * — would otherwise let the first entry win and hand one team another team's
- * memory. Out-of-order publishes from one renderer are ignored by generation.
+ * memory. Publisher ownership is fenced to a webContents lifecycle so a
+ * replaced renderer cannot reclaim the registry with a late message.
  */
 import { realpathSync, statSync } from 'node:fs'
 import { isAbsolute, relative, resolve } from 'node:path'
@@ -37,11 +38,26 @@ const MAX_ROOT = 32_768
 
 let spaces: SpaceRegistryEntry[] = []
 let activeSpaceId: string | null = null
-let publisherId: string | null = null
-let generation = 0
 /** True once ANY publish has been accepted — see `spaceRegistryReady`. */
 let ready = false
 let readyResolvers: (() => void)[] = []
+
+/*
+ * Ownership is bound to the publishing webContents (Codex round-2). Comparing
+ * generations only within one publisher was not enough: once r2 replaced r1, a
+ * DELAYED r1 message looked like a brand-new publisher and overwrote r2
+ * (r1:g2 → r2:g1 → r1:g3 ended on r1's spaces), which can resurrect a Space the
+ * user removed or point a team at another Space's memory. A replaced publisher
+ * id is therefore retired PERMANENTLY — its later messages are dropped whatever
+ * generation they carry. The set only grows when a renderer is replaced, so it
+ * stays a handful of short strings for the life of the process.
+ */
+let owner: { publisherId: string | null; webContentsId: number | null; generation: number } = {
+  publisherId: null,
+  webContentsId: null,
+  generation: 0
+}
+const retiredPublishers = new Set<string>()
 
 /** Windows paths differ only by case and trailing separators — compare folded. */
 function comparableRoot(root: string): string {
@@ -88,7 +104,7 @@ function cleanText(value: unknown, field: string, max: number): string {
  * exists on disk is dropped (nothing can be dispatched into it anyway) while a
  * structurally incoherent snapshot is rejected outright.
  */
-export function setSpaceRegistry(input: unknown): SpaceRegistrySnapshot {
+export function setSpaceRegistry(input: unknown, webContentsId?: number): SpaceRegistrySnapshot {
   if (!input || typeof input !== 'object') throw new Error('Space registry snapshot is invalid')
   const snapshot = input as Record<string, unknown>
   if (!Array.isArray(snapshot.spaces) || snapshot.spaces.length > MAX_SPACES) {
@@ -100,10 +116,19 @@ export function setSpaceRegistry(input: unknown): SpaceRegistrySnapshot {
   if (typeof sentGeneration !== 'number' || !Number.isInteger(sentGeneration) || sentGeneration < 0) {
     throw new Error('Space registry generation is invalid')
   }
-  // A reloaded renderer is a NEW publisher and takes over; an older message
-  // from the CURRENT publisher lost a race and must not overwrite newer state.
-  if (sender !== null && sender === publisherId && sentGeneration <= generation) {
-    return spaceRegistry()
+  if (sender !== null) {
+    // a publisher that has been replaced never speaks again, however new its
+    // generation looks — this is the fence, not an ordering heuristic
+    if (retiredPublishers.has(sender)) return spaceRegistry()
+    if (sender === owner.publisherId) {
+      // the current owner: its id is bound to the webContents that claimed it,
+      // and it may only move forward
+      const impersonated =
+        webContentsId !== undefined &&
+        owner.webContentsId !== null &&
+        webContentsId !== owner.webContentsId
+      if (impersonated || sentGeneration <= owner.generation) return spaceRegistry()
+    }
   }
 
   const next: SpaceRegistryEntry[] = []
@@ -131,8 +156,15 @@ export function setSpaceRegistry(input: unknown): SpaceRegistrySnapshot {
   }
   spaces = next
   activeSpaceId = typeof active === 'string' && next.some((space) => space.id === active) ? active : null
-  publisherId = sender
-  generation = sentGeneration
+  // a different publisher taking over retires the previous one for good
+  if (owner.publisherId !== null && owner.publisherId !== sender) {
+    retiredPublishers.add(owner.publisherId)
+  }
+  owner = {
+    publisherId: sender,
+    webContentsId: webContentsId ?? owner.webContentsId,
+    generation: sentGeneration
+  }
   if (!ready) {
     ready = true
     for (const resolveReady of readyResolvers.splice(0)) resolveReady()
@@ -174,8 +206,8 @@ export function awaitSpaceRegistryReady(timeoutMs: number): Promise<boolean> {
 export function clearSpaceRegistry(): void {
   spaces = []
   activeSpaceId = null
-  publisherId = null
-  generation = 0
+  owner = { publisherId: null, webContentsId: null, generation: 0 }
+  retiredPublishers.clear()
   ready = false
   readyResolvers = []
 }
@@ -219,7 +251,9 @@ export function registerSpaceRegistryIpc(ipcMain: IpcMain): void {
   if (registered) return
   ipcMain.handle(SpaceRegistryApi.publish, (event, snapshot: unknown) => {
     assertTrustedSender(event)
-    return setSpaceRegistry(snapshot)
+    // ownership is keyed to the webContents, so a replaced renderer cannot
+    // reclaim the registry with a late message
+    return setSpaceRegistry(snapshot, event.sender.id)
   })
   if (process.env.MORZ_E2E === '1') {
     ipcMain.handle(SpaceRegistryApi.testSnapshot, () => spaceRegistry())
