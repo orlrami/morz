@@ -1329,10 +1329,12 @@ export async function registerPlannerIpc(dispatcher: DispatchPort = new LoggingD
   )
   ipcMain.handle(
     PlannerApi.update,
-    (_event, input: { plan?: unknown; expectedHash?: unknown }): StoredSpawnPlan => {
+    async (_event, input: { plan?: unknown; expectedHash?: unknown }): Promise<StoredSpawnPlan> => {
       if (!isPlainObject(input)) throw new Error('Invalid plan update')
       assertHash(input.expectedHash, 'Expected plan hash')
-      const validation = validateSpawnPlan(input.plan)
+      // An edited plan is dispatched like any other, so it answers to the same
+      // detected-only roster as a generated one (w17 review).
+      const validation = validateSpawnPlan(input.plan, { connections: await resolveConnections({}) })
       if (!validation.value) throw new Error(`Invalid plan update: ${validation.issues.join('; ')}`)
       return store.updateProposed(validation.value, input.expectedHash)
     }
