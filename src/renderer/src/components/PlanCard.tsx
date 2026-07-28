@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import { IconCheck, IconRefresh, IconTrash, IconUserMinus, IconUserPlus } from '@tabler/icons-react'
 import type { PlannedAgent, PlannedCli, SpawnPlan } from '@shared/spawn-plan'
+import { PLANNER_MODEL_CATALOG } from '@shared/models'
 import type {
   PlanTeamOptions,
   RouteDecision,
@@ -9,6 +10,7 @@ import type {
   StoredPlanAmendment,
   StoredSpawnPlan
 } from '@shared/ipc'
+import { isPlannerEligible } from '@shared/connections'
 import { colors } from '@/lib/tokens'
 import { useModeStore } from '@/store/modeStore'
 import { useRoutingStore } from '@/store/routingStore'
@@ -30,7 +32,7 @@ function routeCli(target: RoutingTarget): 'agy' | 'codex' | 'claude' {
 // shaped like a rule decision so both share one suggestion pipeline.
 const SAVED_DEFAULT_RULE_ID = 'saved-default'
 
-function savedDefaultDecision(cli: PlannedCli): RouteDecision {
+function savedDefaultDecision(cli: Exclude<PlannedCli, 'opencode'>): RouteDecision {
   return {
     target: cli,
     reason: 'You picked this model for the role last time.',
@@ -49,16 +51,19 @@ function savedDefaultDecision(cli: PlannedCli): RouteDecision {
 const CLI_META: Record<PlannedCli, { label: string; tint: string }> = {
   claude: { label: 'Claude', tint: colors.bronze },
   codex: { label: 'Codex', tint: colors.working },
-  agy: { label: 'Antigravity', tint: colors.done }
+  agy: { label: 'Antigravity', tint: colors.done },
+  opencode: { label: 'OpenCode', tint: colors.quartzDim }
 }
 
-const PLAN_CLIS: readonly PlannedCli[] = ['claude', 'codex', 'agy']
+const PLAN_CLIS: readonly PlannedCli[] = ['claude', 'codex', 'agy', 'opencode']
 const MAX_TEAM_AGENTS = 8
 
 interface PlanCardProps {
   record: StoredSpawnPlan
   busy: boolean
-  onUpdate(plan: SpawnPlan, expectedHash: string): Promise<void>
+  /** Resolves true only when Main accepted the edit. A rejected edit has to be
+   * distinguishable, or the card learns from choices that never landed (w17). */
+  onUpdate(plan: SpawnPlan, expectedHash: string): Promise<boolean>
   onApprove(planHash: string): Promise<void>
   onDiscard(planHash: string): Promise<void>
   /** w14/multi-agent-plan — re-plan the same goal with team constraints. */
@@ -89,6 +94,15 @@ export function PlanCard({
   const connections = useConnectionsStore((state) => state.connections)
   const startConnections = useConnectionsStore((state) => state.start)
   const hasUnsavedEdits = JSON.stringify(draft.agents) !== JSON.stringify(record.plan.agents)
+  // w17 — Main rejects an agent whose cli is not on PATH, so the card must not
+  // offer one. An empty roster means "not probed yet", not "nothing available".
+  const eligibleClis = new Set(connections.filter(isPlannerEligible).map((c) => c.id))
+  const canPlanWith = (cli: PlannedCli): boolean =>
+    connections.length === 0 || eligibleClis.has(cli)
+  // w17 — a probe can land mid-edit and take the selected cli away. The choice
+  // stays visible (nothing is rewritten behind the user), but a plan that names
+  // an unavailable cli cannot be approved until they pick another.
+  const unavailableAgents = draft.agents.filter((agent) => !canPlanWith(agent.cli))
 
   useEffect(() => setDraft(record.plan), [record.plan])
   useEffect(() => setSizeChoice('auto'), [record.plan.id])
@@ -123,23 +137,33 @@ export function PlanCard({
     ).then((decisions) => {
       if (cancelled) return
       const next = new Map<number, RouteDecision>()
+      // A chip is a one-click cli swap, so it answers to the same eligibility
+      // rule as the dropdown: never offer a route Main would reject (w17).
+      const plannable = (cli: PlannedCli): boolean =>
+        connections.length === 0 || connections.some((c) => c.id === cli && isPlannerEligible(c))
       record.plan.agents.forEach((agent, index) => {
         const preferred = teamDefaults[roleKey(agent.role)]
-        if (preferred && preferred !== agent.cli) {
+        if (preferred && preferred !== 'opencode' && preferred !== agent.cli && plannable(preferred)) {
           next.set(index, savedDefaultDecision(preferred))
           return
         }
         const decision = decisions[index]
         if (!decision) return
         const compatibleLocal = decision.target === 'local' && agent.cli === 'claude'
-        if (!compatibleLocal && routeCli(decision.target) !== agent.cli) next.set(index, decision)
+        if (
+          !compatibleLocal &&
+          routeCli(decision.target) !== agent.cli &&
+          plannable(routeCli(decision.target))
+        ) {
+          next.set(index, decision)
+        }
       })
       setSuggestions(next)
     })
     return () => {
       cancelled = true
     }
-  }, [mode, record.plan, record.state, routeTask, teamDefaults])
+  }, [mode, record.plan, record.state, routeTask, teamDefaults, connections])
 
   const savePrompt = (index: number): void => {
     const promptSeed = draft.agents[index]?.promptSeed.trim()
@@ -159,14 +183,36 @@ export function PlanCard({
   }
 
   // w14/multi-agent-plan — model swap persists as the role's new default.
-  const changeCli = (index: number, cli: PlannedCli): void => {
+  // w17 — but only if THIS update was accepted: the role default follows the
+  // very response for this swap, so a refused cli is never learned.
+  const changeCli = async (index: number, cli: PlannedCli): Promise<void> => {
     const agent = draft.agents[index]
     if (!agent || agent.cli === cli) return
-    rememberDefault(agent.role, cli)
-    void onUpdate(
-      { ...draft, agents: draft.agents.map((item, i) => (i === index ? { ...item, cli } : item)) },
+    const applied = await onUpdate(
+      {
+        ...draft,
+        agents: draft.agents.map((item, i) =>
+          i === index ? { ...item, cli, model: null } : item
+        )
+      },
       record.plan.planHash
     )
+    if (applied) rememberDefault(agent.role, cli)
+  }
+
+  const editModel = (index: number, model: string): void => {
+    setDraft((current) => ({
+      ...current,
+      agents: current.agents.map((agent, i) =>
+        i === index ? { ...agent, model: model.trim() || null } : agent
+      )
+    }))
+  }
+
+  const saveModel = (index: number): void => {
+    const model = draft.agents[index]?.model ?? null
+    if (model === (record.plan.agents[index]?.model ?? null)) return
+    void onUpdate(draft, record.plan.planHash)
   }
 
   // w14/multi-agent-plan — append a blank specialist the user seeds via prompt.
@@ -178,9 +224,16 @@ export function PlanCard({
       n += 1
       agentId = `agent-${n}`
     }
+    // A new agent starts on a cli that can actually run (w17 review).
+    const remembered = teamDefaults[roleKey('agent')]
+    const cli =
+      remembered && canPlanWith(remembered)
+        ? remembered
+        : PLAN_CLIS.find(canPlanWith) ?? 'claude'
     const added: PlannedAgent = {
       agentId,
-      cli: teamDefaults[roleKey('agent')] ?? 'claude',
+      cli,
+      model: null,
       role: `Agent ${n}`,
       branch: `run/plan/${record.plan.id.slice(0, 8).toLowerCase()}-${agentId}`,
       worktree: null,
@@ -225,7 +278,7 @@ export function PlanCard({
   const applySuggestion = (index: number): void => {
     const suggestion = suggestions.get(index)
     if (!suggestion) return
-    changeCli(index, routeCli(suggestion.target))
+    void changeCli(index, routeCli(suggestion.target))
   }
 
   const keepPlannedRoute = (index: number): void => {
@@ -266,6 +319,26 @@ export function PlanCard({
       >
         {record.plan.spaceRoot}
       </code>
+
+      {/* w17 — schema repairs Main applied (a stripped 1.0 model, a truncated
+          role) are shown, never silently absorbed into the proposal. */}
+      {record.warnings && record.warnings.length > 0 && (
+        <ul
+          data-testid="plan-warnings"
+          className="mt-1.5 space-y-0.5 rounded-md border px-2 py-1"
+          style={{
+            borderColor: `${colors.warning}55`,
+            color: colors.warning,
+            background: `${colors.warning}0d`
+          }}
+        >
+          {record.warnings.map((warning) => (
+            <li key={warning} className="text-[9px] leading-snug">
+              {warning}
+            </li>
+          ))}
+        </ul>
+      )}
 
       {/* w14/multi-agent-plan — team proposal header + size control */}
       {teamRec && (
@@ -338,7 +411,7 @@ export function PlanCard({
                 aria-label={`Model for ${agent.role}`}
                 value={agent.cli}
                 disabled={busy || record.state !== 'PROPOSED'}
-                onChange={(event) => changeCli(index, event.target.value as PlannedCli)}
+                onChange={(event) => void changeCli(index, event.target.value as PlannedCli)}
                 className="ml-auto max-w-[130px] shrink-0 rounded-md border bg-black/10 px-1 py-0.5 text-[8.5px] font-semibold outline-none focus:ring-1 disabled:opacity-50"
                 style={{
                   borderColor: 'var(--color-line-strong)',
@@ -347,8 +420,14 @@ export function PlanCard({
                 } as React.CSSProperties}
               >
                 {PLAN_CLIS.map((cli) => (
-                  <option key={cli} value={cli}>
+                  <option
+                    key={cli}
+                    value={cli}
+                    disabled={!canPlanWith(cli)}
+                    title={canPlanWith(cli) ? undefined : 'not detected on PATH'}
+                  >
                     {modelLabel(cli)}
+                    {canPlanWith(cli) ? '' : ' — not detected on PATH'}
                   </option>
                 ))}
               </select>
@@ -365,6 +444,35 @@ export function PlanCard({
                   <IconUserMinus size={12} stroke={1.8} />
                 </button>
               )}
+            </div>
+            <div className="mt-1 flex min-w-0 items-center gap-1.5">
+              <span className="shrink-0 text-[8px] font-semibold uppercase tracking-wide" style={{ color: colors.quartzDim }}>
+                Exact model
+              </span>
+              <input
+                aria-label={`Agent model for ${agent.role}`}
+                data-testid={`plan-agent-model-${agent.agentId}`}
+                list={`plan-agent-models-${agent.agentId}`}
+                value={agent.model ?? ''}
+                placeholder="User default"
+                disabled={busy || record.state !== 'PROPOSED'}
+                onChange={(event) => editModel(index, event.target.value)}
+                onBlur={() => saveModel(index)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') event.currentTarget.blur()
+                }}
+                className="min-w-0 flex-1 rounded-md border bg-black/10 px-1.5 py-0.5 font-mono text-[8.5px] outline-none focus:ring-1 disabled:opacity-50"
+                style={{
+                  borderColor: 'var(--color-line-strong)',
+                  color: colors.quartz,
+                  '--tw-ring-color': colors.bronze
+                } as React.CSSProperties}
+              />
+              <datalist id={`plan-agent-models-${agent.agentId}`}>
+                {PLANNER_MODEL_CATALOG[agent.cli].models.map((model) => (
+                  <option key={model} value={model} />
+                ))}
+              </datalist>
             </div>
             <code className="mt-0.5 block truncate text-[9px]" style={{ color: colors.quartzDim }} title={agent.branch}>
               {agent.branch}
@@ -427,12 +535,34 @@ export function PlanCard({
         ))}
       </div>
 
+      {record.state === 'PROPOSED' && unavailableAgents.length > 0 && (
+        <p
+          role="alert"
+          data-testid="plan-unavailable-cli"
+          className="mt-2 rounded-md border px-2 py-1 text-[9.5px] leading-snug"
+          style={{
+            borderColor: `${colors.warning}55`,
+            color: colors.warning,
+            background: `${colors.warning}0d`
+          }}
+        >
+          {unavailableAgents.map((agent) => `${CLI_META[agent.cli].label} (${agent.role})`).join(', ')}
+          {unavailableAgents.length === 1 ? ' is' : ' are'} not detected on PATH. Pick an available
+          model before running this plan.
+        </p>
+      )}
       {record.state === 'PROPOSED' && (
         <div className="mt-2 flex gap-1.5">
           <button
             type="button"
-            disabled={busy || hasUnsavedEdits}
-            title={hasUnsavedEdits ? 'Save prompt edits before approval' : 'Approve this exact plan hash'}
+            disabled={busy || hasUnsavedEdits || unavailableAgents.length > 0}
+            title={
+              unavailableAgents.length > 0
+                ? 'One of this plan’s CLIs is not detected on PATH'
+                : hasUnsavedEdits
+                  ? 'Save prompt edits before approval'
+                  : 'Approve this exact plan hash'
+            }
             onClick={() => void onApprove(record.plan.planHash)}
             className="flex flex-1 items-center justify-center gap-1 rounded-md px-2 py-1.5 text-[10px] font-bold disabled:cursor-wait disabled:opacity-50"
             style={{

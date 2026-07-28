@@ -356,12 +356,14 @@ export class AssistantBridgeService {
     }
 
     try {
-      const plan = await planGoal(goal, spaceRoot, {
+      const { plan, warnings } = await planGoal(goal, spaceRoot, {
         runClaude: (prompt) => this.callProvider(provider, prompt)
       })
       this.assertEnabled()
       const draft = this.planStore.createDraft(plan)
-      return this.planStore.propose(draft.plan.id)
+      const proposed = this.planStore.propose(draft.plan.id)
+      // Schema repairs the assistant path used to swallow (w17 review).
+      return warnings.length > 0 ? { ...proposed, warnings } : proposed
     } catch (error) {
       throw new Error(`Assistant could not propose a valid plan: ${messageOf(error)}`)
     }

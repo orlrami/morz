@@ -205,7 +205,7 @@ test('lane spawn args carry the session-flag model; inherit adds no flag; space 
 
 /* ── dispatch: the typed launch command carries the per-agent model flag ── */
 
-test('dispatched agent launch command includes --model for a session-flag choice', async () => {
+test('dispatched agent launch command prefers the explicit plan model over the user default', async () => {
   const fixtureParent = join(ROOT, 'e2e', '.tmp', `model-dispatch-${Date.now()}`)
   const spaceRoot = makeSpaceFixture(fixtureParent)
   const fakeCli = join(fixtureParent, 'fake-claude.cmd')
@@ -226,13 +226,15 @@ test('dispatched agent launch command includes --model for a session-flag choice
     )
 
     const plan = {
-      version: '1.0',
+      // per-agent models arrived with SpawnPlan 1.1; a 1.0 plan carries none
+      version: '1.1',
       id: 'plan-model-choice-e2e',
       goal: 'prove the model flag rides the dispatch launch',
       agents: [
         {
           agentId: 'solo',
           cli: 'claude',
+          model: 'fable',
           role: 'builder: solo',
           branch: 'run/e2e/model-solo',
           worktree: null,
@@ -266,7 +268,7 @@ test('dispatched agent launch command includes --model for a session-flag choice
     // strip escapes and whitespace before matching the flag.
     const buffer = await waitForTerm(page, paneId, /MORZ_FAKE_MODEL_READY/)
     const clean = buffer.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').replace(/\s+/g, '')
-    expect(clean).toContain('--modelopus')
+    expect(clean).toContain('--modelfable')
 
     await page.evaluate((id) => (window as unknown as ModelsWindow).morz.run.stopRun(id), runId)
     await page.evaluate((id) => (window as unknown as ModelsWindow).morz.run.cleanup(id), runId)

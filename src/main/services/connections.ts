@@ -9,9 +9,13 @@ import { parse as parseToml } from 'smol-toml'
 import type { RunPaneCreated, TerminalSpawnOpts } from '../../shared/ipc'
 import {
   ConnectionsApi,
+  classifyPathProbe,
   cliOfExecutable,
+  keepsPreviousRow,
+  presenceAfterProbe,
   type CliConnection,
-  type CliId
+  type CliId,
+  type PathResolution
 } from '../../shared/connections'
 // w15/model-choice — catalog refresh piggybacks on connections sync.
 import { refreshModelCatalogs } from './model-choice'
@@ -38,6 +42,10 @@ interface CommandResult {
   ok: boolean
   output: string
   fullOutput: string
+  /** Exit code, or null when the process never exited on its own (spawn
+   * failure, probe timeout, output overflow) — the caller cannot read a
+   * missing code as "the command answered no". */
+  exitCode: number | null
 }
 
 interface UpdateCommand {
@@ -97,19 +105,19 @@ function runFile(
         windowsVerbatimArguments
       })
     } catch {
-      resolve({ ok: false, output: '', fullOutput: '' })
+      resolve({ ok: false, output: '', fullOutput: '', exitCode: null })
       return
     }
 
     let output = ''
     let outputBytes = 0
     let settled = false
-    const finish = (ok: boolean): void => {
+    const finish = (ok: boolean, exitCode: number | null = null): void => {
       if (settled) return
       settled = true
       clearTimeout(timeout)
       const lines = cleanOutputLines(output)
-      resolve({ ok, output: lines[0] ?? '', fullOutput: lines.join('\n') })
+      resolve({ ok, output: lines[0] ?? '', fullOutput: lines.join('\n'), exitCode })
     }
     const terminate = (): void => {
       if (settled) return
@@ -130,7 +138,7 @@ function runFile(
     child.stdout?.on('data', collect)
     child.stderr?.on('data', collect)
     child.once('error', () => finish(false))
-    child.once('close', (code) => finish(code === 0))
+    child.once('close', (code) => finish(code === 0, code))
   })
 }
 
@@ -173,7 +181,7 @@ async function runCli(executable: string, args: readonly string[]): Promise<Comm
     return runFile(executable, args)
   }
   if (!safeCmdPath(executable) || args.some((arg) => !/^[-@/a-z0-9=._]+$/i.test(arg))) {
-    return { ok: false, output: '', fullOutput: '' }
+    return { ok: false, output: '', fullOutput: '', exitCode: null }
   }
   const command = `call "${executable}" ${args.join(' ')}`
   const commandProcessor = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'cmd.exe')
@@ -190,16 +198,18 @@ const WINDOWS_RUNNABLE_EXTENSIONS = new Set(['.exe', '.com', '.cmd', '.bat'])
  * a 2.1.187 leftover while the user's shell ran 2.1.220), so the caller probes
  * every candidate instead of trusting the first hit.
  */
-async function resolveCandidatesOnPath(executable: string): Promise<string[]> {
+async function resolveCandidatesOnPath(executable: string): Promise<PathResolution> {
   if (process.platform === 'win32') {
     const whereExe = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'where.exe')
     const result = await runFile(whereExe, [executable])
-    if (!result.ok) return []
-    return result.fullOutput
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter((line) => line.length > 0)
-      .filter((line) => WINDOWS_RUNNABLE_EXTENSIONS.has(extname(line).toLowerCase()))
+    const candidates = result.ok
+      ? result.fullOutput
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter((line) => line.length > 0)
+          .filter((line) => WINDOWS_RUNNABLE_EXTENSIONS.has(extname(line).toLowerCase()))
+      : []
+    return classifyPathProbe(result, candidates)
   }
 
   const candidates: string[] = []
@@ -214,12 +224,14 @@ async function resolveCandidatesOnPath(executable: string): Promise<string[]> {
       // Continue through PATH. A missing or non-executable entry is not fatal.
     }
   }
-  return candidates
+  return classifyPathProbe({ ok: true, exitCode: 0 }, candidates)
 }
 
-async function resolveExecutables(id: CliId, executable: string): Promise<string[]> {
+async function resolveExecutables(id: CliId, executable: string): Promise<PathResolution> {
   const resolved = await resolveCandidatesOnPath(executable)
-  return resolved.filter((candidate) => cliOfExecutable(candidate) === id)
+  if (resolved.kind !== 'found') return resolved
+  const candidates = resolved.candidates.filter((candidate) => cliOfExecutable(candidate) === id)
+  return candidates.length > 0 ? { kind: 'found', candidates } : { kind: 'absent' }
 }
 
 async function exists(path: string): Promise<boolean> {
@@ -614,7 +626,8 @@ function parseJsonOutput(value: string): unknown {
 async function npmCodexUpdate(
   currentVersion: string
 ): Promise<CliConnection['update']> {
-  const [npm] = await resolveCandidatesOnPath('npm')
+  const npmOnPath = await resolveCandidatesOnPath('npm')
+  const npm = npmOnPath.kind === 'found' ? npmOnPath.candidates[0] : null
   if (!npm) return null
   const installed = await runCli(npm, ['ls', '-g', '@openai/codex', '--depth=0', '--json'])
   let installedVersion: string | null = null
@@ -682,15 +695,21 @@ async function detectConnection(
 ): Promise<CliConnection> {
   const detectedAt = Date.now()
   updateCommands.delete(spec.id)
-  const candidates = await resolveExecutables(spec.id, spec.executable)
-  if (candidates.length === 0) {
-    if (previous?.installed && previous.version) {
-      return { ...previous, detectedAt, versionStale: true, update: null }
+  const resolution = await resolveExecutables(spec.id, spec.executable)
+  if (resolution.kind !== 'found') {
+    // The last known version stays visible (honest staleness). Presence only
+    // drops on an authoritative no-match — a failed lookup (timeout, spawn
+    // error) preserves it rather than evicting a working CLI, including one
+    // whose version is still unknown because --version failed (w17 review).
+    const present = presenceAfterProbe(resolution, previous?.present ?? false)
+    if (previous && keepsPreviousRow(previous, present)) {
+      return { ...previous, detectedAt, present, versionStale: true, update: null }
     }
     return {
       id: spec.id,
       label: spec.label,
       installed: false,
+      present: false,
       version: null,
       detectedAt,
       versionStale: false,
@@ -706,7 +725,7 @@ async function detectConnection(
    * order lies when package managers leave stale duplicates behind. Lower-
    * version duplicates are surfaced, never silently ignored. */
   const probes = await Promise.all(
-    candidates.slice(0, 4).map(async (path) => {
+    resolution.candidates.slice(0, 4).map(async (path) => {
       const result = await runCli(path, ['--version'])
       const token = result.ok && result.output ? versionToken(result.output) : null
       return { path, result, token }
@@ -746,6 +765,7 @@ async function detectConnection(
     id: spec.id,
     label: spec.label,
     installed: true,
+    present: true,
     version,
     detectedAt,
     versionStale: versionFailed,
@@ -796,6 +816,11 @@ function probe(forceBroadcast: boolean): Promise<CliConnection[]> {
       probeInFlight = null
     })
   return probeInFlight
+}
+
+/** Current CONNECTIONS roster, probing once when startup detection is still in flight. */
+export function listDetectedConnections(): Promise<CliConnection[]> {
+  return cache ? Promise.resolve(cache) : probe(false)
 }
 
 function shellCommand(command: UpdateCommand): {

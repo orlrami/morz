@@ -11,6 +11,7 @@ import type {
   StoredPlanAmendment,
   StoredSpawnPlan
 } from '@shared/ipc'
+import { isPlannerEligible } from '@shared/connections'
 import { colors } from '@/lib/tokens'
 import { springs, staggerContainer, staggerItem } from '@/lib/springs'
 import { useModeStore } from '@/store/modeStore'
@@ -319,7 +320,11 @@ function PlannerFlow(): JSX.Element {
   useEffect(() => startConnections(), [startConnections])
   // end w12/orch-engine
 
-  const installed = new Map(connections.map((connection) => [connection.id, connection.installed]))
+  // w17 — an engine whose CLI left PATH is not a usable engine, so eligibility
+  // (installed AND present) drives the dropdown, not last-known install state.
+  const installed = new Map(
+    connections.map((connection) => [connection.id, isPlannerEligible(connection)])
+  )
   const engineOptions: Array<{ value: PlannerEngine; label: string; detected: boolean }> = [
     {
       value: 'fast',
@@ -331,6 +336,11 @@ function PlannerFlow(): JSX.Element {
     { value: 'opencode', label: 'OpenCode', detected: installed.get('opencode') === true },
     { value: 'local', label: 'Local', detected: installed.get('agy') === true }
   ]
+  // w17 — a probe can take the SELECTED engine away mid-session. The selection
+  // stays visible, but planning is blocked until an available one is chosen.
+  // An empty roster means "not probed yet", so it blocks nothing.
+  const engineUnavailable =
+    connections.length > 0 && engineOptions.find((option) => option.value === engine)?.detected === false
 
   const run = async (work: () => Promise<void>): Promise<void> => {
     setBusy(true)
@@ -357,11 +367,20 @@ function PlannerFlow(): JSX.Element {
     })
   }
 
-  const updatePlan = (plan: StoredSpawnPlan['plan'], expectedHash: string): Promise<void> =>
-    run(async () => {
+  // w17 — run() turns a rejected edit into an error banner, so the result is
+  // reported explicitly: the card must not treat a refusal as an edit.
+  const updatePlan = async (
+    plan: StoredSpawnPlan['plan'],
+    expectedHash: string
+  ): Promise<boolean> => {
+    let applied = false
+    await run(async () => {
       const next = await getPlanner()!.update(plan, expectedHash)
       setRecord(next)
+      applied = true
     })
+    return applied
+  }
 
   // w14/multi-agent-plan — re-plan the same goal with user team constraints;
   // the old proposed plan is discarded only after the new one lands.
@@ -527,7 +546,8 @@ function PlannerFlow(): JSX.Element {
         {/* end w12/orch-engine */}
         <button
           type="submit"
-          disabled={busy || engineSaving || !goal.trim() || !getPlanner()}
+          disabled={busy || engineSaving || !goal.trim() || !getPlanner() || engineUnavailable}
+          title={engineUnavailable ? 'This planner engine is not detected on PATH' : undefined}
           className="flex items-center gap-1 rounded-md px-2 py-1.5 text-[10px] font-bold disabled:cursor-not-allowed disabled:opacity-40"
           style={{ background: colors.bronze, color: colors.page }}
           aria-label="Plan team"
@@ -536,6 +556,18 @@ function PlannerFlow(): JSX.Element {
           Plan
         </button>
       </form>
+      {/* w17 — the selected engine left PATH; say so instead of failing at spawn. */}
+      {engineUnavailable && (
+        <p
+          role="alert"
+          data-testid="engine-unavailable"
+          className="text-[9.5px] leading-snug"
+          style={{ color: colors.warning }}
+        >
+          The {engineOptions.find((option) => option.value === engine)?.label} planner engine is not
+          detected on PATH. Choose an available engine to plan.
+        </p>
+      )}
 
       {/* w12/orch-engine */}
       {engineNotice && (

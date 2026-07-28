@@ -195,10 +195,16 @@ test('an orchestrated plan is never rewritten silently; routes surface as chips'
     await page.getByRole('textbox', { name: 'Goal' }).fill('Review the orchestrator plan flow')
     await page.getByRole('button', { name: 'Plan team' }).click()
     // The proposal stands as planned (claude) and the review rule is a chip.
+    // exact:true keeps the CLI select apart from the 'Agent model for …'
+    // exact-model input, which is also a combobox (w17).
     const card = page.getByRole('region', { name: 'Spawn plan' })
-    await expect(card.getByRole('combobox', { name: 'Model for Architect reviewer' })).toHaveValue(
-      'claude'
-    )
+    await expect(
+      card.getByRole('combobox', { name: 'Model for Architect reviewer', exact: true })
+    ).toHaveValue('claude')
+    // The plan names no model, so the exact-model field stays on the user default.
+    const exactModel = card.getByTestId('plan-agent-model-architect')
+    await expect(exactModel).toHaveValue('')
+    await expect(exactModel).toHaveAttribute('placeholder', 'User default')
     await expect(
       card.getByTestId('route-chip').filter({ hasText: "Route 'Architect reviewer' to Codex?" })
     ).toBeVisible()

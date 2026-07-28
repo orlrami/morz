@@ -22,7 +22,14 @@ export interface CliUpdateState {
 export interface CliConnection {
   id: CliId
   label: string // "Claude Code", "Codex", "Antigravity", "OpenCode"
-  installed: boolean // resolved on PATH
+  installed: boolean // last known install state (kept when a re-probe stops finding it)
+  /**
+   * The executable resolved on PATH at the MOST RECENT probe. `installed` is
+   * last-known state: a CLI that disappears keeps installed:true and a stale
+   * version so the UI stays honest, but it is no longer present and must not
+   * be offered for a new run (w17 review).
+   */
+  present: boolean
   version: string | null
   /** Epoch ms of the most recent probe attempt. */
   detectedAt: number
@@ -54,6 +61,60 @@ export interface MorzConnectionsApi {
   refresh(): Promise<CliConnection[]>
   update(id: CliId): Promise<{ paneId: string }>
   onChanged(cb: (conns: CliConnection[]) => void): () => void
+}
+
+/**
+ * Planner eligibility: only a CLI whose executable is on PATH right now may be
+ * proposed for a run. `installed` alone is last-known state, so a CLI the user
+ * uninstalled would otherwise stay plannable forever (w17 review).
+ */
+export function isPlannerEligible(connection: CliConnection): boolean {
+  return connection.installed && connection.present
+}
+
+/**
+ * Resolving a CLI on PATH has three outcomes, and they must not be collapsed:
+ * `probe-error` (the lookup timed out, could not spawn, or overflowed its
+ * output budget) is NOT evidence that the CLI is gone. Only an authoritative
+ * `absent` may clear presence — otherwise one flaky lookup evicts a working
+ * CLI from planning until a later probe happens to succeed (w17 review).
+ */
+export type PathResolution =
+  | { kind: 'found'; candidates: string[] }
+  | { kind: 'absent' }
+  | { kind: 'probe-error' }
+
+/**
+ * Classify a PATH lookup. Windows `where.exe` exits 1 for an authoritative
+ * "no match"; every other failure — exit 2, a timeout or spawn failure, an
+ * output overflow (exitCode null) — leaves presence unknown.
+ */
+export function classifyPathProbe(
+  probe: { ok: boolean; exitCode: number | null },
+  candidates: readonly string[]
+): PathResolution {
+  if (!probe.ok) return probe.exitCode === 1 ? { kind: 'absent' } : { kind: 'probe-error' }
+  return candidates.length > 0 ? { kind: 'found', candidates: [...candidates] } : { kind: 'absent' }
+}
+
+/** Presence after a re-probe: a probe error keeps the last good answer. */
+export function presenceAfterProbe(resolution: PathResolution, wasPresent: boolean): boolean {
+  if (resolution.kind === 'found') return true
+  return resolution.kind === 'absent' ? false : wasPresent
+}
+
+/**
+ * Whether a known CLI's row survives a probe that resolved no executable. A
+ * remembered version keeps it so the UI can show honest staleness — and so
+ * does presence a failed probe could not disprove, even when the version is
+ * still unknown because an earlier `--version` call failed (w17 review).
+ */
+export function keepsPreviousRow(
+  previous: Pick<CliConnection, 'installed' | 'version'> | undefined,
+  present: boolean
+): boolean {
+  if (!previous?.installed) return false
+  return previous.version !== null || present
 }
 
 /** Map a spawned pane's argv/exe to the CliId it is running (shared by detection + lanes). */

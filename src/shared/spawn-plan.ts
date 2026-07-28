@@ -13,14 +13,24 @@ import type { AgentId, TaskId } from './bus'
 // w17/adapter-seam — observed pane activity (type-only; no runtime dependency)
 import type { AgentActivity } from './agent-title-status'
 
-export const SPAWN_PLAN_VERSION = '1.0' as const
+export const SPAWN_PLAN_VERSION = '1.1' as const
+export const LEGACY_SPAWN_PLAN_VERSION = '1.0' as const
 
-export type PlannedCli = 'claude' | 'codex' | 'agy'
+export type SpawnPlanVersion = typeof LEGACY_SPAWN_PLAN_VERSION | typeof SPAWN_PLAN_VERSION
+
+export type PlannedCli = 'claude' | 'codex' | 'agy' | 'opencode'
 
 export interface PlannedAgent {
   /** Becomes the lane/bus AgentId once dispatched. */
   agentId: AgentId
   cli: PlannedCli
+  /**
+   * Exact per-run model (SpawnPlan 1.1); null respects the user's effective
+   * CLI default. Optional at the compatibility boundary: a 1.0 plan has no
+   * model field at all, and a 1.0 payload that carries one is ignored rather
+   * than honored (see validateSpawnPlan).
+   */
+  model?: string | null
   /** Human-readable role ("builder: PTY host", "reviewer"). */
   role: string
   /** Branch the dispatcher creates the worktree on (e.g. run/<tag>/<agent>). */
@@ -38,7 +48,7 @@ export interface PlannedAgent {
 }
 
 export interface SpawnPlan {
-  version: typeof SPAWN_PLAN_VERSION
+  version: SpawnPlanVersion
   /** ULID/GUID minted by Main when the plan is stored. */
   id: string
   /** The user's natural-language goal, verbatim. */
