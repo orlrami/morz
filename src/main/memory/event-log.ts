@@ -12,6 +12,7 @@ import type {
   MemoryEventOutcome,
   MemoryEventSessionKind,
   MemoryEventType,
+  MemoryEventWriteStatus,
   MemoryInvocationEvent
 } from '../../shared/memory'
 
@@ -26,19 +27,6 @@ export const EVENT_LOG_LOCK_STALE_MS = 30_000
 /** Total time an append waits for another instance before giving up (fail-closed). */
 export const EVENT_LOG_LOCK_WAIT_MS = 1_000
 
-/**
- * Why a write did or did not land. Callers fire and forget, so the honest
- * outcome has to be reportable rather than collapsed into a boolean:
- * `skipped-mode` is the expected Manual/E2E gate, every `dropped-*` is a real
- * event the log failed to keep.
- */
-export type MemoryEventWriteStatus =
-  | 'ok'
-  | 'skipped-mode'
-  | 'dropped-invalid'
-  | 'dropped-oversized'
-  | 'dropped-lock'
-
 export type {
   MemoryEventCli,
   MemoryEventLogStats,
@@ -47,6 +35,7 @@ export type {
   MemoryEventOutcome,
   MemoryEventSessionKind,
   MemoryEventType,
+  MemoryEventWriteStatus,
   MemoryInvocationEvent
 } from '../../shared/memory'
 
@@ -296,11 +285,13 @@ function normalizeEvent(value: unknown): MemoryInvocationEvent | null {
  * really can interleave, and two stores sharing a directory must not burn each
  * other's lock wait.
  *
- * Cross-process: an ownership-stamped lockfile. Never stat-then-unlink — two
- * contenders can both read the same lock as stale, and a blind unlink would let
- * the loser delete the winner's fresh lock. Takeover instead goes through an
- * atomic rename to a private tombstone, which exactly one contender can win,
- * and release only ever removes a lock still carrying our own token.
+ * Cross-process: an ownership-stamped lockfile. Nothing is ever unlinked at the
+ * shared path, because the file sitting there when we looked may not be the file
+ * sitting there when we act. Both takeover and release instead rename to a
+ * private tombstone first — rename is the one atomic primitive available, so
+ * whatever we move is exactly what we then inspect — and only delete it once the
+ * token inside matches the identity the decision was made about. A mismatch
+ * means we moved someone else's lock, so we put it back.
  */
 const directoryQueues = new Map<string, Promise<unknown>>()
 
@@ -315,27 +306,48 @@ function errorCode(error: unknown): string | undefined {
   return (error as NodeJS.ErrnoException | undefined)?.code
 }
 
-async function isStale(path: string): Promise<boolean> {
+async function readToken(path: string): Promise<string | undefined> {
   try {
-    return Date.now() - (await stat(path)).mtimeMs > EVENT_LOG_LOCK_STALE_MS
+    return await readFile(path, 'utf8')
   } catch {
-    return false // It vanished; the next create attempt wins it honestly.
+    return undefined
+  }
+}
+
+/** The token of an abandoned lock, or undefined when the lock is live or gone. */
+async function abandonedToken(path: string): Promise<string | undefined> {
+  try {
+    const info = await stat(path)
+    if (Date.now() - info.mtimeMs <= EVENT_LOG_LOCK_STALE_MS) return undefined
+    return await readToken(path)
+  } catch {
+    return undefined // It vanished; the next create attempt wins it honestly.
   }
 }
 
 /**
- * Claims an abandoned lock by renaming it out of the way. Rename of a missing
- * source fails, so of any number of contenders exactly one takes it and the
- * rest fall back to a plain create attempt.
+ * Moves a lock aside and deletes it only if it is still the one identified by
+ * `expected`. Rename of a missing source fails, so of any number of contenders
+ * exactly one moves the file; validating the moved copy is what stops a lock
+ * that was released and replaced in the meantime from being stolen.
  */
-async function claimAbandoned(path: string, token: string): Promise<void> {
-  const tombstone = `${path}.${token}`
+async function discardIfOwned(path: string, tombstone: string, expected: string): Promise<void> {
   try {
     await rename(path, tombstone)
   } catch {
-    return // Someone else claimed it first; retry the create.
+    return // Someone else moved it first; fall back to a plain create.
   }
-  await rm(tombstone, { force: true })
+  if ((await readToken(tombstone)) === expected) {
+    await rm(tombstone, { force: true })
+    return
+  }
+  // Not the lock we judged: put it back rather than destroy a live holder's.
+  try {
+    await rename(tombstone, path)
+  } catch {
+    // A third lock already holds the path, so restoring would clobber it.
+    await rm(tombstone, { force: true })
+  }
 }
 
 async function acquire(path: string, token: string): Promise<boolean> {
@@ -352,8 +364,9 @@ async function acquire(path: string, token: string): Promise<boolean> {
       return (await readFile(path, 'utf8')) === token
     } catch (error) {
       if (errorCode(error) !== 'EEXIST') throw error
-      if (await isStale(path)) {
-        await claimAbandoned(path, token)
+      const abandoned = await abandonedToken(path)
+      if (abandoned !== undefined) {
+        await discardIfOwned(path, `${path}.stale-${token}`, abandoned)
         // Bounded even if a skewed clock makes every lock look abandoned.
         if (Date.now() >= deadline) return false
         continue
@@ -365,21 +378,24 @@ async function acquire(path: string, token: string): Promise<boolean> {
 }
 
 async function release(path: string, token: string): Promise<void> {
-  try {
-    if ((await readFile(path, 'utf8')) !== token) return
-  } catch {
-    return
-  }
-  await rm(path, { force: true })
+  await discardIfOwned(path, `${path}.done-${token}`, token)
 }
 
-/** Runs `fn` as the only writer for `directory`, or returns `fallback` if the wait expires. */
-function withDirectoryLock<T>(
+/**
+ * Runs `fn` as the only writer for `directory`, or returns `fallback` if the
+ * wait expires. Creating the directory happens inside the queued operation, so
+ * a clear can never overtake a first append that is still creating it.
+ *
+ * Exported for the lock regressions, which need to act from inside a held
+ * critical section.
+ */
+export function withDirectoryLock<T>(
   directory: string,
   fallback: T,
   fn: () => Promise<T>
 ): Promise<T> {
   return enqueue(directory, async () => {
+    await mkdir(directory, { recursive: true })
     const path = join(directory, EVENT_LOG_LOCK_FILE)
     const token = `${process.pid}-${randomBytes(8).toString('hex')}`
     if (!(await acquire(path, token))) return fallback
@@ -436,7 +452,9 @@ export class MemoryEventLog {
     const bytes = Buffer.byteLength(line, 'utf8')
     if (bytes > this.maxRecordBytes || bytes > this.maxFileBytes) return this.drop('dropped-oversized')
 
-    await mkdir(this.options.directory, { recursive: true })
+    // A filesystem failure anywhere in the write path is a lost event like any
+    // other, so it is counted and reported rather than thrown at a caller that
+    // deliberately ignores the result.
     const status = await withDirectoryLock<MemoryEventWriteStatus>(
       this.options.directory,
       'dropped-lock',
@@ -448,7 +466,7 @@ export class MemoryEventLog {
         await appendFile(current, line, { encoding: 'utf8', mode: 0o600 })
         return 'ok'
       }
-    )
+    ).catch(() => 'dropped-io' as const)
     return status === 'ok' ? status : this.drop(status)
   }
 
@@ -489,17 +507,19 @@ export class MemoryEventLog {
     return { count: this.readEvents().length, bytes, dropped: this.droppedEvents }
   }
 
-  /** Rejects rather than pretending, when another writer holds the lock. */
+  /**
+   * Always queued, even when the directory does not exist yet: an append that
+   * is still creating it must not be overtaken by a clear that reports success.
+   * Rejects rather than pretending, when another writer holds the lock.
+   */
   async clear(): Promise<void> {
-    if (existsSync(this.options.directory)) {
-      const cleared = await withDirectoryLock(this.options.directory, false, async () => {
-        for (let generation = 0; generation < this.keepFiles; generation++) {
-          await rm(this.pathFor(generation), { force: true })
-        }
-        return true
-      })
-      if (!cleared) throw new Error('Event log is busy: clear timed out waiting for the writer lock')
-    }
+    const cleared = await withDirectoryLock(this.options.directory, false, async () => {
+      for (let generation = 0; generation < this.keepFiles; generation++) {
+        await rm(this.pathFor(generation), { force: true })
+      }
+      return true
+    })
+    if (!cleared) throw new Error('Event log is busy: clear timed out waiting for the writer lock')
     this.droppedEvents = 0
   }
 
@@ -733,9 +753,12 @@ export async function logMemoryEvent(
   try {
     status = await defaultLog().append(value)
   } catch (error) {
+    // append() counts its own filesystem failures; this covers the rest
+    // (a log that cannot even be constructed), which are drops all the same.
     const message = error instanceof Error ? redactMessage(error.message, 200) : 'unknown error'
     console.warn(`[morz] memory event log write failed: ${message}`)
-    return 'dropped-invalid'
+    warnAboutDrop('dropped-io')
+    return 'dropped-io'
   }
   if (status !== 'ok' && status !== 'skipped-mode') warnAboutDrop(status)
   return status

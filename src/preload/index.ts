@@ -516,6 +516,7 @@ import {
   type MemoryEntry,
   type MemoryEventLogStats,
   type MemoryEventMode,
+  type MemoryEventWriteStatus,
   type MemoryInvocationEvent,
   type MemoryOpAuditRow,
   type MemoryProposal,
@@ -523,12 +524,16 @@ import {
   type MorzMemoryApi
 } from '../shared/memory'
 
-type MemoryE2eApi = MorzMemoryApi & {
+export type MemoryE2eApi = MorzMemoryApi & {
   testPropose?(proposal: MemoryProposal): Promise<MemoryProposal>
   testRender?(opts: { projectRoot?: string; spaceId?: string; agentId?: string }): Promise<string>
   testReconcile?(proposal: MemoryProposal): Promise<MemoryProposal>
   testAudit?(): Promise<MemoryOpAuditRow[]>
-  testLog?(event: MemoryInvocationEvent): Promise<boolean>
+  /**
+   * Mirrors the main-side write result. A boolean would hide a skipped or
+   * dropped write, because every status string is truthy.
+   */
+  testLog?(event: MemoryInvocationEvent): Promise<MemoryEventWriteStatus>
 }
 
 const memoryApi: MemoryE2eApi = {

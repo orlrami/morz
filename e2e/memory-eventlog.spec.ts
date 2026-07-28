@@ -1,20 +1,14 @@
 import { expect, test } from '@playwright/test'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { delimiter, join } from 'node:path'
-import type {
-  MemoryEventWriteStatus,
-  MemoryInvocationEvent
-} from '../src/main/memory/event-log'
-import type { MorzMemoryApi } from '../src/shared/memory'
+import type { MemoryE2eApi } from '../src/preload'
+import type { MemoryInvocationEvent } from '../src/shared/memory'
 import { closeMorz, launchMorz, ROOT, type MorzApp } from './app'
-
-interface EventLogMemoryApi extends MorzMemoryApi {
-  testLog(event: MemoryInvocationEvent): Promise<MemoryEventWriteStatus>
-}
 
 interface EventLogWindow {
   morz: {
-    memory: EventLogMemoryApi
+    // The preload's own contract, so the E2E cannot drift from what ships.
+    memory: MemoryE2eApi
     claude: {
       start(opts: { agentId: string; cwd: string }): Promise<{ agentId: string }>
       send(agentId: string, text: string): void
@@ -112,8 +106,8 @@ test.describe.serial('Memory invocation event log', () => {
       'interrupt'
     ]
     for (const [index, event] of types.entries()) {
-      await morz.page.evaluate(
-        ({ type, ts }) => (window as unknown as EventLogWindow).morz.memory.testLog({
+      const status = await morz.page.evaluate(
+        ({ type, ts }) => (window as unknown as EventLogWindow).morz.memory.testLog?.({
           v: 1,
           ts,
           sessionKind: 'planner',
@@ -123,6 +117,9 @@ test.describe.serial('Memory invocation event log', () => {
         }),
         { type: event, ts: Date.now() + index }
       )
+      // Asserting the status is the point of typing it: a boolean made every
+      // outcome, including a dropped write, look like success.
+      expect(status).toBe('ok')
     }
     const after = await morz.page.evaluate(() =>
       (window as unknown as EventLogWindow).morz.memory.proposals()

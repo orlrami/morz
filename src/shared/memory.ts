@@ -155,6 +155,21 @@ export type MemoryEventOutcome = 'ok' | 'error' | 'blocked' | 'unknown'
 export type MemoryEventMode = 'manual' | 'assisted' | 'orchestrated'
 
 /**
+ * Why a write did or did not land. Callers fire and forget, so the honest
+ * outcome has to be reportable rather than collapsed into a boolean:
+ * `skipped-mode` is the expected Manual/E2E gate, every `dropped-*` is a real
+ * event the log failed to keep. Lives here because the E2E preload returns it
+ * across the IPC boundary.
+ */
+export type MemoryEventWriteStatus =
+  | 'ok'
+  | 'skipped-mode'
+  | 'dropped-invalid'
+  | 'dropped-oversized'
+  | 'dropped-io'
+  | 'dropped-lock'
+
+/**
  * Allowlisted event metadata. Raw args, env, prompts and file contents never
  * cross this contract, and neither does the working directory — a path carries
  * the OS profile name, while agentId/spaceId already attribute the event.

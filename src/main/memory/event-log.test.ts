@@ -10,7 +10,7 @@ import {
   writeFileSync
 } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
 import { after, test } from 'node:test'
 import {
   ClaudeInvocationTracker,
@@ -21,6 +21,7 @@ import {
   MemoryEventLog,
   redactMessage,
   redactText,
+  withDirectoryLock,
   type MemoryEventLogOptions,
   type MemoryInvocationEvent
 } from './event-log'
@@ -343,6 +344,53 @@ test('two stores sharing a directory rotate without clobbering each other', asyn
   assert.equal(existsSync(join(directory, EVENT_LOG_LOCK_FILE)), false)
 })
 
+test('two writers that bypass the in-process queue still serialize on the lockfile', async () => {
+  const directory = fixture('cross-process')
+  mkdirSync(directory, { recursive: true })
+  // Two directory strings that name the same folder: the queue keys differ, so
+  // these race the real lockfile the way a second Morz instance would.
+  const first = createLog({ directory })
+  const second = createLog({ directory: `${directory}${sep}.` })
+
+  const statuses = await Promise.all(Array.from({ length: 8 }, (_, index) =>
+    (index % 2 === 0 ? first : second).append(event({
+      ts: event().ts + index,
+      event: 'tool',
+      name: `Tool${index}`,
+      outcome: 'ok',
+      meta: { phase: 'result', source: 'structured' }
+    }))))
+
+  assert.deepEqual(new Set(statuses), new Set(['ok']))
+  for (const line of readFileSync(join(directory, EVENT_LOG_FILE), 'utf8').split('\n')) {
+    if (line) JSON.parse(line)
+  }
+  // Interleaving order across two writers is not guaranteed and is not the
+  // claim; mutual exclusion is. Every record lands exactly once.
+  assert.deepEqual(
+    first.readEvents().map((entry) => entry.name).sort(),
+    Array.from({ length: 8 }, (_, index) => `Tool${index}`).sort()
+  )
+  assert.equal(existsSync(join(directory, EVENT_LOG_LOCK_FILE)), false)
+})
+
+test('release never deletes a lock that is no longer ours', async () => {
+  const directory = fixture('release-identity')
+  const lock = join(directory, EVENT_LOG_LOCK_FILE)
+
+  const held = await withDirectoryLock(directory, 'timed-out', async () => {
+    // Stand in for a takeover that happened while we held the lock: the file at
+    // the shared path is now someone else's, and release must leave it there.
+    writeFileSync(lock, 'another-process', 'utf8')
+    return 'ok'
+  })
+
+  assert.equal(held, 'ok')
+  assert.equal(readFileSync(lock, 'utf8'), 'another-process')
+  // No tombstone left behind by the restore.
+  assert.deepEqual(readdirSync(directory), [EVENT_LOG_LOCK_FILE])
+})
+
 test('locking is ownership-aware: a live lock is untouched, a stale one is claimed', async () => {
   const directory = fixture('lock')
   const log = createLog({ directory })
@@ -359,6 +407,7 @@ test('locking is ownership-aware: a live lock is untouched, a stale one is claim
   const abandoned = (Date.now() - EVENT_LOG_LOCK_STALE_MS - 1_000) / 1_000
   utimesSync(lock, abandoned, abandoned)
   assert.equal(await log.append(event()), 'ok')
+  assert.equal(log.stats().dropped, 1)
   // Lock released and the takeover left no tombstone behind.
   assert.deepEqual(readdirSync(directory), [EVENT_LOG_FILE])
 })
@@ -381,6 +430,16 @@ test('single oversized records are dropped without rotating away valid data', as
   })), 'dropped-oversized')
   assert.equal(readFileSync(join(directory, EVENT_LOG_FILE), 'utf8'), before)
   assert.deepEqual(log.readEvents(), [event()])
+  assert.equal(log.stats().dropped, 1)
+})
+
+test('a filesystem failure is counted and reported like any other lost event', async () => {
+  const directory = fixture('io-failure')
+  // A file where the log directory should be: every write in the path fails.
+  writeFileSync(directory, 'not a directory', 'utf8')
+  const log = createLog({ directory })
+
+  assert.equal(await log.append(event()), 'dropped-io')
   assert.equal(log.stats().dropped, 1)
 })
 
@@ -436,6 +495,17 @@ test('Clear removes every generation and resets counters', async () => {
   assert.deepEqual(log.stats(), { count: 0, bytes: 0, dropped: 0 })
   assert.deepEqual(log.readEvents(), [])
   assert.deepEqual(readdirSync(directory), [])
+})
+
+test('Clear cannot overtake a first append that is still creating the directory', async () => {
+  const directory = fixture('clear-race')
+  const log = createLog({ directory })
+  // The directory does not exist yet. Clear used to skip the queue entirely on
+  // that basis and report success while the append was still on its way.
+  const [status] = await Promise.all([log.append(event()), log.clear()])
+
+  assert.equal(status, 'ok')
+  assert.deepEqual(log.readEvents(), [])
 })
 
 test('Clear reports failure instead of pretending when another writer holds the lock', async () => {
