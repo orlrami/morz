@@ -269,6 +269,13 @@ function freshPlan(
     validAt: proposal.entry.validAt ?? now,
     supersedesId: archivedId
   }
+  // A successor that takes an id other than the target's lands on a document
+  // no CAS has looked at. Ask for a re-propose rather than overwrite whatever
+  // live memory already lives there.
+  if (op.targetId !== successor.id) {
+    const occupied = getMemory(successor.id)
+    if (occupied && !occupied.expiredAt) throw new Error(CAS_ERROR)
+  }
   const archived: MemoryEntry = {
     ...target,
     id: archivedId,

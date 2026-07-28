@@ -240,6 +240,22 @@ test('an occupied revision id aborts the apply instead of overwriting it', () =>
   assert.equal(harness.audit.size, 0)
 })
 
+test('an occupied successor id aborts the apply instead of overwriting it', () => {
+  const alpha = entry()
+  const harness = new ApplyHarness(alpha)
+  const unrelated = entry({ id: 'use-bun', title: 'UNRELATED', body: 'A different live memory.' })
+  harness.documents.set(unrelated.id, unrelated)
+
+  assert.throws(
+    () => applyApprovedMemoryProposal(renameProposal(alpha, 'use-bun', 'Use bun'), harness.deps()),
+    /Memory changed since this was proposed — re-propose\./
+  )
+  assert.equal(harness.documents.get('use-bun')?.title, 'UNRELATED')
+  assert.equal(harness.documents.get('prefer-pnpm')?.title, 'Use pnpm')
+  assert.equal(harness.documents.size, 2)
+  assert.equal(harness.audit.size, 0)
+})
+
 test('a second proposal cannot adopt an identical materialized result', () => {
   const old = entry()
   const proposalA = updateProposal(old)
