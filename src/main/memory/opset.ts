@@ -306,6 +306,22 @@ export function recordMemoryOpAudit(db: Database.Database, input: MemoryOpAuditI
   )
 }
 
+/**
+ * Revisions the audit trail records as replacing this memory. The restore
+ * guard needs it for rows written before supersession links existed: their
+ * successor is only discoverable through the applied op's target_id.
+ */
+export function memoryAuditSuccessorIds(db: Database.Database, memoryId: string): string[] {
+  ensureMemoryAuditTable(db)
+  const rows = db
+    .prepare(`
+      SELECT DISTINCT memory_id FROM memory_ops_audit
+      WHERE target_id = ? AND op IN ('update', 'delete') AND memory_id <> target_id
+    `)
+    .all(memoryId) as { memory_id: string }[]
+  return rows.map((row) => row.memory_id)
+}
+
 export function listMemoryOpAudit(db: Database.Database, limit = 100): MemoryOpAuditRow[] {
   ensureMemoryAuditTable(db)
   const rows = db

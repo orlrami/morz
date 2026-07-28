@@ -58,6 +58,33 @@ function updateProposal(
   }
 }
 
+/** An UPDATE whose successor takes a NEW id, so the target's document is removed. */
+function renameProposal(target: MemoryEntry, id: string, title: string): MemoryProposal {
+  return {
+    id: `proposal-${id}`,
+    entry: {
+      id,
+      scope: target.scope,
+      scopeRef: target.scopeRef,
+      kind: target.kind,
+      title,
+      body: `${title} for JavaScript dependencies.`,
+      origin: 'learned',
+      enabled: true
+    },
+    evidence: ['The user corrected the package manager.'],
+    ts: NOW,
+    state: 'approved',
+    op: {
+      kind: 'update',
+      targetId: target.id,
+      targetRevision: memoryRevision(target),
+      old: { title: target.title, body: target.body },
+      next: { title, body: `${title} for JavaScript dependencies.` }
+    }
+  }
+}
+
 class ApplyHarness {
   readonly documents = new Map<string, MemoryEntry>()
   readonly index = new Map<string, MemoryEntry>()
@@ -265,6 +292,55 @@ test('restore fails while the linked successor is live', () => {
 
   harness.documents.set(successor.id, { ...successor, expiredAt: NOW, invalidAt: NOW })
   assert.doesNotThrow(() => assertRestoreAllowed(expired, harness.deps().getMemory))
+})
+
+test('restore walks a three-link chain to the live head', () => {
+  const alpha = entry()
+  const harness = new ApplyHarness(alpha)
+  const beta = applyApprovedMemoryProposal(
+    renameProposal(alpha, 'use-bun', 'Use bun'),
+    harness.deps()
+  )!
+  const gamma = applyApprovedMemoryProposal(
+    renameProposal(beta, 'use-npm', 'Use npm'),
+    harness.deps()
+  )!
+
+  const archivedAlpha = harness.documents.get(`prefer-pnpm-rev-${memoryRevision(alpha)}`)!
+  const archivedBeta = harness.documents.get(`use-bun-rev-${memoryRevision(beta)}`)!
+  // beta's clean document is gone; alpha must now point at beta's archive.
+  assert.equal(harness.documents.get('use-bun'), undefined)
+  assert.equal(archivedAlpha.supersededBy, archivedBeta.id)
+  assert.equal(archivedBeta.supersededBy, gamma.id)
+
+  assert.throws(
+    () => assertRestoreAllowed(archivedAlpha, harness.deps().getMemory),
+    /Cannot restore memory while its successor is active: use-npm/
+  )
+})
+
+test('restore follows the audit chain for legacy link-less rows', () => {
+  const legacy = entry({ expiredAt: NOW, invalidAt: NOW })
+  const harness = new ApplyHarness(legacy)
+  const live = entry({ id: 'use-bun', title: 'Use bun' })
+  harness.documents.set(live.id, live)
+  assert.equal(legacy.supersededBy, undefined)
+
+  const audit = (id: string): string[] => (id === 'prefer-pnpm' ? ['use-bun'] : [])
+  assert.throws(
+    () => assertRestoreAllowed(legacy, harness.deps().getMemory, audit),
+    /Cannot restore memory while its successor is active: use-bun/
+  )
+  assert.doesNotThrow(() => assertRestoreAllowed(legacy, harness.deps().getMemory))
+})
+
+test('restore survives a supersession cycle', () => {
+  const first = entry({ id: 'first', expiredAt: NOW, supersededBy: 'second' })
+  const second = entry({ id: 'second', expiredAt: NOW, supersededBy: 'first' })
+  const harness = new ApplyHarness(first)
+  harness.documents.set(second.id, second)
+
+  assert.doesNotThrow(() => assertRestoreAllowed(first, harness.deps().getMemory))
 })
 
 test('audit input stays compatible with the public audit row shape', () => {

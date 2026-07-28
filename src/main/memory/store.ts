@@ -20,6 +20,7 @@ import {
 import { notify } from '../services/notify-center'
 import {
   ensureMemoryAuditTable,
+  memoryAuditSuccessorIds,
   migrateMemoryFtsSchema,
   renderInjectionLines,
   restoreEntry
@@ -458,7 +459,7 @@ export function restoreMemory(idValue: unknown): MemoryEntry {
   const entry = getMemory(idValue)
   if (!entry) throw new Error('Memory entry not found')
   if (!entry.expiredAt) return entry
-  assertRestoreAllowed(entry, getMemory)
+  assertRestoreAllowed(entry, getMemory, (id) => memoryAuditSuccessorIds(database(), id))
   return saveMemory(restoreEntry(entry))
 }
 

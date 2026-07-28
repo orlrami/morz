@@ -177,8 +177,9 @@ function recoveredPlan(
   }
   const successor = getMemory(proposal.entry.id)!
   const archived = getMemory(revisionId(op))!
+  const predecessor = rewiredPredecessor(archived, successor.id, getMemory)
   return {
-    entries: [archived, successor],
+    entries: [...(predecessor ? [predecessor] : []), archived, successor],
     removeIds: op.targetId === successor.id ? [] : [op.targetId!],
     result: successor,
     audit: auditFor(proposal, successor, now)
@@ -201,6 +202,24 @@ function isPartialArchive(occupant: MemoryEntry, archived: MemoryEntry): boolean
     && occupant.origin === archived.origin
     && occupant.createdAt === archived.createdAt
     && occupant.supersededBy === archived.supersededBy
+}
+
+/**
+ * A predecessor's supersededBy names the revision that replaced it, and that
+ * revision has just moved from the live clean id to the archived id. Rewiring
+ * the link in the same durable write keeps the chain walkable; leaving it
+ * dangling at a removed id would hide the live head from the restore guard.
+ */
+function rewiredPredecessor(
+  archived: MemoryEntry,
+  successorId: string,
+  getMemory: (id: string) => MemoryEntry | null
+): MemoryEntry | null {
+  const id = archived.supersedesId
+  if (!id || id === archived.id || id === successorId) return null
+  const predecessor = getMemory(id)
+  if (!predecessor || predecessor.supersededBy === archived.id) return null
+  return { ...predecessor, supersededBy: archived.id }
 }
 
 function freshPlan(
@@ -263,8 +282,9 @@ function freshPlan(
   if (occupant && !isPartialArchive(occupant, archived)) {
     throw new Error(`${COLLISION_ERROR}: ${archivedId}`)
   }
+  const predecessor = rewiredPredecessor(archived, successor.id, getMemory)
   return {
-    entries: [archived, successor],
+    entries: [...(predecessor ? [predecessor] : []), archived, successor],
     removeIds: op.targetId === successor.id ? [] : [op.targetId!],
     result: successor,
     audit: auditFor(proposal, successor, now)
@@ -320,13 +340,41 @@ export function applyApprovedMemoryProposal(
   return plan.result
 }
 
+/** Ids of the revisions recorded as replacing a memory (audit target_id chain). */
+export type MemoryAuditSuccessors = (memoryId: string) => string[]
+
+function successorIds(entry: MemoryEntry, audit?: MemoryAuditSuccessors): string[] {
+  return [...(entry.supersededBy ? [entry.supersededBy] : []), ...(audit?.(entry.id) ?? [])]
+}
+
+/**
+ * Un-expiring a revision is only safe when nothing downstream of it is live.
+ * The walk follows the whole chain — a successor that was itself superseded
+ * hands off to its own successor — and falls back to the audit trail for
+ * legacy rows written before supersession links existed. Visited ids are
+ * tracked so a cycle in the links cannot spin.
+ */
 export function assertRestoreAllowed(
   entry: MemoryEntry,
-  getMemory: (id: string) => MemoryEntry | null
+  getMemory: (id: string) => MemoryEntry | null,
+  audit?: MemoryAuditSuccessors
 ): void {
-  if (!entry.supersededBy) return
-  const successor = getMemory(entry.supersededBy)
-  if (successor && !successor.expiredAt) {
-    throw new Error(`Cannot restore memory while its successor is active: ${successor.id}`)
+  const seen = new Set<string>([entry.id])
+  const queue = successorIds(entry, audit)
+  while (queue.length > 0) {
+    const id = queue.shift()!
+    if (seen.has(id)) continue
+    seen.add(id)
+    const successor = getMemory(id)
+    if (!successor) {
+      // The link points at a document that was archived under a revision id;
+      // the audit trail still records what replaced it.
+      queue.push(...(audit?.(id) ?? []))
+      continue
+    }
+    if (!successor.expiredAt) {
+      throw new Error(`Cannot restore memory while its successor is active: ${successor.id}`)
+    }
+    queue.push(...successorIds(successor, audit))
   }
 }
