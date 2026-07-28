@@ -550,7 +550,9 @@ export function ContextHubPanel(): JSX.Element {
                       : editor === 'memory'
                         ? reviewMemory()
                         : reviewStatus()
-                  )}
+                  // a refused proposal (e.g. a read-only block) is reported on
+                  // the error banner; it must not surface as an unhandled reject
+                  ).catch(() => undefined)}
                   disabled={
                     selectedSpaces.size === 0 ||
                     (editor === 'block' && (!blockName.trim() || !blockContent.trim())) ||

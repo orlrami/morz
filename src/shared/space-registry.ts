@@ -19,10 +19,12 @@ export interface SpaceRegistrySnapshot {
 }
 
 export const SpaceRegistryApi = {
-  publish: 'spaces:publish' // (snapshot) => Promise<SpaceRegistrySnapshot>
+  publish: 'spaces:publish', // (snapshot) => Promise<SpaceRegistrySnapshot>
+  testSnapshot: 'spaces:test-snapshot' // MORZ_E2E only — what main currently knows
 } as const
 
 /** window.morzSpaces — exposed by the preload. */
 export interface SpaceRegistryBridge {
   publish(snapshot: SpaceRegistrySnapshot): Promise<SpaceRegistrySnapshot>
+  testSnapshot?(): Promise<SpaceRegistrySnapshot>
 }

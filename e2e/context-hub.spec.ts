@@ -151,6 +151,46 @@ test.describe.serial('context hub', () => {
     expect(content).toContain('Prefer focused tests before broad verification')
   })
 
+  // w17/context-blocks — the same block reaches every CLI's context file.
+  test('memory export writes the same block into AGENTS.md and GEMINI.md', async () => {
+    await page.getByRole('button', { name: 'Export memory' }).click()
+    await page.getByLabel('Include Second fixture').uncheck()
+    await page.getByLabel('Write CLAUDE.md').uncheck()
+    await page.getByLabel('Write AGENTS.md').check()
+    await page.getByLabel('Write GEMINI.md').check()
+    await page.getByRole('button', { name: 'Review 2 memory diffs' }).click()
+
+    const dialog = page.getByTestId('context-diff-dialog')
+    await expect(dialog.getByTestId('context-proposal-row')).toHaveCount(2)
+    await dialog.getByRole('button', { name: 'Apply 2 selected' }).click()
+    await expect(dialog).toBeHidden()
+
+    const block = /<!-- morz:memory -->\n([\s\S]*?)\n<!-- \/morz:memory -->/
+    const agents = readFileSync(join(firstRoot, 'AGENTS.md'), 'utf8')
+    const gemini = readFileSync(join(firstRoot, 'GEMINI.md'), 'utf8')
+    expect(agents).toContain('Prefer focused tests before broad verification')
+    expect(block.exec(gemini)![1]).toBe(block.exec(agents)![1])
+    // CLAUDE.md was not a target this time and keeps its earlier block
+    expect(readFileSync(join(firstRoot, 'CLAUDE.md'), 'utf8').match(/<!-- morz:memory -->/g))
+      .toHaveLength(1)
+  })
+
+  test('a read-only memory block is refused instead of rewritten', async () => {
+    const locked = '# Locked\n\n<!-- morz:memory read-only -->\nHand written.\n<!-- /morz:memory -->\n'
+    writeFileSync(join(secondRoot, 'AGENTS.md'), locked)
+    await page.getByRole('button', { name: 'Refresh context matrix' }).click()
+
+    await page.getByRole('button', { name: 'Export memory' }).click()
+    await page.getByLabel('Include First fixture').uncheck()
+    await page.getByLabel('Write CLAUDE.md').uncheck()
+    await page.getByLabel('Write GEMINI.md').uncheck()
+    await page.getByLabel('Write AGENTS.md').check()
+    await page.getByRole('button', { name: 'Review 1 memory diff' }).click()
+
+    await expect(page.getByRole('alert')).toContainText('read-only Morz memory block')
+    expect(readFileSync(join(secondRoot, 'AGENTS.md'), 'utf8')).toBe(locked)
+  })
+
   test('scan rejects roots that fail path hygiene', async () => {
     // The picker-only allowlist is gone; scans are guarded by structural
     // validation instead. Relative and nonexistent roots must still throw.

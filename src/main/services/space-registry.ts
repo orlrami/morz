@@ -127,5 +127,8 @@ export function registerSpaceRegistryIpc(ipcMain: IpcMain): void {
     assertTrustedSender(event)
     return setSpaceRegistry(snapshot)
   })
+  if (process.env.MORZ_E2E === '1') {
+    ipcMain.handle(SpaceRegistryApi.testSnapshot, () => spaceRegistry())
+  }
   registered = true
 }

@@ -1026,7 +1026,10 @@ import {
 
 const spaceRegistryBridge: SpaceRegistryBridge = {
   publish: (snapshot: SpaceRegistrySnapshot): Promise<SpaceRegistrySnapshot> =>
-    ipcRenderer.invoke(SpaceRegistryApi.publish, snapshot)
+    ipcRenderer.invoke(SpaceRegistryApi.publish, snapshot),
+  ...(process.env.MORZ_E2E === '1'
+    ? { testSnapshot: (): Promise<SpaceRegistrySnapshot> => ipcRenderer.invoke(SpaceRegistryApi.testSnapshot) }
+    : {})
 }
 
 contextBridge.exposeInMainWorld('morzSpaces', spaceRegistryBridge)

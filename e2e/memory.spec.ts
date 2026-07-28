@@ -143,4 +143,70 @@ test.describe.serial('Learning memory', () => {
     }).toBe('approved')
     expect(existsSync(join(morz.appDataDir, 'Morz', 'memory', 'global', 'prefer-pnpm.md'))).toBe(true)
   })
+
+  // w17/context-blocks — read-only is enforced in the store, not decorated in
+  // the UI: every write path (save, enable toggle, delete) is refused, and
+  // clearing the flag is the one write that gets through.
+  test('a read-only fact refuses every write until it is unlocked', async () => {
+    const now = '2026-07-27T12:00:00.000Z'
+    const locked: MemoryEntry = {
+      id: 'locked-house-rule',
+      scope: 'global',
+      kind: 'rule',
+      title: 'Locked house rule',
+      body: 'Imported from a file the user maintains by hand.',
+      origin: 'user',
+      createdAt: now,
+      updatedAt: now,
+      enabled: true,
+      readOnly: true
+    }
+    await morz.page.evaluate(
+      (value) => (window as unknown as MemoryWindow).morz.memory.save(value),
+      locked
+    )
+
+    const refusals = await morz.page.evaluate(async (value: MemoryEntry) => {
+      const memory = (window as unknown as MemoryWindow).morz.memory
+      const attempt = async (run: () => Promise<unknown>): Promise<string> => {
+        try {
+          await run()
+          return 'resolved'
+        } catch (error) {
+          return error instanceof Error ? error.message : String(error)
+        }
+      }
+      return {
+        edit: await attempt(() => memory.save({ ...value, title: 'Rewritten' })),
+        disable: await attempt(() => memory.setEnabled(value.id, false)),
+        remove: await attempt(() => memory.remove(value.id))
+      }
+    }, locked)
+    for (const refusal of Object.values(refusals)) expect(refusal).toContain('read-only')
+
+    const stored = await morz.page.evaluate(
+      (id) => (window as unknown as MemoryWindow).morz.memory.get(id),
+      locked.id
+    )
+    expect(stored?.title).toBe('Locked house rule')
+    expect(stored?.enabled).toBe(true)
+
+    await morz.page.evaluate(
+      (value) => (window as unknown as MemoryWindow).morz.memory.save({ ...value, readOnly: false }),
+      locked
+    )
+    await morz.page.evaluate(
+      (value) => (window as unknown as MemoryWindow).morz.memory.save({ ...value, readOnly: false, title: 'Unlocked and edited' }),
+      locked
+    )
+    const unlocked = await morz.page.evaluate(
+      (id) => (window as unknown as MemoryWindow).morz.memory.get(id),
+      locked.id
+    )
+    expect(unlocked?.title).toBe('Unlocked and edited')
+    await morz.page.evaluate(
+      (id) => (window as unknown as MemoryWindow).morz.memory.remove(id),
+      locked.id
+    )
+  })
 })
