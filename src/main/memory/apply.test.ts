@@ -73,8 +73,9 @@ class ApplyHarness {
     this.index.set(seed.id, structuredClone(seed))
   }
 
-  deps(): MemoryApplyDeps {
+  deps(isRetry = false): MemoryApplyDeps {
     return {
+      isRetry,
       getMemory: (id) => {
         const found = this.documents.get(id)
         return found ? structuredClone(found) : null
@@ -167,6 +168,27 @@ test('CAS rejects the second proposal staged against the same target revision', 
   assert.equal(harness.audit.size, 1)
 })
 
+test('a second proposal cannot adopt an identical materialized result', () => {
+  const old = entry()
+  const proposalA = updateProposal(old)
+  const proposalB = updateProposal(old, { id: 'proposal-switch-package-manager-again' })
+  const harness = new ApplyHarness(old)
+
+  applyApprovedMemoryProposal(proposalA, harness.deps())
+
+  assert.throws(
+    () => assertMemoryProposalCurrent(proposalB, harness.deps().getMemory),
+    /Memory changed since this was proposed — re-propose\./
+  )
+  assert.throws(
+    () => applyApprovedMemoryProposal(proposalB, harness.deps()),
+    /Memory changed since this was proposed — re-propose\./
+  )
+  // Only the proposal that owns the outcome replays it after a crash.
+  assert.doesNotThrow(() => applyApprovedMemoryProposal(proposalA, harness.deps(true)))
+  assert.equal(harness.audit.size, 1)
+})
+
 for (const failpoint of ['markdown', 'index', 'audit', 'applied'] as const) {
   test(`UPDATE recovers exactly once after a crash at the ${failpoint} boundary`, () => {
     const old = entry()
@@ -177,7 +199,7 @@ for (const failpoint of ['markdown', 'index', 'audit', 'applied'] as const) {
       () => applyApprovedMemoryProposal(proposal, harness.deps()),
       new RegExp(`simulated crash after ${failpoint}`)
     )
-    applyApprovedMemoryProposal(proposal, harness.deps())
+    applyApprovedMemoryProposal(proposal, harness.deps(true))
 
     const active = [...harness.documents.values()].filter((value) => !value.expiredAt)
     const expired = [...harness.documents.values()].filter((value) => value.expiredAt)

@@ -285,7 +285,8 @@ function readStoredProposals(reportInvalid = false): StoredProposal[] {
 
 function applyApprovedProposal(
   proposal: MemoryProposal,
-  markApplied: () => void
+  markApplied: () => void,
+  isRetry = false
 ): MemoryEntry | null {
   return applyApprovedMemoryProposal(proposal, {
     getMemory,
@@ -293,7 +294,8 @@ function applyApprovedProposal(
     indexEntries: indexMemoryEntries,
     recordAudit: (input) => recordMemoryOpAudit(memoryDatabase(), input),
     markApplied,
-    now: () => new Date().toISOString()
+    now: () => new Date().toISOString(),
+    isRetry
   })
 }
 
@@ -303,8 +305,13 @@ function initializeProposalStore(): void {
   try {
     for (const stored of readStoredProposals(true)) {
       if (stored.proposal.state !== 'approved' || stored.applied) continue
-      applyApprovedProposal(stored.proposal, () =>
-        writeStoredProposal({ ...stored, applied: true }))
+      // The only retry path: this exact proposal was approved and persisted
+      // before the process died, so it may adopt its own materialized result.
+      applyApprovedProposal(
+        stored.proposal,
+        () => writeStoredProposal({ ...stored, applied: true }),
+        true
+      )
     }
     proposalsInitialized = true
   } finally {

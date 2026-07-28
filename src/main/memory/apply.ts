@@ -28,6 +28,13 @@ export interface MemoryApplyDeps {
   markApplied(): void
   now(): string
   failpoint?(point: MemoryApplyFailpoint): void
+  /**
+   * Crash recovery only: set when replaying a PERSISTED approved+unapplied
+   * proposal. A first-time approval must never treat an already materialized
+   * outcome as its own retry — that would accept a second distinct proposal
+   * carrying the same target revision and replacement.
+   */
+  isRetry?: boolean
 }
 
 const CAS_ERROR = 'Memory changed since this was proposed — re-propose.'
@@ -113,10 +120,15 @@ function isMaterialized(
 
 export function assertMemoryProposalCurrent(
   proposal: MemoryProposal,
-  getMemory: (id: string) => MemoryEntry | null
+  getMemory: (id: string) => MemoryEntry | null,
+  options: { isRetry?: boolean } = {}
 ): void {
   const op = proposal.op ?? { kind: 'add' as const }
-  if (isMaterialized(proposal, getMemory) || op.kind === 'noop') return
+  if (op.kind === 'noop') return
+  // Only the proposal that already owns this outcome may skip the CAS. Its
+  // idempotency key is the proposal id, so recognising the retry is the
+  // caller's job: it re-approves a persisted approved+unapplied proposal.
+  if (options.isRetry && isMaterialized(proposal, getMemory)) return
   if (op.kind === 'add') {
     if (getMemory(proposal.entry.id)) throw new Error(CAS_ERROR)
     return
@@ -265,9 +277,9 @@ export function applyApprovedMemoryProposal(
   deps: MemoryApplyDeps
 ): MemoryEntry | null {
   const now = deps.now()
-  let plan = recoveredPlan(proposal, deps.getMemory, now)
+  let plan = deps.isRetry ? recoveredPlan(proposal, deps.getMemory, now) : null
   if (!plan) {
-    assertMemoryProposalCurrent(proposal, deps.getMemory)
+    assertMemoryProposalCurrent(proposal, deps.getMemory, { isRetry: deps.isRetry })
     plan = freshPlan(proposal, deps.getMemory, now)
   }
   // Rewriting an already materialized plan is intentional: a process can die
