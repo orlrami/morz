@@ -22,6 +22,10 @@ import { closeMorz, launchMorz, ROOT } from './app'
 interface CleanTreeWindow {
   morz: {
     memory: { save(entry: unknown): Promise<unknown> }
+    claude: {
+      start(opts: { agentId: string; cwd: string }): Promise<{ agentId: string }>
+      send(agentId: string, text: string): void
+    }
     run: {
       approvePlan(plan: unknown): Promise<{ planHash: string }>
       dispatch(plan: unknown): Promise<{ runId: string }>
@@ -143,6 +147,87 @@ test('launching a team never dirties a worktree — memory reaches agents in mem
         runId
       ).catch(() => undefined)
     }
+    await closeMorz(app)
+    delete process.env.MORZ_E2E
+    removeFixture(fixtureParent)
+  }
+})
+
+/*
+ * The other half of the gate (Codex round-1): a standalone Claude LANE renders
+ * its memory preamble in src/main/adapters/claude.ts, a completely different
+ * path from dispatcher kickoff. A launch-time write added there would sail past
+ * the dispatcher test above, so the lane gets its own worktree and its own
+ * clean-tree assertion — with a fake `claude` on PATH so the lane really runs.
+ */
+test('starting a lane in a worktree never dirties it — the adapter writes no context files', async () => {
+  const fixtureParent = join(ROOT, 'e2e', '.tmp', `clean-tree-lane-${Date.now()}`)
+  const spaceRoot = join(fixtureParent, 'space')
+  const binDir = join(fixtureParent, 'bin')
+  mkdirSync(spaceRoot, { recursive: true })
+  mkdirSync(binDir, { recursive: true })
+  writeFileSync(join(spaceRoot, 'README.md'), '# clean-tree lane fixture\n', 'utf8')
+  git(spaceRoot, 'init', '-b', 'main')
+  git(spaceRoot, 'config', 'user.name', 'Morz CleanTree Lane Test')
+  git(spaceRoot, 'config', 'user.email', 'clean-tree-lane@morz.invalid')
+  git(spaceRoot, 'add', '-A')
+  git(spaceRoot, 'commit', '-m', 'test: clean-tree lane fixture')
+
+  // a linked worktree, exactly where a lane would be opened
+  const worktree = join(fixtureParent, 'lane-worktree')
+  git(spaceRoot, 'worktree', 'add', worktree, '-b', 'lane/clean-tree')
+  expect(git(worktree, 'status', '--porcelain')).toBe('')
+
+  // a fake `claude` that just holds stdin open: the adapter spawns it, renders
+  // the preamble, and writes the first prompt to it — no LLM, no cost.
+  writeFileSync(
+    join(binDir, 'claude.cmd'),
+    '@echo off\r\nnode -e "process.stdin.resume()"\r\n',
+    'utf8'
+  )
+  const pathKey = Object.keys(process.env).find((key) => key.toUpperCase() === 'PATH') ?? 'PATH'
+
+  process.env.MORZ_E2E = '1'
+  const { app, page } = await launchMorz({
+    env: { [pathKey]: `${binDir};${process.env[pathKey] ?? ''}` }
+  })
+
+  try {
+    await page.evaluate(async (root: string) => {
+      const now = '2026-07-27T12:00:00.000Z'
+      const base = { origin: 'user' as const, kind: 'rule' as const, createdAt: now, updatedAt: now, enabled: true }
+      const memory = (window as unknown as CleanTreeWindow).morz.memory
+      await memory.save({ ...base, id: 'lane-global-rule', scope: 'global', title: 'Ship small diffs', body: 'One change per commit.' })
+      await memory.save({ ...base, id: 'lane-project-rule', scope: 'project', scopeRef: root, title: 'Run targeted tests', body: 'Narrow first.' })
+    }, worktree)
+
+    await page.evaluate(
+      (cwd) =>
+        (window as unknown as CleanTreeWindow).morz.claude.start({ agentId: 'clean-tree-lane', cwd }),
+      worktree
+    )
+    // the preamble is joined onto the FIRST prompt — exercise that path too
+    await page.evaluate(() =>
+      (window as unknown as CleanTreeWindow).morz.claude.send('clean-tree-lane', 'Start the work.')
+    )
+    await page.waitForTimeout(1_500)
+
+    // the lane genuinely spawned; without this the gate could pass vacuously
+    // on a lane that never started
+    const spawnArgs = await page.evaluate(() =>
+      (window as unknown as { morzModels: { testLaneSpawnArgs(): Promise<string[] | null> } })
+        .morzModels.testLaneSpawnArgs()
+    )
+    expect(spawnArgs).not.toBeNull()
+
+    // ── the gate ──
+    expect(git(worktree, 'status', '--porcelain')).toBe('')
+    expect(git(spaceRoot, 'status', '--porcelain')).toBe('')
+    for (const name of ['CLAUDE.md', 'AGENTS.md', 'GEMINI.md']) {
+      expect(existsSync(join(worktree, name))).toBe(false)
+      expect(existsSync(join(spaceRoot, name))).toBe(false)
+    }
+  } finally {
     await closeMorz(app)
     delete process.env.MORZ_E2E
     removeFixture(fixtureParent)
