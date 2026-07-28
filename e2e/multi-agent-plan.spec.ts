@@ -10,6 +10,7 @@ import { closeMorz, launchMorz, openOrchestrator, type MorzApp } from './app'
 interface TestAgent {
   agentId: string
   cli: 'claude' | 'codex' | 'agy'
+  model?: string | null
   role: string
   branch: string
   worktree: null
@@ -25,6 +26,8 @@ async function stubTeamPlanner(morz: MorzApp): Promise<void> {
       {
         agentId: 'architect',
         cli: 'claude',
+        // a plan-supplied model pre-fills the exact-model field (w17)
+        model: 'opus',
         role: 'Architect',
         branch: 'run/team/architect',
         worktree: null,
@@ -65,7 +68,8 @@ async function stubTeamPlanner(morz: MorzApp): Promise<void> {
     ipcMain.handle('planner:plan', () => {
       planCalls += 1
       const plan = {
-        version: '1.0',
+        // per-agent models make this a 1.1 plan
+        version: '1.1',
         id: `team-e2e-${planCalls}`,
         goal: 'Build a Tetris game',
         agents: structuredClone(agents),
@@ -117,17 +121,34 @@ test.describe('multi-agent team proposal card', () => {
 
   test('renders a row with a model dropdown per agent; remove and add update the plan', async () => {
     const { page } = morz
+    // exact:true keeps the per-agent CLI select apart from the 'Agent model
+    // for …' exact-model input, which is also a combobox (w17).
     const card = page.getByRole('region', { name: 'Spawn plan' })
     await expect(card.getByRole('combobox', { name: /^Model for / })).toHaveCount(3)
-    await expect(card.getByRole('combobox', { name: 'Model for Builder' })).toHaveValue('codex')
-    await expect(card.getByRole('combobox', { name: 'Model for Math specialist' })).toHaveValue('agy')
+    await expect(
+      card.getByRole('combobox', { name: 'Model for Builder', exact: true })
+    ).toHaveValue('codex')
+    await expect(
+      card.getByRole('combobox', { name: 'Model for Math specialist', exact: true })
+    ).toHaveValue('agy')
+
+    // The model the plan named pre-fills; an agent without one stays on the
+    // user's CLI default.
+    await expect(card.getByTestId('plan-agent-model-architect')).toHaveValue('opus')
+    await expect(card.getByTestId('plan-agent-model-builder')).toHaveValue('')
+    await expect(card.getByTestId('plan-agent-model-builder')).toHaveAttribute(
+      'placeholder',
+      'User default'
+    )
 
     await card.getByRole('button', { name: 'Remove Math specialist' }).click()
     await expect(card.getByRole('combobox', { name: /^Model for / })).toHaveCount(2)
 
     await card.getByRole('button', { name: 'Add agent' }).click()
     await expect(card.getByRole('combobox', { name: /^Model for / })).toHaveCount(3)
-    await expect(card.getByRole('combobox', { name: 'Model for Agent 3' })).toBeVisible()
+    await expect(
+      card.getByRole('combobox', { name: 'Model for Agent 3', exact: true })
+    ).toBeVisible()
 
     await card.getByRole('button', { name: 'Approve & Run' }).click()
     await expect(page.getByText(/stub-run-team/)).toBeVisible()
@@ -138,27 +159,32 @@ test.describe('multi-agent team proposal card', () => {
     const card = page.getByRole('region', { name: 'Spawn plan' })
     await card.getByRole('combobox', { name: 'Team size' }).selectOption('2')
     await expect(card.getByRole('combobox', { name: /^Model for / })).toHaveCount(2)
-    await expect(card.getByRole('combobox', { name: 'Model for Architect' })).toBeVisible()
-    await expect(card.getByRole('combobox', { name: 'Model for Builder' })).toBeVisible()
+    await expect(
+      card.getByRole('combobox', { name: 'Model for Architect', exact: true })
+    ).toBeVisible()
+    await expect(
+      card.getByRole('combobox', { name: 'Model for Builder', exact: true })
+    ).toBeVisible()
   })
 
   test('a model swap persists as the role default and offers it as a chip on the next plan', async () => {
     const { page } = morz
     const card = page.getByRole('region', { name: 'Spawn plan' })
-    await card.getByRole('combobox', { name: 'Model for Builder' }).selectOption('agy')
-    await expect(card.getByRole('combobox', { name: 'Model for Builder' })).toHaveValue('agy')
+    const builderCli = card.getByRole('combobox', { name: 'Model for Builder', exact: true })
+    await builderCli.selectOption('agy')
+    await expect(builderCli).toHaveValue('agy')
 
     await card.getByRole('button', { name: 'Discard' }).click()
     await page.getByRole('button', { name: 'Plan team' }).click()
     // The stub proposes codex again; the proposal stands untouched and the
     // remembered per-role default is an opt-in chip, never a silent rewrite.
-    await expect(card.getByRole('combobox', { name: 'Model for Builder' })).toHaveValue('codex')
+    await expect(builderCli).toHaveValue('codex')
     const chip = card
       .getByTestId('route-chip')
       .filter({ hasText: "Use your Antigravity default for 'Builder'?" })
     await expect(chip).toBeVisible()
     await chip.getByRole('button', { name: 'Apply' }).click()
-    await expect(card.getByRole('combobox', { name: 'Model for Builder' })).toHaveValue('agy')
+    await expect(builderCli).toHaveValue('agy')
   })
 })
 
