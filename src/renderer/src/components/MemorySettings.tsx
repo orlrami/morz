@@ -374,7 +374,6 @@ export function MemorySettings(): JSX.Element {
         <p
           className="min-w-0 flex-1 text-[10px]"
           data-testid="memory-event-log-stats"
-          role="status"
           style={{ color: colors.quartzDim }}
         >
           {eventStats ? eventLogLabel(eventStats) : 'Loading event log…'}
