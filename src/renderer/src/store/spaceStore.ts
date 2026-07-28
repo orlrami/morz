@@ -182,6 +182,10 @@ export const useSpaceStore = create<SpaceState>()(
             null
 
           set({ spaces, initialized, unavailableRoots, activeSpaceId, ready: true })
+          // w17/context-blocks — main cannot scope memory to a Space until this
+          // lands, so publish explicitly on hydration rather than waiting for
+          // the user's first change.
+          publishSpacesOnce()
           get().startWatching()
         } finally {
           initializing = false
@@ -286,22 +290,44 @@ export const useSpaceStore = create<SpaceState>()(
  * only exists here. Publish id↔root plus the active id on every change so a
  * dispatched team and a lane read the same Space, and nothing downstream has
  * to guess a Space from a worktree path.
+ *
+ * Delivery is retried until main acknowledges (Codex round-1): a publish that
+ * failed used to wait for the next unrelated store change, and until it landed
+ * the dispatcher would resolve every Space to `undefined` and silently drop
+ * space memory. Each message carries a monotonic generation so a retry that
+ * overtakes a newer publish cannot reinstate stale Spaces.
  */
-let lastPublished = ''
+const PUBLISH_RETRY_MS = [250, 1_000, 3_000, 10_000]
+/** New per renderer session, so main knows a reload replaced the publisher. */
+const publisherId = `renderer-${Math.random().toString(36).slice(2, 10)}`
+let publishedGeneration = 0
+let inFlight = ''
+let retryTimer: ReturnType<typeof setTimeout> | undefined
 
-function publishSpaceRegistry(state: SpaceState): void {
+function publishSpaceRegistry(state: SpaceState, attempt = 0): void {
   const bridge = (window as unknown as { morzSpaces?: SpaceRegistryBridge }).morzSpaces
   if (!bridge) return
-  const snapshot = {
-    spaces: state.spaces.map((space) => ({ id: space.id, root: space.root })),
-    activeSpaceId: state.activeSpaceId
+  const spaces = state.spaces.map((space) => ({ id: space.id, root: space.root }))
+  const serialized = JSON.stringify({ spaces, activeSpaceId: state.activeSpaceId })
+  if (attempt === 0) {
+    if (serialized === inFlight) return
+    inFlight = serialized
+    clearTimeout(retryTimer)
+  } else if (serialized !== inFlight) {
+    return // a newer snapshot took over while this retry was pending
   }
-  const serialized = JSON.stringify(snapshot)
-  if (serialized === lastPublished) return
-  lastPublished = serialized
-  void bridge.publish(snapshot).catch(() => {
-    lastPublished = '' // retry on the next change
-  })
+  const generation = attempt === 0 ? ++publishedGeneration : publishedGeneration
+  void bridge
+    .publish({ spaces, activeSpaceId: state.activeSpaceId, publisherId, generation })
+    .catch(() => {
+      const delay = PUBLISH_RETRY_MS[Math.min(attempt, PUBLISH_RETRY_MS.length - 1)]
+      retryTimer = setTimeout(() => publishSpaceRegistry(state, attempt + 1), delay)
+    })
 }
 
-useSpaceStore.subscribe(publishSpaceRegistry)
+useSpaceStore.subscribe((state) => publishSpaceRegistry(state))
+
+/** Publish as soon as the store is usable, without waiting for a change. */
+export function publishSpacesOnce(): void {
+  publishSpaceRegistry(useSpaceStore.getState())
+}

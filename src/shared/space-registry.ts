@@ -16,6 +16,13 @@ export interface SpaceRegistryEntry {
 export interface SpaceRegistrySnapshot {
   spaces: SpaceRegistryEntry[]
   activeSpaceId: string | null
+  /*
+   * Who published, and their monotonic sequence. Main ignores an older message
+   * from the SAME publisher (a lost race) while letting a reloaded renderer —
+   * a new publisher — take over. Absent on the snapshot main hands back.
+   */
+  publisherId?: string
+  generation?: number
 }
 
 export const SpaceRegistryApi = {

@@ -1,73 +1,172 @@
 import assert from 'node:assert/strict'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, sep } from 'node:path'
 import { afterEach, test } from 'node:test'
-import { clearSpaceRegistry, resolveSpaceId, setSpaceRegistry, spaceRegistry } from './space-registry'
+import {
+  awaitSpaceRegistryReady,
+  clearSpaceRegistry,
+  resolveSpaceId,
+  setSpaceRegistry,
+  spaceRegistry,
+  spaceRegistryReady
+} from './space-registry'
 
-const ROOT_A = process.platform === 'win32' ? 'C:\\Projects\\morz' : '/projects/morz'
-const ROOT_B = process.platform === 'win32' ? 'C:\\Projects\\other' : '/projects/other'
-const join = (root: string, child: string): string =>
-  process.platform === 'win32' ? `${root}\\${child}` : `${root}/${child}`
+/*
+ * Roots are canonicalized on disk now (Codex round-1: alias collapsing +
+ * duplicate rejection), so these run against real temp directories.
+ */
+const made: string[] = []
 
-afterEach(() => clearSpaceRegistry())
-
-function publish(activeSpaceId: string | null = 'morz'): void {
-  setSpaceRegistry({
-    spaces: [
-      { id: 'morz', root: ROOT_A },
-      { id: 'other', root: ROOT_B }
-    ],
-    activeSpaceId
-  })
+function tempRoot(name: string): string {
+  const root = mkdtempSync(join(tmpdir(), `morz-registry-${name}-`))
+  made.push(root)
+  return root
 }
 
+afterEach(() => {
+  clearSpaceRegistry()
+  for (const root of made.splice(0)) rmSync(root, { recursive: true, force: true })
+})
+
 test('a plan root resolves to its space, and an unknown root resolves to nothing', () => {
-  publish()
-  assert.equal(resolveSpaceId({ root: ROOT_A }), 'morz')
-  assert.equal(resolveSpaceId({ root: ROOT_B }), 'other')
+  const a = tempRoot('a')
+  const b = tempRoot('b')
+  setSpaceRegistry({ spaces: [{ id: 'morz', root: a }, { id: 'other', root: b }], activeSpaceId: 'morz' })
+
+  assert.equal(resolveSpaceId({ root: a }), 'morz')
+  assert.equal(resolveSpaceId({ root: b }), 'other')
   // a dispatched worktree lives BESIDE the space root — it must not borrow a
   // space, or one team's memory would leak into another's prompts
-  assert.equal(resolveSpaceId({ root: join(ROOT_A, '..') }), undefined)
-  assert.equal(
-    resolveSpaceId({ root: process.platform === 'win32' ? 'C:\\Elsewhere' : '/elsewhere' }),
-    undefined
-  )
+  assert.equal(resolveSpaceId({ root: join(a, '..') }), undefined)
+  assert.equal(resolveSpaceId({ root: join(a, 'nested') }), undefined)
 })
 
 test('a lane cwd resolves by containment, then falls back to the active space', () => {
-  publish()
-  assert.equal(resolveSpaceId({ cwd: join(ROOT_B, 'src') }), 'other')
-  assert.equal(
-    resolveSpaceId({ cwd: process.platform === 'win32' ? 'C:\\Temp\\scratch' : '/tmp/scratch' }),
-    'morz'
-  )
-  publish(null)
-  assert.equal(
-    resolveSpaceId({ cwd: process.platform === 'win32' ? 'C:\\Temp\\scratch' : '/tmp/scratch' }),
-    undefined
-  )
+  const a = tempRoot('lane-a')
+  const b = tempRoot('lane-b')
+  setSpaceRegistry({ spaces: [{ id: 'morz', root: a }, { id: 'other', root: b }], activeSpaceId: 'morz' })
+
+  assert.equal(resolveSpaceId({ cwd: join(b, 'src') }), 'other')
+  assert.equal(resolveSpaceId({ cwd: join(tmpdir(), 'nowhere-near-a-space') }), 'morz')
+
+  setSpaceRegistry({ spaces: [{ id: 'morz', root: a }], activeSpaceId: null })
+  assert.equal(resolveSpaceId({ cwd: join(tmpdir(), 'nowhere-near-a-space') }), undefined)
 })
 
 test('nested space roots resolve to the closest space', () => {
+  const outer = tempRoot('outer')
+  const inner = mkdtempSync(join(outer, 'packages-'))
   setSpaceRegistry({
-    spaces: [
-      { id: 'outer', root: ROOT_A },
-      { id: 'inner', root: join(ROOT_A, 'packages') }
-    ],
+    spaces: [{ id: 'outer', root: outer }, { id: 'inner', root: inner }],
     activeSpaceId: 'outer'
   })
-  assert.equal(resolveSpaceId({ cwd: join(join(ROOT_A, 'packages'), 'app') }), 'inner')
-  assert.equal(resolveSpaceId({ cwd: join(ROOT_A, 'src') }), 'outer')
+
+  assert.equal(resolveSpaceId({ cwd: join(inner, 'app') }), 'inner')
+  assert.equal(resolveSpaceId({ cwd: join(outer, 'src') }), 'outer')
+})
+
+/*
+ * Codex round-1 MEDIUM: two entries claiming one root let find() hand back the
+ * FIRST id regardless of which space the user meant — poisoned or merely
+ * malformed renderer state injecting another space's memory.
+ */
+test('two spaces may not claim the same root, however it is spelled', () => {
+  const root = tempRoot('dup')
+  assert.throws(
+    () => setSpaceRegistry({
+      spaces: [{ id: 'poisoned', root }, { id: 'real', root }],
+      activeSpaceId: 'real'
+    }),
+    /roots must be unique/
+  )
+  // a path alias is the same root on disk, so it collides too
+  assert.throws(
+    () => setSpaceRegistry({
+      spaces: [{ id: 'poisoned', root }, { id: 'real', root: join(root, '.', '.') }],
+      activeSpaceId: 'real'
+    }),
+    /roots must be unique/
+  )
+  // the rejected snapshot left nothing behind
+  assert.deepEqual(spaceRegistry().spaces, [])
+})
+
+test('an aliased root resolves to the space that published its canonical form', () => {
+  const root = tempRoot('alias')
+  setSpaceRegistry({ spaces: [{ id: 'morz', root }], activeSpaceId: 'morz' })
+
+  assert.equal(resolveSpaceId({ root: join(root, '.') }), 'morz')
+  assert.equal(resolveSpaceId({ root: join(root, 'nested', '..') }), 'morz')
+  assert.equal(resolveSpaceId({ root: `${root}${sep}` }), 'morz')
+})
+
+test('a root that no longer exists is dropped, and the rest of the snapshot survives', () => {
+  const alive = tempRoot('alive')
+  const gone = tempRoot('gone')
+  rmSync(gone, { recursive: true, force: true })
+
+  const snapshot = setSpaceRegistry({
+    spaces: [{ id: 'alive', root: alive }, { id: 'gone', root: gone }],
+    activeSpaceId: 'gone'
+  })
+  assert.deepEqual(snapshot.spaces.map((space) => space.id), ['alive'])
+  assert.equal(snapshot.activeSpaceId, null)
+  assert.equal(resolveSpaceId({ root: gone }), undefined)
 })
 
 test('the snapshot is validated, copied, and drops an unknown active id', () => {
-  const snapshot = setSpaceRegistry({ spaces: [{ id: 'morz', root: ROOT_A }], activeSpaceId: 'gone' })
-  assert.deepEqual(snapshot, { spaces: [{ id: 'morz', root: ROOT_A }], activeSpaceId: null })
+  const root = tempRoot('validate')
+  const snapshot = setSpaceRegistry({ spaces: [{ id: 'morz', root }], activeSpaceId: 'gone' })
+  assert.equal(snapshot.activeSpaceId, null)
   snapshot.spaces[0].id = 'mutated'
   assert.equal(spaceRegistry().spaces[0].id, 'morz')
 
   assert.throws(() => setSpaceRegistry(null), /invalid/)
   assert.throws(() => setSpaceRegistry({ spaces: [{ id: 'a', root: 'relative' }] }), /absolute/)
   assert.throws(
-    () => setSpaceRegistry({ spaces: [{ id: 'a', root: ROOT_A }, { id: 'a', root: ROOT_B }] }),
-    /unique/
+    () => setSpaceRegistry({ spaces: [{ id: 'a', root }, { id: 'a', root }] }),
+    /ids must be unique/
   )
+  assert.throws(
+    () => setSpaceRegistry({ spaces: [], generation: -1, publisherId: 'r1' }),
+    /generation is invalid/
+  )
+})
+
+/*
+ * Codex round-1 MEDIUM: a retry that overtakes a newer publish would otherwise
+ * reinstate spaces the user has already removed.
+ */
+test('an older message from the same publisher is ignored; a new publisher takes over', () => {
+  const first = tempRoot('gen-first')
+  const second = tempRoot('gen-second')
+  const publish = (id: string, root: string, publisherId: string, generation: number): void => {
+    setSpaceRegistry({ spaces: [{ id, root }], activeSpaceId: id, publisherId, generation })
+  }
+
+  publish('first', first, 'r1', 2)
+  publish('second', second, 'r1', 1)
+  assert.deepEqual(spaceRegistry().spaces.map((space) => space.id), ['first'])
+
+  publish('second', second, 'r1', 3)
+  assert.deepEqual(spaceRegistry().spaces.map((space) => space.id), ['second'])
+
+  // a reloaded renderer restarts its generation and must still be believed
+  publish('first', first, 'r2', 1)
+  assert.deepEqual(spaceRegistry().spaces.map((space) => space.id), ['first'])
+})
+
+test('readiness flips on the first accepted publish and is awaitable', async () => {
+  const root = tempRoot('ready')
+  assert.equal(spaceRegistryReady(), false)
+  assert.equal(await awaitSpaceRegistryReady(20), false)
+
+  const waiting = awaitSpaceRegistryReady(5_000)
+  setSpaceRegistry({ spaces: [{ id: 'morz', root }], activeSpaceId: 'morz' })
+  assert.equal(await waiting, true)
+  assert.equal(spaceRegistryReady(), true)
+  // an empty Space list is still an answer — the user simply has no Spaces
+  setSpaceRegistry({ spaces: [], activeSpaceId: null })
+  assert.equal(spaceRegistryReady(), true)
 })
