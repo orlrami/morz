@@ -20,11 +20,11 @@ import {
 import { notify } from '../services/notify-center'
 import {
   ensureMemoryAuditTable,
-  expireEntry,
   migrateMemoryFtsSchema,
   renderInjectionLines,
   restoreEntry
 } from './opset'
+import { assertRestoreAllowed } from './apply'
 
 const SCOPES = new Set<MemoryScope>(['global', 'project', 'space', 'agent'])
 const KINDS = new Set<MemoryKind>(['rule', 'skill', 'fact'])
@@ -115,6 +115,10 @@ function normalizeEntry(value: unknown, existing?: MemoryEntry | null): MemoryEn
   const source = input.source === undefined || input.source === null || input.source === ''
     ? undefined
     : cleanString(input.source, 'source', 32_768).trim()
+  const optionalLink = (field: 'supersedesId' | 'supersededBy'): string | undefined =>
+    input[field] === undefined || input[field] === null || input[field] === ''
+      ? undefined
+      : validateId(input[field])
   return {
     id: validateId(input.id),
     scope,
@@ -131,7 +135,9 @@ function normalizeEntry(value: unknown, existing?: MemoryEntry | null): MemoryEn
     invalidAt: optionalTimestamp('invalidAt'),
     expiredAt: optionalTimestamp('expiredAt'),
     sourceRunId,
-    source
+    source,
+    supersedesId: optionalLink('supersedesId'),
+    supersededBy: optionalLink('supersededBy')
   }
 }
 
@@ -163,7 +169,15 @@ function serialize(entry: MemoryEntry): string {
     ['createdAt', entry.createdAt],
     ['updatedAt', entry.updatedAt],
     ['enabled', entry.enabled],
-    ...(['validAt', 'invalidAt', 'expiredAt', 'sourceRunId', 'source'] as const)
+    ...([
+      'validAt',
+      'invalidAt',
+      'expiredAt',
+      'sourceRunId',
+      'source',
+      'supersedesId',
+      'supersededBy'
+    ] as const)
       .filter((key) => entry[key] !== undefined)
       .map((key) => [key, entry[key]] as [keyof MemoryEntry, unknown])
   ]
@@ -186,7 +200,7 @@ function parseMemoryFile(path: string): MemoryEntry {
   const metadata: Record<string, unknown> = Object.create(null) as Record<string, unknown>
   const allowed = new Set([
     'id', 'scope', 'scopeRef', 'kind', 'title', 'origin', 'createdAt', 'updatedAt', 'enabled',
-    'validAt', 'invalidAt', 'expiredAt', 'sourceRunId', 'source'
+    'validAt', 'invalidAt', 'expiredAt', 'sourceRunId', 'source', 'supersedesId', 'supersededBy'
   ])
   for (const line of match[1].split(/\r?\n/)) {
     const separator = line.indexOf(':')
@@ -267,14 +281,6 @@ function indexValues(entry: MemoryEntry): unknown[] {
   ]
 }
 
-function replaceIndex(entry: MemoryEntry): void {
-  const store = database()
-  store.transaction(() => {
-    store.prepare('DELETE FROM memory_fts WHERE id = ?').run(entry.id)
-    store.prepare(INDEX_INSERT).run(...indexValues(entry))
-  })()
-}
-
 function rebuildIndex(): void {
   const store = database()
   const entries = readAllEntries(true)
@@ -340,37 +346,66 @@ export function getMemory(idValue: unknown): MemoryEntry | null {
   return matches.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0] ?? null
 }
 
-export function saveMemory(value: unknown): MemoryEntry {
+function sameResolvedPath(left: string, right: string): boolean {
+  const a = resolve(left)
+  const b = resolve(right)
+  return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b
+}
+
+/**
+ * Markdown is the durable source of truth. Multi-entry UPDATEs write the
+ * archived revision and successor before removing the old clean-id document.
+ */
+export function writeMemoryEntries(entries: MemoryEntry[], removeIds: string[] = []): void {
+  ensureInitialized()
+  const normalized = entries.map((entry) => normalizeEntry(entry, null))
+  const ids = new Set(normalized.map((entry) => entry.id))
+  if (ids.size !== normalized.length) throw new Error('Memory write contains duplicate ids')
+  const targets = normalized.map((entry) => ({ entry, path: pathForEntry(entry) }))
+
+  for (const { entry, path: target } of targets) {
+    mkdirSync(dirname(target), { recursive: true })
+    const temporary = join(dirname(target), `.${entry.id}.${randomUUID()}.tmp`)
+    try {
+      writeFileSync(temporary, serialize(entry), { encoding: 'utf8', flag: 'wx' })
+      renameSync(temporary, target)
+    } finally {
+      rmSync(temporary, { force: true })
+    }
+  }
+
+  const pruneIds = new Set([...removeIds.map(validateId), ...ids])
+  for (const path of entryFiles()) {
+    const id = basename(path, '.md')
+    if (!pruneIds.has(id)) continue
+    const canonicalTarget = targets.find(({ entry }) => entry.id === id)?.path
+    if (!canonicalTarget || !sameResolvedPath(path, canonicalTarget)) rmSync(path, { force: true })
+  }
+}
+
+/** Rebuild the disposable FTS rows only after all Markdown writes land. */
+export function indexMemoryEntries(entries: MemoryEntry[], removeIds: string[] = []): void {
+  ensureInitialized()
+  const normalized = entries.map((entry) => normalizeEntry(entry, null))
+  const ids = new Set([...removeIds.map(validateId), ...normalized.map((entry) => entry.id)])
+  const store = database()
+  store.transaction(() => {
+    const remove = store.prepare('DELETE FROM memory_fts WHERE id = ?')
+    for (const id of ids) remove.run(id)
+    const insert = store.prepare(INDEX_INSERT)
+    for (const entry of normalized) insert.run(...indexValues(entry))
+  })()
+}
+
+function saveMemory(value: unknown): MemoryEntry {
   ensureInitialized()
   const candidate = value && typeof value === 'object' ? value as Record<string, unknown> : null
   const id = validateId(candidate?.id)
-  const existing = getMemory(id)
-  const entry = normalizeEntry(value, existing)
-  const target = pathForEntry(entry)
-  mkdirSync(dirname(target), { recursive: true })
-  const temporary = join(dirname(target), `.${entry.id}.${randomUUID()}.tmp`)
-  try {
-    writeFileSync(temporary, serialize(entry), { encoding: 'utf8', flag: 'wx' })
-    renameSync(temporary, target)
-  } finally {
-    rmSync(temporary, { force: true })
-  }
-  for (const path of entryFiles()) {
-    if (path !== target && basename(path) === `${entry.id}.md`) rmSync(path, { force: true })
-  }
-  replaceIndex(entry)
+  const entry = normalizeEntry(value, getMemory(id))
+  writeMemoryEntries([entry])
+  indexMemoryEntries([entry])
   emitMemoryChanged()
   return entry
-}
-
-export function removeMemory(idValue: unknown): void {
-  ensureInitialized()
-  const id = validateId(idValue)
-  for (const path of entryFiles()) {
-    if (basename(path) === `${id}.md`) rmSync(path, { force: true })
-  }
-  database().prepare('DELETE FROM memory_fts WHERE id = ?').run(id)
-  emitMemoryChanged()
 }
 
 export function setMemoryEnabled(idValue: unknown, enabled: unknown): MemoryEntry {
@@ -419,18 +454,11 @@ export function searchMemoryNeighbors(query: unknown, limit = 10): MemoryEntry[]
   return rows.map(({ id }) => getMemory(id)).filter((entry): entry is MemoryEntry => entry !== null)
 }
 
-/** w15/memory-opset — UPDATE/DELETE soft-expire: row kept, auditable, restorable. */
-export function expireMemory(idValue: unknown, sourceRunId?: string): MemoryEntry {
-  const entry = getMemory(idValue)
-  if (!entry) throw new Error('Memory entry not found')
-  if (entry.expiredAt) return entry
-  return saveMemory(expireEntry(entry, new Date().toISOString(), sourceRunId))
-}
-
 export function restoreMemory(idValue: unknown): MemoryEntry {
   const entry = getMemory(idValue)
   if (!entry) throw new Error('Memory entry not found')
   if (!entry.expiredAt) return entry
+  assertRestoreAllowed(entry, getMemory)
   return saveMemory(restoreEntry(entry))
 }
 

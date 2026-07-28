@@ -1,4 +1,4 @@
-import { app, ipcMain } from 'electron'
+import { app, ipcMain, type IpcMainInvokeEvent } from 'electron'
 import { randomUUID } from 'crypto'
 import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'fs'
 import { basename, dirname, join } from 'path'
@@ -19,17 +19,16 @@ import { notify } from '../services/notify-center'
 import {
   MemoryInjection,
   emitMemoryChanged,
-  expireMemory,
   getMemory,
+  indexMemoryEntries,
   initializeMemoryStore,
   listMemory,
   memoryDatabase,
-  removeMemory,
   restoreMemory,
-  saveMemory,
   searchMemory,
   searchMemoryNeighbors,
-  setMemoryEnabled
+  setMemoryEnabled,
+  writeMemoryEntries
 } from './store'
 import {
   classifyOpWithClaude,
@@ -40,6 +39,12 @@ import {
   type OpClassifier
 } from './opset'
 import { scanBootstrapMarkdown, splitMarkdownCandidates } from './bootstrap'
+import {
+  applyApprovedMemoryProposal,
+  assertMemoryProposalCurrent,
+  memoryRevision
+} from './apply'
+import { assertTrustedMemorySender } from './ipc-trust'
 
 const MEMORY_E2E_PROPOSE = 'memory:e2e-propose'
 const MEMORY_E2E_RENDER = 'memory:e2e-render'
@@ -113,6 +118,11 @@ function normalizeOp(value: unknown): MemoryOp | undefined {
   const kind = input.kind as MemoryOp['kind']
   const op: MemoryOp = { kind }
   if (input.targetId !== undefined) op.targetId = cleanSlug(input.targetId, 'op targetId')
+  if (input.targetRevision !== undefined) {
+    const revision = cleanText(input.targetRevision, 'op targetRevision', 64).trim()
+    if (!/^[a-f0-9]{64}$/.test(revision)) throw new Error('Invalid op targetRevision')
+    op.targetRevision = revision
+  }
   if (input.old !== undefined) op.old = normalizeOpSnapshot(input.old, 'op old')
   if (input.next !== undefined) op.next = normalizeOpSnapshot(input.next, 'op next')
   if (input.reason !== undefined) op.reason = cleanText(input.reason, 'op reason', 500).trim()
@@ -139,6 +149,17 @@ function normalizeProposal(value: unknown, stateOverride?: MemoryProposal['state
   const source = entry.source === undefined || entry.source === null || entry.source === ''
     ? undefined
     : cleanText(entry.source, 'proposal source', 32_768).trim()
+  const sourceRunId = entry.sourceRunId === undefined || entry.sourceRunId === null || entry.sourceRunId === ''
+    ? undefined
+    : cleanText(entry.sourceRunId, 'proposal sourceRunId', 200).trim()
+  const optionalIso = (field: 'validAt' | 'invalidAt' | 'expiredAt'): string | undefined =>
+    entry[field] === undefined || entry[field] === null || entry[field] === ''
+      ? undefined
+      : cleanIso(entry[field])
+  const optionalLink = (field: 'supersedesId' | 'supersededBy'): string | undefined =>
+    entry[field] === undefined || entry[field] === null || entry[field] === ''
+      ? undefined
+      : cleanSlug(entry[field], `proposal ${field}`)
   if (scope === 'global' && entry.scopeRef !== undefined && entry.scopeRef !== null && entry.scopeRef !== '') {
     throw new Error('Global proposal cannot have a scopeRef')
   }
@@ -158,7 +179,13 @@ function normalizeProposal(value: unknown, stateOverride?: MemoryProposal['state
       body: cleanText(entry.body, 'proposal body', 50_000, true),
       origin: entry.origin as MemoryEntry['origin'],
       enabled: entry.enabled,
-      source
+      validAt: optionalIso('validAt'),
+      invalidAt: optionalIso('invalidAt'),
+      expiredAt: optionalIso('expiredAt'),
+      sourceRunId,
+      source,
+      supersedesId: optionalLink('supersedesId'),
+      supersededBy: optionalLink('supersededBy')
     },
     evidence: input.evidence.map((line) => cleanText(line, 'proposal evidence', 1_000).trim()),
     ts: cleanIso(input.ts),
@@ -256,57 +283,17 @@ function readStoredProposals(reportInvalid = false): StoredProposal[] {
     b.proposal.ts.localeCompare(a.proposal.ts) || a.proposal.id.localeCompare(b.proposal.id))
 }
 
-/*
- * w15/memory-opset — approved proposals apply per their op. UPDATE/DELETE
- * soft-expire the target (kept + restorable) instead of deleting; every
- * applied op lands in the SQLite audit table. Re-runs after a crash are safe:
- * expire is a no-op on expired rows and saveMemory overwrites in place (a
- * retried apply may duplicate an audit row, which is preferable to losing one).
- */
-function applyApprovedProposal(proposal: MemoryProposal): void {
-  const now = new Date().toISOString()
-  const op: MemoryOp = proposal.op ?? { kind: 'add' }
-  const source = `proposal:${proposal.id}`
-  const db = memoryDatabase()
-
-  if (op.kind === 'update' || op.kind === 'delete') {
-    const target = op.targetId ? getMemory(op.targetId) : null
-    if (target) expireMemory(target.id, proposal.entry.sourceRunId)
-  }
-  if (op.kind === 'delete') {
-    recordMemoryOpAudit(db, {
-      op: 'delete',
-      memoryId: op.targetId ?? proposal.entry.id,
-      targetId: op.targetId,
-      old: op.old,
-      reason: op.reason,
-      source,
-      ts: now
-    })
-    return
-  }
-
-  // An update whose replacement reuses the target id would overwrite the
-  // expired row's file; give the successor its own id so both rows survive.
-  const entryId = op.kind === 'update' && op.targetId === proposal.entry.id
-    ? `${proposal.entry.id}-${Date.now().toString(36)}`
-    : proposal.entry.id
-  const saved = saveMemory({
-    ...proposal.entry,
-    id: entryId,
-    validAt: proposal.entry.validAt ?? now,
-    createdAt: now,
-    updatedAt: now
-  })
-  recordMemoryOpAudit(db, {
-    op: op.kind === 'update' ? 'update' : 'add',
-    memoryId: saved.id,
-    targetId: op.targetId,
-    old: op.old,
-    next: { title: saved.title, body: saved.body },
-    reason: op.reason,
-    source,
-    ts: now
+function applyApprovedProposal(
+  proposal: MemoryProposal,
+  markApplied: () => void
+): MemoryEntry | null {
+  return applyApprovedMemoryProposal(proposal, {
+    getMemory,
+    writeEntries: writeMemoryEntries,
+    indexEntries: indexMemoryEntries,
+    recordAudit: (input) => recordMemoryOpAudit(memoryDatabase(), input),
+    markApplied,
+    now: () => new Date().toISOString()
   })
 }
 
@@ -316,8 +303,8 @@ function initializeProposalStore(): void {
   try {
     for (const stored of readStoredProposals(true)) {
       if (stored.proposal.state !== 'approved' || stored.applied) continue
-      applyApprovedProposal(stored.proposal)
-      writeStoredProposal({ ...stored, applied: true })
+      applyApprovedProposal(stored.proposal, () =>
+        writeStoredProposal({ ...stored, applied: true }))
     }
     proposalsInitialized = true
   } finally {
@@ -339,6 +326,29 @@ function reportFailure(action: string, error: unknown): void {
 function guarded<T>(action: string, operation: () => T): T {
   try {
     return operation()
+  } catch (error) {
+    reportFailure(action, error)
+    throw error
+  }
+}
+
+function trustedGuarded<T>(
+  event: IpcMainInvokeEvent,
+  action: string,
+  operation: () => T
+): T {
+  assertTrustedMemorySender(event)
+  return guarded(action, operation)
+}
+
+async function trustedGuardedAsync<T>(
+  event: IpcMainInvokeEvent,
+  action: string,
+  operation: () => Promise<T>
+): Promise<T> {
+  assertTrustedMemorySender(event)
+  try {
+    return await operation()
   } catch (error) {
     reportFailure(action, error)
     throw error
@@ -399,11 +409,20 @@ function ftsNeighbors(candidate: MemoryCandidate): MemoryEntry[] {
 export async function previewMemoryReconciled(value: unknown): Promise<MemoryProposal> {
   initializeProposalStore()
   const proposal = normalizeProposal(value, 'pending')
+  // Freeze the reconciliation view before any async classifier work. The
+  // target hash and displayed old snapshot must describe the same revision.
+  const scoped = activeSameScope(proposal.entry)
+  const neighbors = ftsNeighbors(proposal.entry)
   const op = await reconcileCandidate(proposal.entry, {
-    sameScope: activeSameScope,
-    neighbors: ftsNeighbors,
+    sameScope: () => scoped,
+    neighbors: () => neighbors,
     classify: defaultOpClassifier()
   })
+  if ((op.kind === 'update' || op.kind === 'delete') && op.targetId) {
+    const target = neighbors.find((entry) => entry.id === op.targetId)
+      ?? scoped.find((entry) => entry.id === op.targetId)
+    if (target) op.targetRevision = memoryRevision(target)
+  }
   if (op.kind === 'noop') {
     return { ...proposal, op, state: 'rejected' }
   }
@@ -442,14 +461,16 @@ export function resolveMemoryProposal(idValue: unknown, approvedValue: unknown):
     return resolved
   }
 
+  // Reject deterministic stale approvals before persisting approval intent so
+  // the proposal remains pending and its card can surface the re-propose error.
+  assertMemoryProposalCurrent(resolved, getMemory)
   // Persist intent first. If the process exits before materialization, startup
   // sees approved+unapplied and completes the same apply path.
   writeStoredProposal({ proposal: resolved, applied: false })
-  // Never roll approval intent back on an ambiguous failure: saveMemory can
-  // fail after its atomic Markdown rename (for example while updating FTS).
-  // Leaving approved+unapplied lets startup recovery retry idempotently.
-  applyApprovedProposal(resolved)
-  writeStoredProposal({ proposal: resolved, applied: true })
+  // Never roll approval intent back on an ambiguous storage failure. The
+  // ordered apply path leaves approved+unapplied for idempotent startup retry.
+  applyApprovedProposal(resolved, () =>
+    writeStoredProposal({ proposal: resolved, applied: true }))
   emitMemoryChanged()
   return resolved
 }
@@ -571,6 +592,57 @@ export function applyMemoryBootstrap(
   return { applied, skipped }
 }
 
+async function saveMemoryReconciled(value: unknown): Promise<MemoryEntry> {
+  if (!value || typeof value !== 'object') throw new Error('Invalid memory entry')
+  const input = value as Record<string, unknown>
+  const preview = await previewMemoryReconciled({
+    id: `manual-${randomUUID()}`,
+    entry: input,
+    evidence: ['Saved directly from Memory settings.'],
+    ts: new Date().toISOString(),
+    state: 'pending'
+  })
+  if (preview.op?.kind === 'noop') {
+    const duplicate = preview.op.targetId ? getMemory(preview.op.targetId) : null
+    if (!duplicate) throw new Error('Reconciled memory duplicate is missing')
+    return duplicate
+  }
+  const approved: MemoryProposal = { ...preview, state: 'approved' }
+  assertMemoryProposalCurrent(approved, getMemory)
+  writeStoredProposal({ proposal: approved, applied: false })
+  const saved = applyApprovedProposal(approved, () =>
+    writeStoredProposal({ proposal: approved, applied: true }))
+  if (!saved) throw new Error('Memory save produced no entry')
+  emitMemoryChanged()
+  return saved
+}
+
+function removeMemoryReconciled(idValue: unknown): void {
+  const id = cleanSlug(idValue, 'memory id')
+  const target = getMemory(id)
+  if (!target) return
+  const { createdAt: _createdAt, updatedAt: _updatedAt, ...candidate } = target
+  const proposal: MemoryProposal = {
+    id: `manual-${randomUUID()}`,
+    entry: candidate,
+    evidence: ['Deleted directly from Memory settings.'],
+    ts: new Date().toISOString(),
+    state: 'approved',
+    op: {
+      kind: 'delete',
+      targetId: target.id,
+      targetRevision: memoryRevision(target),
+      old: { title: target.title, body: target.body },
+      reason: 'Deleted from Memory settings'
+    }
+  }
+  assertMemoryProposalCurrent(proposal, getMemory)
+  writeStoredProposal({ proposal, applied: false })
+  applyApprovedProposal(proposal, () =>
+    writeStoredProposal({ proposal, applied: true }))
+  emitMemoryChanged()
+}
+
 export function registerMemoryIpc(): void {
   if (registered) return
   try {
@@ -581,57 +653,62 @@ export function registerMemoryIpc(): void {
     throw error
   }
 
-  ipcMain.handle(MemoryApi.list, (_event, scope?: MemoryScope, scopeRef?: string) =>
-    guarded('list', () => listMemory(scope, scopeRef)))
-  ipcMain.handle(MemoryApi.get, (_event, id: unknown) => guarded('get', () => getMemory(id)))
-  ipcMain.handle(MemoryApi.save, (_event, entry: unknown) => guarded('save', () => {
-    if (!entry || typeof entry !== 'object') throw new Error('Invalid memory entry')
-    return saveMemory(entry)
-  }))
-  ipcMain.handle(MemoryApi.remove, (_event, id: unknown) => guarded('remove', () => removeMemory(id)))
-  ipcMain.handle(MemoryApi.setEnabled, (_event, payload: unknown) => guarded('set-enabled', () => {
+  ipcMain.handle(MemoryApi.list, (event, scope?: MemoryScope, scopeRef?: string) =>
+    trustedGuarded(event, 'list', () => listMemory(scope, scopeRef)))
+  ipcMain.handle(MemoryApi.get, (event, id: unknown) =>
+    trustedGuarded(event, 'get', () => getMemory(id)))
+  ipcMain.handle(MemoryApi.save, (event, entry: unknown) =>
+    trustedGuardedAsync(event, 'save', () => saveMemoryReconciled(entry)))
+  ipcMain.handle(MemoryApi.remove, (event, id: unknown) =>
+    trustedGuarded(event, 'remove', () => removeMemoryReconciled(id)))
+  ipcMain.handle(MemoryApi.setEnabled, (event, payload: unknown) => trustedGuarded(event, 'set-enabled', () => {
     if (!payload || typeof payload !== 'object') throw new Error('Invalid enabled payload')
     const { id, enabled } = payload as Record<string, unknown>
     return setMemoryEnabled(id, enabled)
   }))
-  ipcMain.handle(MemoryApi.search, (_event, query: unknown, limit?: unknown) =>
-    guarded('search', () => searchMemory(query, limit)))
-  ipcMain.handle(MemoryApi.proposals, () => guarded('proposals', listMemoryProposals))
-  ipcMain.handle(MemoryApi.propose, () => {
+  ipcMain.handle(MemoryApi.search, (event, query: unknown, limit?: unknown) =>
+    trustedGuarded(event, 'search', () => searchMemory(query, limit)))
+  ipcMain.handle(MemoryApi.proposals, (event) =>
+    trustedGuarded(event, 'proposals', listMemoryProposals))
+  ipcMain.handle(MemoryApi.propose, (event) => {
+    assertTrustedMemorySender(event)
     throw new Error('Memory proposals can only be created by main-process learners')
   })
-  ipcMain.handle(MemoryApi.resolveProposal, (_event, payload: unknown) =>
-    guarded('resolve-proposal', () => {
+  ipcMain.handle(MemoryApi.resolveProposal, (event, payload: unknown) =>
+    trustedGuarded(event, 'resolve-proposal', () => {
       if (!payload || typeof payload !== 'object') throw new Error('Invalid proposal resolution')
       const { id, approved } = payload as Record<string, unknown>
       return resolveMemoryProposal(id, approved)
     }))
-  ipcMain.handle(MemoryApi.restore, (_event, id: unknown) => guarded('restore', () => {
+  ipcMain.handle(MemoryApi.restore, (event, id: unknown) => trustedGuarded(event, 'restore', () => {
     const restored = restoreMemory(id)
     recordMemoryOpAudit(memoryDatabase(), {
       op: 'restore',
       memoryId: restored.id,
       next: { title: restored.title, body: restored.body },
       source: 'settings',
-      ts: new Date().toISOString()
+      ts: new Date().toISOString(),
+      idempotencyKey: `restore-${randomUUID()}`
     })
     return restored
   }))
-  ipcMain.handle(MemoryApi.bootstrap, (_event, spaces: unknown) =>
-    guarded('bootstrap', () => buildMemoryBootstrapReview(spaces)))
-  ipcMain.handle(MemoryApi.applyBootstrap, (_event, payload: unknown) =>
-    guarded('apply-bootstrap', () => {
+  ipcMain.handle(MemoryApi.bootstrap, (event, spaces: unknown) =>
+    trustedGuarded(event, 'bootstrap', () => buildMemoryBootstrapReview(spaces)))
+  ipcMain.handle(MemoryApi.applyBootstrap, (event, payload: unknown) =>
+    trustedGuarded(event, 'apply-bootstrap', () => {
       if (!payload || typeof payload !== 'object') throw new Error('Invalid memory bootstrap apply payload')
       const input = payload as Record<string, unknown>
       return applyMemoryBootstrap(input.reviewId, input.selectedIds)
     }))
 
   if (process.env.MORZ_E2E === '1') {
-    ipcMain.handle(MEMORY_E2E_PROPOSE, (_event, proposal: unknown) => proposeMemory(proposal))
-    ipcMain.handle(MEMORY_E2E_RECONCILE, (_event, proposal: unknown) =>
-      proposeMemoryReconciled(proposal))
-    ipcMain.handle(MEMORY_E2E_AUDIT, () => listMemoryOpAudit(memoryDatabase()))
-    ipcMain.handle(MEMORY_E2E_RENDER, (_event, opts: unknown) => guarded('e2e-render', () => {
+    ipcMain.handle(MEMORY_E2E_PROPOSE, (event, proposal: unknown) =>
+      trustedGuarded(event, 'e2e-propose', () => proposeMemory(proposal)))
+    ipcMain.handle(MEMORY_E2E_RECONCILE, (event, proposal: unknown) =>
+      trustedGuardedAsync(event, 'e2e-reconcile', () => proposeMemoryReconciled(proposal)))
+    ipcMain.handle(MEMORY_E2E_AUDIT, (event) =>
+      trustedGuarded(event, 'e2e-audit', () => listMemoryOpAudit(memoryDatabase())))
+    ipcMain.handle(MEMORY_E2E_RENDER, (event, opts: unknown) => trustedGuarded(event, 'e2e-render', () => {
       if (!opts || typeof opts !== 'object') throw new Error('Invalid render options')
       const input = opts as Record<string, unknown>
       for (const key of ['projectRoot', 'spaceId', 'agentId']) {
