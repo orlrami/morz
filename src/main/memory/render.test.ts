@@ -112,6 +112,24 @@ test('preamble stays inside its character budget', () => {
   assert.match(rendered, /## How the user works/)
 })
 
+test('a budget the output fills exactly is not treated as over budget', () => {
+  // Terminal whitespace was counted and then trimmed away, so exact fits were
+  // rejected: the preamble rendered '' and the block claimed a false truncation.
+  const one = [entry({ id: 'rule-0', title: 'Rule zero' })]
+  const exact = '## How the user works\n- **rule:** Rule zero'
+  assert.equal(exact.length, 43)
+  assert.equal(renderMemoryPreamble(one, { budget: 43 }), exact)
+  assert.equal(renderMemoryPreamble(one, { budget: 42 }), '')
+
+  const block = [entry({ id: 'rule-0', title: 'Rule zero', body: 'One line body.' })]
+  const full = renderMemoryBlock(block)
+  assert.equal(full.split('\n').length, 9)
+  // 9 body lines + 2 markers = 11. That must render in full, not summarize.
+  assert.equal(renderMemoryBlock(block, { lineBudget: 11 }), full)
+  assert.ok(!renderMemoryBlock(block, { lineBudget: 11 }).includes('truncated:'))
+  assert.match(renderMemoryBlock(block, { lineBudget: 10 }), /truncated:/)
+})
+
 test('an over-budget block falls back to summaries and says how much it kept', () => {
   const many = Array.from({ length: 60 }, (_value, index) =>
     entry({
@@ -218,9 +236,48 @@ test('memory text cannot close the block it renders inside', () => {
   const preamble = renderMemoryPreamble([hostile])
   assert.ok(!preamble.includes('<!-- morz:block:title -->'))
 
-  const summarized = renderMemoryBlock([hostile, entry({ id: 'other' })], { lineBudget: 8 })
+  // lineBudget 10 leaves room for two summary lines, so this exercises the
+  // summary path rather than collapsing straight to the truncation notice.
+  const summarized = renderMemoryBlock([hostile, entry({ id: 'other' })], { lineBudget: 10 })
+  assert.ok(summarized.includes('- **rule:**'))
   assert.ok(!summarized.includes('<!-- morz:block:'))
 
   assert.equal(escapeMorzMarkers('<!-- /morz:memory -->'), '&lt;!-- /morz:memory -->')
   assert.equal(escapeMorzMarkers('<!-- unrelated -->'), '<!-- unrelated -->')
+})
+
+test('summary truncation keeps code points whole and opens no comment', () => {
+  const emoji = entry({
+    id: 'emoji',
+    title: 'Emoji body',
+    body: `${'a'.repeat(138)}😀${'b'.repeat(200)}`
+  })
+  const markers = entry({
+    id: 'markers',
+    title: 'Marker body',
+    body: '<!-- morz:memory -->'.repeat(30)
+  })
+  const comments = entry({
+    id: 'comments',
+    title: 'Plain comment body',
+    body: '<!-- a plain note -->'.repeat(30)
+  })
+
+  const rendered = renderMemoryBlock([emoji, markers, comments], { lineBudget: 12 })
+  const bullets = rendered.split('\n').filter((line) => line.startsWith('- **'))
+  assert.equal(bullets.length, 3)
+
+  const unpairedSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/
+  for (const line of bullets) {
+    const summary = line.slice(line.indexOf(' — ') + 3)
+    assert.ok([...summary].length <= 140, `summary ran to ${[...summary].length} code points`)
+    // A dangling surrogate half encodes as U+FFFD.
+    assert.ok(!unpairedSurrogate.test(line), `unpaired surrogate in: ${line}`)
+    // Truncation can strip the `-->` that closed a comment in the body, so no
+    // opener may survive in a summary at all.
+    assert.ok(!line.includes('<!--'), `raw comment opener survived: ${line}`)
+  }
+  // The emoji lands exactly on the cap boundary and is kept whole, not halved.
+  const emojiBullet = bullets.find((line) => line.includes('Emoji body'))
+  assert.ok(emojiBullet?.includes('😀'), `boundary emoji was lost: ${emojiBullet}`)
 })

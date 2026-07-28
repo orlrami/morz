@@ -312,7 +312,12 @@ function replaceManagedBlock(
   closeMarker: string,
   body: string
 ): string {
-  const block = `${openMarker}\n${body.trim()}\n${closeMarker}`
+  // An empty body is the marker pair alone. Padding it with a blank line makes
+  // the "empty block" three lines, which overruns the renderer's line budget.
+  const content = body.trim()
+  const block = content
+    ? `${openMarker}\n${content}\n${closeMarker}`
+    : `${openMarker}\n${closeMarker}`
   if (openMarker.startsWith('<!-- morz:block:')) {
     const matches = sharedBlockRanges(source).filter((range) => range.openMarker === openMarker)
     if (matches.length > 1) throw new Error('Managed block marker is duplicated')

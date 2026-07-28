@@ -39,6 +39,10 @@ export interface MemoryBlockOptions {
   /**
    * Max lines of the complete managed block — the body rendered here plus the
    * two marker lines the caller adds (default `MEMORY_BLOCK_LINE_BUDGET`).
+   *
+   * A budget below 2 is unsatisfiable: the marker pair alone is two lines, so
+   * the smallest possible managed block is two lines regardless of this value.
+   * Such budgets render an empty body rather than throwing.
    */
   lineBudget?: number
 }
@@ -101,28 +105,44 @@ export function renderMemoryPreamble(
   const selected = selectRenderableMemories(entries)
   if (selected.length === 0) return ''
 
-  const heading = `${PREAMBLE_HEADING}\n`
-  let used = heading.length
+  // Lines carry no terminal newline, so `used` is the exact length of what is
+  // returned — a preamble that fills the budget precisely still renders.
+  let used = PREAMBLE_HEADING.length
   const bullets: string[] = []
   for (const entry of selected) {
-    const line = `- **${entry.kind}:** ${escapeMorzMarkers(entry.title)}\n`
-    if (used + line.length > budget) break
-    used += line.length
+    const line = `- **${entry.kind}:** ${escapeMorzMarkers(entry.title)}`
+    if (used + 1 + line.length > budget) break
+    used += 1 + line.length
     bullets.push(line)
   }
   if (bullets.length === 0) return ''
-  return `${heading}${bullets.join('')}`.trimEnd()
+  return [PREAMBLE_HEADING, ...bullets].join('\n')
+}
+
+/**
+ * A one-line digest is lossy by nature, so it neutralizes EVERY comment opener
+ * rather than only Morz markers: truncation can strip the `-->` that closed a
+ * comment in the body, and a summary must never open one it cannot close.
+ */
+function escapeCommentOpeners(value: string): string {
+  return value.replace(/<!--/g, '&lt;!--')
 }
 
 function oneLineSummary(entry: MemoryEntry): string {
   // Only the head of a body can survive the cap, so never normalize the whole
-  // thing — bodies run to 50k characters and this returns at most ~140.
-  const head = entry.body.slice(0, SUMMARY_LENGTH * 8).replace(/\s+/g, ' ').trim()
-  if (!head) return ''
-  const capped =
-    head.length > SUMMARY_LENGTH ? `${head.slice(0, SUMMARY_LENGTH - 1).trimEnd()}…` : head
-  // Escaping last keeps a marker from being split across the slice boundary.
-  return escapeMorzMarkers(capped)
+  // thing — bodies run to 50k characters and this returns at most 140.
+  let head = entry.body.slice(0, SUMMARY_LENGTH * 8)
+  // That slice counts UTF-16 units and can split a surrogate pair in half.
+  if (/[\uD800-\uDBFF]$/.test(head)) head = head.slice(0, -1)
+
+  // Escape BEFORE capping: escaping expands `<!--` by three characters, so
+  // capping first overshoots the limit and can leave a raw opener at the tail.
+  const summary = escapeCommentOpeners(head.replace(/\s+/g, ' ').trim())
+  if (!summary) return ''
+  // Cap by code point so the tail can never be half a surrogate pair.
+  const points = [...summary]
+  if (points.length <= SUMMARY_LENGTH) return summary
+  return `${points.slice(0, SUMMARY_LENGTH - 1).join('').trimEnd()}…`
 }
 
 function blockHeader(): string[] {
@@ -165,7 +185,11 @@ export function renderMemoryBlock(entries: MemoryEntry[], opts: MemoryBlockOptio
     const body = escapeMorzMarkers(entry.body).trim()
     // Heading, blank, meta, blank, body, trailing blank.
     const cost = 5 + countLines(body)
-    if (used + cost > bodyBudget) {
+    // The last section's trailing blank is trimmed off the final output, so
+    // the rendered height is one less than the running count. Without this a
+    // block that fits its budget exactly would fall to summary mode and claim
+    // a truncation that never happened.
+    if (used + cost - 1 > bodyBudget) {
       overran = true
       break
     }
