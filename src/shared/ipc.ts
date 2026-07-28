@@ -428,6 +428,8 @@ export interface MorzApi { organizer: OrganizerApi }
 // src/main/adapters/) maps its native output onto this union; the dispatcher
 // and future lane UIs consume ONLY these shapes. Raw CLI events keep flowing on
 // the existing ClaudeApi.event channel — this union is additive, not a rename.
+import type { AgentActivity } from './agent-title-status'
+export type { AgentActivity }
 export type AdapterCli = 'claude' | 'codex' | 'agy'
 export type AdapterEvent =
   | { type: 'init'; cli: AdapterCli; sessionId: string | null; model: string | null }
@@ -437,6 +439,10 @@ export type AdapterEvent =
   | { type: 'result'; inputTokens?: number; outputTokens?: number; costUsd?: number } // turn done
   | { type: 'error'; message: string }
   | { type: 'exit'; code: number | null }
+  // w17/adapter-seam (ADDITIVE) — observed agent activity. `waiting` is the
+  // state ORCH-AUDIT said Morz could not see: blocked on the owner, not working.
+  // `source` names the channel so a later hooks channel can outrank titles.
+  | { type: 'state'; activity: AgentActivity; source: 'title' }
 // w5/planner
 import type { PlannedAgent, SpawnPlan } from './spawn-plan'
 

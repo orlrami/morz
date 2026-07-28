@@ -56,12 +56,20 @@ import {
   resolveSpaceId,
   spaceRegistryReady
 } from '../services/space-registry'
+// w17/adapter-seam — passive observation of dispatched panes (see SEAM-DESIGN.md).
+import { app } from 'electron'
+import { homedir } from 'os'
+import { createTranscriptReader } from './claude-usage'
+import { costMeter } from './cost-meter'
+import { createPaneBridge } from './pane-bridge'
 import {
   agentTransition,
   consumeApprovedPlan,
   createRun,
   getAgentRows,
+  getAgentState,
   getApprovedPlan,
+  markRunMeteringPartial,
   getRunRow,
   getRunStatus,
   listLiveRuns,
@@ -69,6 +77,8 @@ import {
   patchAgent,
   releaseApprovedPlan,
   runTransition,
+  setAgentActivityProvider,
+  setRunUsageProvider,
   storeApprovedPlan,
   TERMINAL_AGENT_STATES,
   TERMINAL_RUN_STATES,
@@ -245,6 +255,51 @@ function push(runId: string): void {
   if (status && host) host.push(status)
 }
 
+/* ── adapter seam: pane observation (w17, docs/in-progress/SEAM-DESIGN.md) ──
+ * The bridge reads terminal titles out of the PTY stream main has ALREADY
+ * relayed to the renderer, and reads token counts out of the CLI's own
+ * transcript. It never writes to a pane and never advances a run to done. */
+
+/**
+ * Transcript root. The override exists so the e2e suite can prove the real
+ * metering path against a fixture instead of writing into the owner's
+ * ~/.claude. It requires BOTH the e2e flag and an unpackaged build, so a
+ * shipped Morz cannot be pointed at another transcript root at runtime.
+ */
+function transcriptRoot(): string {
+  const testRoot =
+    process.env.MORZ_E2E === '1' && !app.isPackaged ? process.env.MORZ_E2E_CLAUDE_HOME : undefined
+  return testRoot || homedir()
+}
+
+/**
+ * Same gate as the transcript root: the suite forces the deadline to expire so
+ * the incomplete-usage surface can be proven end to end. Undefined in every
+ * shipped build, which leaves DEFAULT_FINALIZE_TIMEOUT_MS in charge.
+ */
+function finalizeTimeoutOverride(): number | undefined {
+  if (process.env.MORZ_E2E !== '1' || app.isPackaged) return undefined
+  const raw = Number(process.env.MORZ_E2E_FINALIZE_TIMEOUT_MS)
+  return Number.isFinite(raw) && raw >= 0 ? raw : undefined
+}
+
+export const paneBridge = createPaneBridge({
+  setAgentState: (runId, agentId, state) => agentTransition(runId, agentId, state),
+  getAgentState: (runId, agentId) => getAgentState(runId, agentId) ?? null,
+  // Readings are per-record and deduplicated, so what arrives here is already a
+  // delta of newly-seen records — never a running total to be differenced.
+  trackUsage: (runId, agentId, tokens) =>
+    costMeter.track(runId, agentId, { tokens, mode: 'delta', source: 'transcript' }),
+  createUsageReader: (worktree, since) =>
+    createTranscriptReader({ worktree, root: transcriptRoot(), since }),
+  push,
+  // Persisted on the run row: usage totals outlive the bridge that observed the
+  // gap, so an in-memory flag would let a known undercount look exact later.
+  markMeteringGap: (runId) => markRunMeteringPartial(runId),
+  now: () => Date.now(),
+  finalizeTimeoutMs: finalizeTimeoutOverride()
+})
+
 /* ── kickoff bus tasks (DAG deps gate claiming) ── */
 
 /**
@@ -391,6 +446,9 @@ async function launchAgent(
   })
   patchAgent(runId, agent.agentId, { pane_id: paneId })
   patchAgent(runId, agent.agentId, { pid: await findPanePid(paneId) })
+  // w17/adapter-seam — observe from the pane's first byte, before the launch
+  // command is typed, so a CLI that titles itself immediately is not missed.
+  paneBridge.registerPane({ runId, agentId: agent.agentId, cli: agent.cli, paneId, worktree })
 
   // the visible launch — type what you'd type by hand (stub skips the CLI).
   // w13/dispatch-visible: push the pane into the renderer layout FIRST and wait
@@ -481,7 +539,8 @@ export async function dispatch(plan: SpawnPlan): Promise<{ runId: string }> {
 /** Kill every non-terminal agent's process tree, release its port, mark it cancelled. */
 async function teardownAgents(runId: string, spaceRoot: string, removeWorktrees = true): Promise<void> {
   const h = requireHost()
-  for (const row of getAgentRows(runId)) {
+  const rows = getAgentRows(runId)
+  for (const row of rows) {
     if (!TERMINAL_AGENT_STATES.includes(row.state)) {
       if (row.pane_id) {
         logDispatchedInterrupt(row.pane_id)
@@ -491,7 +550,14 @@ async function teardownAgents(runId: string, spaceRoot: string, removeWorktrees 
       agentTransition(runId, row.agent_id, 'cancelled')
     }
     if (row.port !== null) pool.release(row.port)
-    if (removeWorktrees && row.worktree) {
+  }
+  /* w17/adapter-seam — the agents are dead but their last turn's tokens are
+   * still only on disk. Take the final metered reading BEFORE the worktrees go,
+   * or a run stopped mid-turn reports zero usage. */
+  await paneBridge.finalizeRun(runId)
+  if (removeWorktrees) {
+    for (const row of rows) {
+      if (!row.worktree) continue
       await removeWorktree(spaceRoot, row.worktree, row.branch)
       patchAgent(runId, row.agent_id, { worktree: null })
     }
@@ -641,6 +707,11 @@ function sweepStaleRuns(): void {
 export function registerDispatchIpc(ipcMain: IpcMain, deps: DispatcherHost): void {
   host = deps
   sweepStaleRuns()
+  // w17/adapter-seam — run status starts reporting observed activity and the
+  // meter's real totals instead of the hardcoded {usd:null,tokens:null}.
+  setAgentActivityProvider((runId, agentId) => paneBridge.activity(runId, agentId))
+  // `partial` is not merged here — the run row owns it, so it survives restarts.
+  setRunUsageProvider((runId) => costMeter.usage(runId))
   ipcMain.handle(RunApi.approvePlan, (_e, plan: SpawnPlan) => approvePlan(plan))
   ipcMain.handle(RunApi.dispatch, (_e, plan: SpawnPlan) => dispatch(plan))
   // w14/orch-scoped — optional spaceRoot filter (no arg = unfiltered)

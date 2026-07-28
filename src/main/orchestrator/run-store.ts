@@ -19,6 +19,7 @@ import { app } from 'electron'
 import { join } from 'path'
 import { mkdirSync } from 'fs'
 import type { AgentId } from '../../shared/bus'
+import type { AgentActivity } from '../../shared/agent-title-status'
 import type { ClearedRun, RunHistoryPolicy, RunSummary } from '../../shared/ipc'
 import type {
   AgentRunDetail,
@@ -87,6 +88,13 @@ function open(): Database.Database {
   )
   if (!runColumns.has('cleared_at')) {
     db.exec('ALTER TABLE orch_runs ADD COLUMN cleared_at TEXT')
+  }
+  // w17/adapter-seam — a metering gap must outlive the process that saw it.
+  // Usage totals persist in the cost meter's tables, so a gap kept only in
+  // memory would silently turn a known undercount back into an exact-looking
+  // figure on the next launch.
+  if (!runColumns.has('metering_partial')) {
+    db.exec('ALTER TABLE orch_runs ADD COLUMN metering_partial INTEGER NOT NULL DEFAULT 0')
   }
   db.exec(`
     DROP INDEX IF EXISTS orch_runs_history;
@@ -196,6 +204,8 @@ export interface RunRow {
   started_at: string | null
   ended_at: string | null
   cleared_at: string | null
+  /** 1 once a transcript read was abandoned: this run's usage is a floor. */
+  metering_partial: 0 | 1
 }
 
 export interface AgentRow {
@@ -284,6 +294,21 @@ function currentAgentState(runId: string, agentId: AgentId): string | undefined 
   return row?.state
 }
 
+/** w17/adapter-seam — the ledger's CURRENT state, so an observer reconciles
+ * against the truth rather than a cache Stop may already have invalidated. */
+export function getAgentState(runId: string, agentId: AgentId): string | undefined {
+  return currentAgentState(runId, agentId)
+}
+
+/**
+ * w17/adapter-seam — record that this run's usage is a floor, not a total.
+ * Durable and one-way: a gap that happened cannot un-happen, and a later
+ * successful read does not make the tokens it never saw appear.
+ */
+export function markRunMeteringPartial(runId: string): void {
+  open().prepare('UPDATE orch_runs SET metering_partial = 1 WHERE run_id = ?').run(runId)
+}
+
 export function patchAgent(
   runId: string,
   agentId: AgentId,
@@ -299,6 +324,28 @@ export function patchAgent(
 
 /* ── status projection ── */
 
+/*
+ * w17/adapter-seam — two live facts the ledger deliberately does not persist.
+ * Observed pane activity is meaningless after a restart (the pane is gone), and
+ * usage totals belong to the cost meter's own tables. Both are injected so the
+ * run store keeps no dependency on the bridge or the meter; unset = today's
+ * behavior exactly (no activity, null usage).
+ */
+type RunUsage = { usd: number | null; tokens: number | null; partial?: boolean }
+type UsageProvider = (runId: string) => RunUsage
+type ActivityProvider = (runId: string, agentId: AgentId) => AgentActivity | null
+
+let usageProvider: UsageProvider | null = null
+let activityProvider: ActivityProvider | null = null
+
+export function setRunUsageProvider(provider: UsageProvider | null): void {
+  usageProvider = provider
+}
+
+export function setAgentActivityProvider(provider: ActivityProvider | null): void {
+  activityProvider = provider
+}
+
 export function getRunStatus(runId: string): RunStatus | null {
   const run = getRunRow(runId)
   if (!run) return null
@@ -313,7 +360,8 @@ export function getRunStatus(runId: string): RunStatus | null {
       worktree: row.worktree,
       branch: row.branch,
       cli: row.cli as AgentRunDetail['cli'],
-      kickoffTaskId: row.kickoff_task_id
+      kickoffTaskId: row.kickoff_task_id,
+      activity: readActivity(runId, row.agent_id)
     }
   }
   return {
@@ -323,9 +371,28 @@ export function getRunStatus(runId: string): RunStatus | null {
     state: run.state,
     agents,
     agentsDetail,
-    usage: { usd: null, tokens: null },
+    // The ledger owns `partial`: it survives restarts, while the bridge that
+    // observed the gap does not.
+    usage: { ...readUsage(runId), partial: run.metering_partial === 1 || undefined },
     startedAt: run.started_at,
     endedAt: run.ended_at
+  }
+}
+
+/** A failing provider must never take the whole run status down with it. */
+function readUsage(runId: string): RunUsage {
+  try {
+    return usageProvider?.(runId) ?? { usd: null, tokens: null }
+  } catch {
+    return { usd: null, tokens: null }
+  }
+}
+
+function readActivity(runId: string, agentId: AgentId): AgentActivity | null {
+  try {
+    return activityProvider?.(runId, agentId) ?? null
+  } catch {
+    return null
   }
 }
 
