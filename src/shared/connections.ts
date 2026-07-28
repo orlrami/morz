@@ -22,7 +22,14 @@ export interface CliUpdateState {
 export interface CliConnection {
   id: CliId
   label: string // "Claude Code", "Codex", "Antigravity", "OpenCode"
-  installed: boolean // resolved on PATH
+  installed: boolean // last known install state (kept when a re-probe stops finding it)
+  /**
+   * The executable resolved on PATH at the MOST RECENT probe. `installed` is
+   * last-known state: a CLI that disappears keeps installed:true and a stale
+   * version so the UI stays honest, but it is no longer present and must not
+   * be offered for a new run (w17 review).
+   */
+  present: boolean
   version: string | null
   /** Epoch ms of the most recent probe attempt. */
   detectedAt: number
@@ -54,6 +61,15 @@ export interface MorzConnectionsApi {
   refresh(): Promise<CliConnection[]>
   update(id: CliId): Promise<{ paneId: string }>
   onChanged(cb: (conns: CliConnection[]) => void): () => void
+}
+
+/**
+ * Planner eligibility: only a CLI whose executable is on PATH right now may be
+ * proposed for a run. `installed` alone is last-known state, so a CLI the user
+ * uninstalled would otherwise stay plannable forever (w17 review).
+ */
+export function isPlannerEligible(connection: CliConnection): boolean {
+  return connection.installed && connection.present
 }
 
 /** Map a spawned pane's argv/exe to the CliId it is running (shared by detection + lanes). */

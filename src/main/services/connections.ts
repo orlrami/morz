@@ -684,13 +684,17 @@ async function detectConnection(
   updateCommands.delete(spec.id)
   const candidates = await resolveExecutables(spec.id, spec.executable)
   if (candidates.length === 0) {
+    // The last known version stays visible (honest staleness), but nothing
+    // resolves on PATH any more: present goes false so the planner stops
+    // treating a removed CLI as available (w17 review).
     if (previous?.installed && previous.version) {
-      return { ...previous, detectedAt, versionStale: true, update: null }
+      return { ...previous, detectedAt, present: false, versionStale: true, update: null }
     }
     return {
       id: spec.id,
       label: spec.label,
       installed: false,
+      present: false,
       version: null,
       detectedAt,
       versionStale: false,
@@ -746,6 +750,7 @@ async function detectConnection(
     id: spec.id,
     label: spec.label,
     installed: true,
+    present: true,
     version,
     detectedAt,
     versionStale: versionFailed,

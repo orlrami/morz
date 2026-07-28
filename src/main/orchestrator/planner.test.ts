@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { DatabaseSync } from 'node:sqlite'
 import { test } from 'node:test'
 import type Database from 'better-sqlite3'
+import type { CliConnection, CliId } from '../../shared/connections'
 import type { PlannerEngine } from '../../shared/ipc'
 import type { SpawnPlan } from '../../shared/spawn-plan'
 import {
@@ -44,6 +45,30 @@ function fenced(plan: unknown): string {
   return `\`\`\`json\n${JSON.stringify(plan)}\n\`\`\``
 }
 
+/** Planning always runs against a roster; tests supply one instead of the
+ * live CONNECTIONS service (which needs Electron). */
+function connection(id: CliId, state: Partial<CliConnection> = {}): CliConnection {
+  return {
+    id,
+    label: id,
+    installed: true,
+    present: true,
+    version: '1.0.0',
+    detectedAt: 0,
+    versionStale: false,
+    update: null,
+    authed: true,
+    plan: null,
+    model: null,
+    usage: null,
+    ...state
+  }
+}
+
+const allDetected: CliConnection[] = ['claude', 'codex', 'agy', 'opencode'].map((id) =>
+  connection(id as CliId)
+)
+
 test('extractSpawnPlanBlock accepts exactly one JSON fence and rejects prose wrappers', () => {
   assert.deepEqual(extractSpawnPlanBlock(fenced(basePlan)), basePlan)
   assert.throws(() => extractSpawnPlanBlock(`Here is the plan:\n${fenced(basePlan)}`), /exactly/)
@@ -63,6 +88,7 @@ test('OpenCode planner uses the documented non-interactive run command and stric
     {
       createId: () => '00000000-0000-4000-8000-000000000001',
       now: () => '2026-07-14T12:00:00.000Z',
+      connections: allDetected,
       runEngine: async (engine) => {
         engines.push(engine)
         return fenced(basePlan)
@@ -74,6 +100,7 @@ test('OpenCode planner uses the documented non-interactive run command and stric
   assert.equal(result.engine, 'opencode')
   await assert.rejects(
     planGoalWithEngine('Ship the planner', 'C:\\Projects\\morz-planner', 'opencode', {
+      connections: allDetected,
       runEngine: async () => `Here is the plan:\n${fenced(basePlan)}`
     }),
     /exactly one json block/
@@ -141,7 +168,9 @@ test('validateSpawnPlan accepts the shared contract and rejects unsafe planner f
   assert.match(extraResult.issues.join('\n'), /unknown field/)
 })
 
-test('SpawnPlan 1.0 normalizes missing models while 1.1 round-trips an explicit model', () => {
+test('SpawnPlan 1.0 carries no model while 1.1 round-trips an explicit model', () => {
+  // A valid 1.0 plan simply has no model field — it must still type-check and
+  // validate, normalizing to an explicit null.
   const legacy = {
     ...structuredClone(basePlan),
     version: '1.0',
@@ -149,8 +178,21 @@ test('SpawnPlan 1.0 normalizes missing models while 1.1 round-trips an explicit 
   }
   const normalized = validateSpawnPlan(legacy)
   assert.equal(normalized.ok, true)
-  assert.equal(normalized.value?.version, '1.1')
+  assert.equal(normalized.value?.version, '1.0')
   assert.equal(normalized.value?.agents[0].model, null)
+  assert.deepEqual(normalized.warnings, [])
+
+  // A 1.0 payload that smuggles a model is NOT honored as 1.1 behavior.
+  const legacyWithModel = {
+    ...structuredClone(basePlan),
+    version: '1.0',
+    agents: [{ ...structuredClone(basePlan.agents[0]), model: 'opus' }]
+  }
+  const stripped = validateSpawnPlan(legacyWithModel)
+  assert.equal(stripped.ok, true)
+  assert.equal(stripped.value?.version, '1.0')
+  assert.equal(stripped.value?.agents[0].model, null)
+  assert.match(stripped.warnings.join('\n'), /not part of SpawnPlan 1\.0/)
 
   const current = {
     ...structuredClone(basePlan),
@@ -181,32 +223,8 @@ test('planner prompt lists only detected CLIs and corrects an undetected model p
       createId: () => '00000000-0000-4000-8000-000000000001',
       now: () => '2026-07-14T12:00:00.000Z',
       connections: [
-        {
-          id: 'claude',
-          label: 'Claude Code',
-          installed: true,
-          version: '1.0.0',
-          detectedAt: 0,
-          versionStale: false,
-          update: null,
-          authed: true,
-          plan: null,
-          model: null,
-          usage: null
-        },
-        {
-          id: 'codex',
-          label: 'Codex',
-          installed: false,
-          version: null,
-          detectedAt: 0,
-          versionStale: false,
-          update: null,
-          authed: null,
-          plan: null,
-          model: null,
-          usage: null
-        }
+        connection('claude'),
+        connection('codex', { installed: false, present: false, version: null, authed: null })
       ],
       runEngine: async (_engine, prompt) => {
         prompts.push(prompt)
@@ -231,6 +249,18 @@ test('planner prompt lists only detected CLIs and corrects an undetected model p
   assert.match(prompts[0], /claude.*sonnet.*opus.*fable/is)
   assert.doesNotMatch(prompts[0], /gpt-5\.6-sol/)
   assert.match(prompts[1], /codex.*not detected/is)
+})
+
+test('a CLI whose executable disappeared is no longer planner-eligible', () => {
+  const removed = [
+    // Uninstalled between probes: the last known version stays for the UI, but
+    // nothing resolves on PATH any more.
+    connection('claude', { present: false, versionStale: true }),
+    connection('codex')
+  ]
+  const result = validateSpawnPlan(basePlan, { connections: removed })
+  assert.equal(result.ok, false)
+  assert.match(result.issues.join('\n'), /claude is not detected; available CLIs: codex/)
 })
 
 test('validateSpawnPlan repairs overlong roles and unsafe branches with warnings', () => {
@@ -281,6 +311,7 @@ test('planGoal retries one schema violation and returns a canonical non-placehol
   const plan = await planGoal('Ship the planner', 'C:\\Projects\\morz-planner', {
     createId: () => '00000000-0000-4000-8000-000000000001',
     now: () => '2026-07-14T12:00:00.000Z',
+    connections: allDetected,
     runClaude: async () => {
       calls += 1
       if (calls === 1) return fenced({ ...basePlan, agents: [] })
@@ -298,6 +329,7 @@ test('a repaired plan is accepted on the first attempt without consuming the ret
   const result = await planGoalWithEngine('Ship the planner', 'C:\\Projects\\morz-planner', 'claude', {
     createId: () => '00000000-0000-4000-8000-000000000001',
     now: () => '2026-07-14T12:00:00.000Z',
+    connections: allDetected,
     runClaude: async () => {
       calls += 1
       const verbose = structuredClone(basePlan) as SpawnPlan
@@ -322,6 +354,7 @@ test('the fast engine falls through to Codex when Claude cannot produce a plan',
   const result = await planGoalWithEngine('Ship the planner', 'C:\\Projects\\morz-planner', 'fast', {
     createId: () => '00000000-0000-4000-8000-000000000001',
     now: () => '2026-07-14T12:00:00.000Z',
+    connections: allDetected,
     runEngine: async (engine) => {
       engines.push(engine)
       if (engine === 'claude') throw new Error('claude unavailable')
@@ -338,6 +371,7 @@ test('the fast engine returns the first valid plan without waiting for the loser
   const result = await planGoalWithEngine('Ship the planner', 'C:\\Projects\\morz-planner', 'fast', {
     createId: () => '00000000-0000-4000-8000-000000000001',
     now: () => '2026-07-14T12:00:00.000Z',
+    connections: allDetected,
     runEngine: (engine) => {
       if (engine === 'claude') return Promise.resolve(fenced(basePlan))
       return new Promise((resolve) =>
@@ -357,6 +391,7 @@ test('the fast engine surfaces both failures when neither contender delivers', a
     planGoalWithEngine('Ship the planner', 'C:\\Projects\\morz-planner', 'fast', {
       createId: () => '00000000-0000-4000-8000-000000000001',
       now: () => '2026-07-14T12:00:00.000Z',
+      connections: allDetected,
       runEngine: async () => {
         throw new Error('planner offline')
       }
@@ -423,6 +458,7 @@ test('the planner surfaces recommendedTeamSize + rationale and threads team cons
     {
       createId: () => '00000000-0000-4000-8000-000000000001',
       now: () => '2026-07-14T12:00:00.000Z',
+      connections: allDetected,
       runClaude: async (prompt) => {
         prompts.push(prompt)
         return fenced({
