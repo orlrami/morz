@@ -12,6 +12,7 @@ import {
 import { basename, dirname, join, resolve } from 'path'
 import {
   MemoryApi,
+  memoryWriteRejection,
   type MemoryEntry,
   type MemoryInjection as MemoryInjectionContract,
   type MemoryKind,
@@ -131,7 +132,10 @@ function normalizeEntry(value: unknown, existing?: MemoryEntry | null): MemoryEn
     invalidAt: optionalTimestamp('invalidAt'),
     expiredAt: optionalTimestamp('expiredAt'),
     sourceRunId,
-    source
+    source,
+    // w17/context-blocks — absent stays absent so unlocked facts serialize
+    // exactly as they did before the flag existed.
+    readOnly: input.readOnly === true ? true : undefined
   }
 }
 
@@ -163,7 +167,7 @@ function serialize(entry: MemoryEntry): string {
     ['createdAt', entry.createdAt],
     ['updatedAt', entry.updatedAt],
     ['enabled', entry.enabled],
-    ...(['validAt', 'invalidAt', 'expiredAt', 'sourceRunId', 'source'] as const)
+    ...(['validAt', 'invalidAt', 'expiredAt', 'sourceRunId', 'source', 'readOnly'] as const)
       .filter((key) => entry[key] !== undefined)
       .map((key) => [key, entry[key]] as [keyof MemoryEntry, unknown])
   ]
@@ -186,7 +190,7 @@ function parseMemoryFile(path: string): MemoryEntry {
   const metadata: Record<string, unknown> = Object.create(null) as Record<string, unknown>
   const allowed = new Set([
     'id', 'scope', 'scopeRef', 'kind', 'title', 'origin', 'createdAt', 'updatedAt', 'enabled',
-    'validAt', 'invalidAt', 'expiredAt', 'sourceRunId', 'source'
+    'validAt', 'invalidAt', 'expiredAt', 'sourceRunId', 'source', 'readOnly'
   ])
   for (const line of match[1].split(/\r?\n/)) {
     const separator = line.indexOf(':')
@@ -345,6 +349,11 @@ export function saveMemory(value: unknown): MemoryEntry {
   const candidate = value && typeof value === 'object' ? value as Record<string, unknown> : null
   const id = validateId(candidate?.id)
   const existing = getMemory(id)
+  // w17/context-blocks — read-only is enforced here, on the one path every
+  // write funnels through (Settings saves, enable toggles, approved op-set
+  // updates), so no producer can quietly rewrite a locked fact.
+  const rejection = memoryWriteRejection(existing, candidate as { readOnly?: boolean } | null)
+  if (rejection) throw new Error(rejection)
   const entry = normalizeEntry(value, existing)
   const target = pathForEntry(entry)
   mkdirSync(dirname(target), { recursive: true })
@@ -366,6 +375,8 @@ export function saveMemory(value: unknown): MemoryEntry {
 export function removeMemory(idValue: unknown): void {
   ensureInitialized()
   const id = validateId(idValue)
+  const rejection = memoryWriteRejection(getMemory(id), null)
+  if (rejection) throw new Error(rejection)
   for (const path of entryFiles()) {
     if (basename(path) === `${id}.md`) rmSync(path, { force: true })
   }

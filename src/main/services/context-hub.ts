@@ -3,13 +3,14 @@ import { lstat, readFile, realpath, stat } from 'node:fs/promises'
 import { isAbsolute, join, normalize, relative, resolve, sep } from 'node:path'
 import { promisify } from 'node:util'
 import type { IpcMain, IpcMainInvokeEvent } from 'electron'
-import { ContextHubApi } from '../../shared/context-hub'
+import { CONTEXT_MEMORY_KINDS, ContextHubApi } from '../../shared/context-hub'
 import type {
   ContextApplyResult,
   ContextFileKind,
   ContextFileState,
   ContextMatrix,
   ContextMemoryBlockInput,
+  ContextMemoryKind,
   ContextProjectType,
   ContextProposal,
   ContextSharedBlockInput,
@@ -20,6 +21,9 @@ import type {
 } from '../../shared/context-hub'
 import type { RunSummary } from '../../shared/ipc'
 import type { MemoryEntry } from '../../shared/memory'
+// w17/renderer-core — the ONE memory renderer (agent A). Selection, budget, and
+// marker escaping all live there; this service only decides WHERE it lands.
+import { renderMemoryBlock } from '../memory/render'
 import {
   createConfigWriter,
   type ConfigWriter,
@@ -343,30 +347,33 @@ function safeMemoryText(value: string): string {
     .replace(/<!--\s*\/?morz:/gi, (marker) => marker.replace('<!--', '&lt;!--'))
 }
 
-function renderMemories(entries: MemoryEntry[]): string {
-  const priority: Record<MemoryEntry['kind'], number> = { rule: 0, skill: 1, fact: 2 }
-  const ordered = entries
-    .filter((entry) => entry.enabled)
-    .sort((left, right) =>
-      priority[left.kind] - priority[right.kind] ||
-      right.updatedAt.localeCompare(left.updatedAt) ||
-      left.id.localeCompare(right.id)
+const MEMORY_OPEN_MARKER = '<!-- morz:memory -->'
+const MEMORY_CLOSE_MARKER = '<!-- /morz:memory -->'
+/*
+ * w17/context-blocks — a user who writes `<!-- morz:memory read-only -->` owns
+ * that block: Morz reads it, never rewrites it. The lock lives in the file
+ * itself so it survives a reinstall and is visible where the block is.
+ */
+const MEMORY_READ_ONLY_MARKER = /<!--\s*morz:memory\s+read-only\s*-->/i
+
+function assertMemoryBlockWritable(source: string, label: string): void {
+  if (MEMORY_READ_ONLY_MARKER.test(source)) {
+    throw new Error(
+      `${label} has a read-only Morz memory block — replace its marker with ${MEMORY_OPEN_MARKER} to let Morz manage it`
     )
-  if (ordered.length === 0) throw new Error('No approved enabled memories are available')
-  return [
-    '## Morz memory',
-    '',
-    'Approved context shared with every CLI in this space.',
-    '',
-    ...ordered.flatMap((entry) => [
-      `### ${safeMemoryText(entry.title)}`,
-      '',
-      `_${entry.kind} · ${entry.scope}_`,
-      '',
-      safeMemoryText(entry.body).trim(),
-      ''
-    ])
-  ].join('\n').trim()
+  }
+}
+
+function validateMemoryKinds(value: unknown): ContextMemoryKind[] {
+  if (value === undefined) return ['claude']
+  if (!Array.isArray(value) || value.length === 0) throw new Error('Memory target files are invalid')
+  const kinds = value.map((kind) => {
+    if (!CONTEXT_MEMORY_KINDS.includes(kind as ContextMemoryKind)) {
+      throw new Error('Memory target files are invalid')
+    }
+    return kind as ContextMemoryKind
+  })
+  return CONTEXT_MEMORY_KINDS.filter((kind) => kinds.includes(kind))
 }
 
 function renderStatus(snapshot: ContextStatusSnapshot): string {
@@ -518,20 +525,30 @@ export function createContextHubService(options: ContextHubServiceOptions = {}):
       }))
     },
 
+    /*
+     * One proposal per space × target file, batched into one review surface.
+     * Every target of a space renders the SAME body from the same selection —
+     * a space-scoped fact is one team block, not per-file copies that drift.
+     */
     async proposeMemoryBlock(input): Promise<ContextProposal[]> {
       if (!input || typeof input !== 'object') throw new Error('Memory export request is invalid')
+      const kinds = validateMemoryKinds(input.kinds)
       const selected = validateSpaceIds(input.spaceIds).map(requireSpace)
-      return Promise.all(selected.map(async (space) => {
-        const file = requireFile(space, 'claude')
+      const work = selected.flatMap((space) => {
+        const body = renderMemoryBlock(options.listMemories?.(space) ?? [])
+        return kinds.map((kind) => ({ space, kind, body }))
+      })
+      return Promise.all(work.map(async ({ space, kind, body }) => {
+        const file = requireFile(space, kind)
         const source = await readCurrent(file.path)
-        const body = renderMemories(options.listMemories?.(space) ?? [])
+        assertMemoryBlockWritable(source, `${space.name} / ${file.label}`)
         const next = replaceManagedBlock(
           source,
-          '<!-- morz:memory -->',
-          '<!-- /morz:memory -->',
+          MEMORY_OPEN_MARKER,
+          MEMORY_CLOSE_MARKER,
           body
         )
-        return proposeContent(space, file, next, `${space.name} / CLAUDE.md / memory`, source)
+        return proposeContent(space, file, next, `${space.name} / ${file.label} / memory`, source)
       }))
     },
 

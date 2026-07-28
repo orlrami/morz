@@ -50,6 +50,26 @@ export interface MemoryEntry {
   sourceRunId?: string
   /** File provenance for bootstrap imports (`absolute-path#heading`). */
   source?: string
+  /*
+   * w17/context-blocks — locked fact. Enforced at the service layer (the store
+   * rejects the write), not merely hidden in the UI. Clearing the flag is the
+   * one permitted write, so a lock is always reversible by the user.
+   */
+  readOnly?: boolean
+}
+
+/**
+ * Why a write against `existing` must be refused, or null when it may proceed.
+ * Passing a candidate with `readOnly: false` unlocks the fact — without that
+ * escape hatch a locked fact could never be edited again.
+ */
+export function memoryWriteRejection(
+  existing: MemoryEntry | null | undefined,
+  next: { readOnly?: boolean } | null
+): string | null {
+  if (!existing?.readOnly) return null
+  if (next && next.readOnly === false) return null
+  return `Memory "${existing.id}" is read-only — unlock it in Settings > Memory before changing it.`
 }
 
 /*
