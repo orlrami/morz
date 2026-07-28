@@ -4,6 +4,7 @@ import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync
 import { basename, dirname, join } from 'path'
 import {
   MemoryApi,
+  memoryWriteRejection,
   type MemoryBootstrapApplyResult,
   type MemoryBootstrapReview,
   type MemoryBootstrapReviewItem,
@@ -26,11 +27,13 @@ import {
   listMemory,
   memoryDatabase,
   restoreMemory,
+  saveMemory,
   searchMemory,
   searchMemoryNeighbors,
   setMemoryEnabled,
   writeMemoryEntries
 } from './store'
+import { normalizeEntry } from './documents'
 import {
   classifyOpWithClaude,
   listMemoryOpAudit,
@@ -206,7 +209,10 @@ function normalizeProposal(value: unknown, stateOverride?: MemoryProposal['state
       sourceRunId,
       source,
       supersedesId: optionalLink('supersedesId'),
-      supersededBy: optionalLink('supersededBy')
+      supersededBy: optionalLink('supersededBy'),
+      // w17/context-blocks — the lock rides through reconciliation; dropping it
+      // here would silently unlock any fact saved through the proposal path.
+      readOnly: entry.readOnly === true ? true : undefined
     },
     evidence: input.evidence.map((line) => cleanText(line, 'proposal evidence', 1_000).trim()),
     ts: cleanIso(input.ts),
@@ -630,6 +636,14 @@ export function applyMemoryBootstrap(
 async function saveMemoryReconciled(value: unknown): Promise<MemoryEntry> {
   if (!value || typeof value !== 'object') throw new Error('Invalid memory entry')
   const input = value as Record<string, unknown>
+  // w17/context-blocks — the lock is checked BEFORE reconciliation: a classifier
+  // that calls an edit a NOOP would otherwise report success for a write the
+  // user's lock forbids, which reads as "saved" while nothing changed.
+  const unlocked = assertMemoryWritable(input)
+  // A pure unlock changes no content, so the reconciler would classify it NOOP
+  // and drop it, leaving the fact locked forever. It is the one write a locked
+  // fact accepts, so it goes straight to the store.
+  if (unlocked) return saveMemory(unlocked)
   const preview = await previewMemoryReconciled({
     id: `manual-${randomUUID()}`,
     entry: input,
@@ -650,6 +664,21 @@ async function saveMemoryReconciled(value: unknown): Promise<MemoryEntry> {
   if (!saved) throw new Error('Memory save produced no entry')
   emitMemoryChanged()
   return saved
+}
+
+/** Returns the entry to persist when the write is a pure unlock, else null. */
+function assertMemoryWritable(input: Record<string, unknown>): MemoryEntry | null {
+  const existing = typeof input.id === 'string' ? getMemory(input.id) : null
+  if (!existing?.readOnly) return null
+  // Fields the caller omits mean "unchanged", not "cleared" — store-derived
+  // values like validAt are absent from a hand-built payload, and comparing
+  // them strictly would make an honest unlock look like an edit. Every
+  // user-facing field (title, body, enabled...) is required by validation, so
+  // an edit disguised as an unlock still has to declare what it changes.
+  const candidate = normalizeEntry({ ...existing, ...input }, existing)
+  const rejection = memoryWriteRejection(existing, candidate)
+  if (rejection) throw new Error(rejection)
+  return { ...candidate, readOnly: undefined }
 }
 
 function removeMemoryReconciled(idValue: unknown): void {

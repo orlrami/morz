@@ -163,7 +163,10 @@ export function indexMemoryEntries(entries: MemoryEntry[], removeIds: string[] =
   })()
 }
 
-function saveMemory(value: unknown): MemoryEntry {
+/* Direct write, bypassing reconciliation. The op-set path owns ordinary saves;
+ * this is for writes the classifier cannot express (see the unlock in index.ts)
+ * and for setMemoryEnabled. The read-only guard below still applies. */
+export function saveMemory(value: unknown): MemoryEntry {
   ensureInitialized()
   const candidate = value && typeof value === 'object' ? value as Record<string, unknown> : null
   const id = validateId(candidate?.id)

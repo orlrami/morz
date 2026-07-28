@@ -187,7 +187,9 @@ test.describe.serial('Learning memory', () => {
         )
       }
     }, locked)
-    for (const refusal of Object.values(refusals)) expect(refusal).toContain('read-only')
+    for (const [attempt, refusal] of Object.entries(refusals)) {
+      expect(refusal, `${attempt} must be refused`).toContain('read-only')
+    }
 
     const stored = await morz.page.evaluate(
       (id) => (window as unknown as MemoryWindow).morz.memory.get(id),
