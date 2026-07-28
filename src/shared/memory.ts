@@ -154,14 +154,18 @@ export type MemoryEventType = 'spawn' | 'exit' | 'tool' | 'block' | 'interrupt'
 export type MemoryEventOutcome = 'ok' | 'error' | 'blocked' | 'unknown'
 export type MemoryEventMode = 'manual' | 'assisted' | 'orchestrated'
 
-/** Allowlisted event metadata. Raw args, env, prompts and file contents never cross this contract. */
+/**
+ * Allowlisted event metadata. Raw args, env, prompts and file contents never
+ * cross this contract, and neither does the working directory — a path carries
+ * the OS profile name, while agentId/spaceId already attribute the event.
+ */
 export interface MemoryEventMeta {
   exitCode?: number
+  /** Signal name from a fixed set; anything unrecognized is dropped. */
   signal?: string
   phase?: 'start' | 'result'
   source?: 'structured' | 'pty' | '[redacted]'
   model?: string
-  cwd?: string
 }
 
 export interface MemoryInvocationEvent {
