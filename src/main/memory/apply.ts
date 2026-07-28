@@ -38,6 +38,7 @@ export interface MemoryApplyDeps {
 }
 
 const CAS_ERROR = 'Memory changed since this was proposed — re-propose.'
+const COLLISION_ERROR = 'Another memory already occupies the archived revision id'
 
 function hashParts(parts: unknown[]): string {
   return createHash('sha256').update(JSON.stringify(parts), 'utf8').digest('hex')
@@ -65,17 +66,15 @@ export function memoryRevision(entry: MemoryEntry): string {
   ])
 }
 
-function legacyTargetRevision(op: MemoryOp): string {
-  return hashParts([op.targetId ?? null, op.old?.title ?? null, op.old?.body ?? null])
-}
-
-function targetRevision(op: MemoryOp): string {
-  return op.targetRevision ?? legacyTargetRevision(op)
-}
+// The archived id must stay under the store's 120-character id limit while
+// carrying the FULL 64-character revision hash: a truncated hash could collide
+// with an unrelated entry, and the store overwrites whatever lives at an id.
+const REVISION_ID_BASE_MAX = 120 - '-rev-'.length - 64
 
 function revisionId(op: MemoryOp): string {
-  const base = (op.targetId ?? 'memory').slice(0, 103).replace(/-+$/g, '') || 'memory'
-  return `${base}-rev-${targetRevision(op).slice(0, 12)}`
+  if (!op.targetRevision) throw new Error(CAS_ERROR)
+  const base = (op.targetId ?? 'memory').slice(0, REVISION_ID_BASE_MAX).replace(/-+$/g, '') || 'memory'
+  return `${base}-rev-${op.targetRevision}`
 }
 
 function matchesProposal(entry: MemoryEntry, proposal: MemoryProposal): boolean {
@@ -99,7 +98,7 @@ function isMaterialized(
     const saved = getMemory(proposal.entry.id)
     return saved !== null && !saved.expiredAt && matchesProposal(saved, proposal)
   }
-  if (!op.targetId || !op.old) return false
+  if (!op.targetId || !op.old || !op.targetRevision) return false
   if (op.kind === 'delete') {
     const expired = getMemory(op.targetId)
     return expired !== null
@@ -136,13 +135,11 @@ export function assertMemoryProposalCurrent(
   if (!op.targetId || !op.old) throw new Error(`A ${op.kind} op requires a target snapshot`)
   const target = getMemory(op.targetId)
   if (!target || target.expiredAt) throw new Error(CAS_ERROR)
-  if (op.targetRevision) {
-    if (memoryRevision(target) !== op.targetRevision) throw new Error(CAS_ERROR)
-    return
-  }
-  // Pre-wave proposals have no revision hash. Their persisted old snapshot is
-  // still a safe compatibility CAS for the mutable content fields.
-  if (target.title !== op.old.title || target.body !== op.old.body) throw new Error(CAS_ERROR)
+  // Pre-wave proposals carry no revision hash, and their old title/body
+  // snapshot ignores every other mutable field (a proposal staged while the
+  // fact was enabled would still apply after the user disabled it). They must
+  // be re-proposed, which is exactly what the stale-CAS error asks for.
+  if (memoryRevision(target) !== op.targetRevision) throw new Error(CAS_ERROR)
 }
 
 interface ApplyPlan {
@@ -186,6 +183,24 @@ function recoveredPlan(
     result: successor,
     audit: auditFor(proposal, successor, now)
   }
+}
+
+/**
+ * A crash between the archived write and the successor write leaves a partial
+ * archive the retry must be free to rewrite (only its timestamps differ).
+ * Anything else living at the derived id belongs to a different memory, and
+ * the store overwrites whatever it finds there — so fail closed instead.
+ */
+function isPartialArchive(occupant: MemoryEntry, archived: MemoryEntry): boolean {
+  return occupant.expiredAt !== undefined
+    && occupant.scope === archived.scope
+    && occupant.scopeRef === archived.scopeRef
+    && occupant.kind === archived.kind
+    && occupant.title === archived.title
+    && occupant.body === archived.body
+    && occupant.origin === archived.origin
+    && occupant.createdAt === archived.createdAt
+    && occupant.supersededBy === archived.supersededBy
 }
 
 function freshPlan(
@@ -243,6 +258,10 @@ function freshPlan(
     updatedAt: now,
     supersededBy: successor.id,
     ...(proposal.entry.sourceRunId ? { sourceRunId: proposal.entry.sourceRunId } : {})
+  }
+  const occupant = getMemory(archivedId)
+  if (occupant && !isPartialArchive(occupant, archived)) {
+    throw new Error(`${COLLISION_ERROR}: ${archivedId}`)
   }
   return {
     entries: [archived, successor],

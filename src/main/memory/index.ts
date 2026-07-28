@@ -305,13 +305,20 @@ function initializeProposalStore(): void {
   try {
     for (const stored of readStoredProposals(true)) {
       if (stored.proposal.state !== 'approved' || stored.applied) continue
-      // The only retry path: this exact proposal was approved and persisted
-      // before the process died, so it may adopt its own materialized result.
-      applyApprovedProposal(
-        stored.proposal,
-        () => writeStoredProposal({ ...stored, applied: true }),
-        true
-      )
+      try {
+        // The only retry path: this exact proposal was approved and persisted
+        // before the process died, so it may adopt its own materialized result.
+        applyApprovedProposal(
+          stored.proposal,
+          () => writeStoredProposal({ ...stored, applied: true }),
+          true
+        )
+      } catch (error) {
+        // A pre-revision proposal (or one whose target moved on) can no longer
+        // pass the CAS. It stays approved+unapplied and touches nothing rather
+        // than failing memory startup for every other proposal.
+        console.warn('[morz] skipped unapplied memory proposal:', stored.proposal.id, error)
+      }
     }
     proposalsInitialized = true
   } finally {

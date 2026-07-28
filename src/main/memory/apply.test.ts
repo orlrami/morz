@@ -114,7 +114,7 @@ test('approved UPDATE keeps the clean live id and links both directions', () => 
 
   assert.equal(saved?.id, 'prefer-pnpm')
   assert.ok(saved?.supersedesId)
-  assert.match(saved.supersedesId, /^prefer-pnpm-rev-[a-f0-9]{12}$/)
+  assert.match(saved.supersedesId, /^prefer-pnpm-rev-[a-f0-9]{64}$/)
 
   const expired = harness.documents.get(saved.supersedesId)
   assert.equal(expired?.title, 'Use pnpm')
@@ -166,6 +166,43 @@ test('CAS rejects the second proposal staged against the same target revision', 
     /Memory changed since this was proposed — re-propose\./
   )
   assert.equal(harness.audit.size, 1)
+})
+
+test('a proposal without a target revision must be re-proposed', () => {
+  const old = entry()
+  const staged = updateProposal(old)
+  const { targetRevision: _revision, ...legacyOp } = staged.op!
+  const legacy: MemoryProposal = { ...staged, op: legacyOp }
+  // The user disabled the fact after the proposal was staged: title and body
+  // still match, so the old snapshot-only CAS would have let this through.
+  const harness = new ApplyHarness({ ...old, enabled: false })
+
+  assert.throws(
+    () => assertMemoryProposalCurrent(legacy, harness.deps().getMemory),
+    /Memory changed since this was proposed — re-propose\./
+  )
+  assert.throws(
+    () => applyApprovedMemoryProposal(legacy, harness.deps(true)),
+    /Memory changed since this was proposed — re-propose\./
+  )
+  assert.equal(harness.documents.get('prefer-pnpm')?.title, 'Use pnpm')
+})
+
+test('an occupied revision id aborts the apply instead of overwriting it', () => {
+  const old = entry()
+  const proposal = updateProposal(old)
+  const archivedId = `prefer-pnpm-rev-${memoryRevision(old)}`
+  const harness = new ApplyHarness(old)
+  const unrelated = entry({ id: archivedId, title: 'UNRELATED', body: 'A different memory.' })
+  harness.documents.set(unrelated.id, unrelated)
+
+  assert.throws(
+    () => applyApprovedMemoryProposal(proposal, harness.deps()),
+    /Another memory already occupies the archived revision id/
+  )
+  assert.equal(harness.documents.get(archivedId)?.title, 'UNRELATED')
+  assert.equal(harness.documents.get('prefer-pnpm')?.title, 'Use pnpm')
+  assert.equal(harness.audit.size, 0)
 })
 
 test('a second proposal cannot adopt an identical materialized result', () => {

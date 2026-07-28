@@ -131,7 +131,7 @@ test.describe.serial('Memory op-set reconciliation', () => {
     const old = entries.find((entry) => entry.supersededBy === 'learned-bun')
     expect(old?.expiredAt).toBeTruthy()
     expect(old?.invalidAt).toBeTruthy()
-    expect(old?.id).toMatch(/^prefer-pnpm-rev-[a-f0-9]{12}$/)
+    expect(old?.id).toMatch(/^prefer-pnpm-rev-[a-f0-9]{64}$/)
     const next = await morz.page.evaluate(
       (id) => (window as unknown as MemoryWindow).morz.memory.get(id),
       'learned-bun'
@@ -255,7 +255,7 @@ test.describe.serial('Memory op-set reconciliation', () => {
       { ...original, body: 'Run Biome before every commit.' }
     )
     expect(successor.id).toBe(original.id)
-    expect(successor.supersedesId).toMatch(/^manual-format-rule-rev-[a-f0-9]{12}$/)
+    expect(successor.supersedesId).toMatch(/^manual-format-rule-rev-[a-f0-9]{64}$/)
     const afterProposals = await morz.page.evaluate(() =>
       (window as unknown as MemoryWindow).morz.memory.proposals()
     )
