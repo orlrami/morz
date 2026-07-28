@@ -702,6 +702,11 @@ app.whenReady().then(() =>
     }
   })
 )
+// w17/context-blocks — renderer-published Space id↔root, so space-scoped
+// memory can reach dispatched teams (dispatcher) and lanes (claude adapter).
+import { registerSpaceRegistryIpc } from './services/space-registry'
+app.whenReady().then(() => registerSpaceRegistryIpc(ipcMain))
+
 // w4/obsidian
 import { registerObsidianIpc } from './services/obsidian'
 app.whenReady().then(() => registerObsidianIpc(ipcMain))

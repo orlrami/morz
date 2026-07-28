@@ -43,6 +43,8 @@ import {
 } from '../memory/learn-port'
 // w15/model-choice — session-flag model resolution + e2e spawn-args seam.
 import { modelArgsForLaunch, recordLaneSpawnArgs } from '../services/model-choice'
+// w17/context-blocks — a lane's Space (containment, else the active Space).
+import { resolveSpaceId } from '../services/space-registry'
 import {
   dismissNotice,
   notify,
@@ -362,6 +364,9 @@ function start(opts: ClaudeStartOpts): { agentId: string } {
       try {
         return createMemorySessionPreamble(memoryPort, {
           projectRoot: opts.cwd,
+          // w17/context-blocks — same scope resolution the dispatcher uses, so
+          // a lane and a dispatched agent in one Space read the same facts.
+          spaceId: resolveSpaceId({ cwd: opts.cwd }),
           agentId: opts.agentId
         }, Boolean(opts.resume))
       } catch (error) {

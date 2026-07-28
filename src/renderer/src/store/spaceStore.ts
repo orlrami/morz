@@ -7,6 +7,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { DialogBridge, GitStatus, MorzApi } from '@shared/ipc'
+import type { SpaceRegistryBridge } from '@shared/space-registry'
 
 export type SpaceCli = 'claude' | 'codex' | 'agy' | 'opencode'
 
@@ -279,3 +280,28 @@ export const useSpaceStore = create<SpaceState>()(
     }
   )
 )
+
+/*
+ * w17/context-blocks — main resolves `space`-scoped memory by space id, which
+ * only exists here. Publish id↔root plus the active id on every change so a
+ * dispatched team and a lane read the same Space, and nothing downstream has
+ * to guess a Space from a worktree path.
+ */
+let lastPublished = ''
+
+function publishSpaceRegistry(state: SpaceState): void {
+  const bridge = (window as unknown as { morzSpaces?: SpaceRegistryBridge }).morzSpaces
+  if (!bridge) return
+  const snapshot = {
+    spaces: state.spaces.map((space) => ({ id: space.id, root: space.root })),
+    activeSpaceId: state.activeSpaceId
+  }
+  const serialized = JSON.stringify(snapshot)
+  if (serialized === lastPublished) return
+  lastPublished = serialized
+  void bridge.publish(snapshot).catch(() => {
+    lastPublished = '' // retry on the next change
+  })
+}
+
+useSpaceStore.subscribe(publishSpaceRegistry)

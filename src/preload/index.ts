@@ -1015,3 +1015,18 @@ if (process.env.MORZ_E2E === '1') {
   contextBridge.exposeInMainWorld('morzSlotsTest', slotsTestBridge)
 }
 // end w15/integration-slots
+
+// w17/context-blocks — the renderer owns Space identity; main needs id↔root so
+// space-scoped memory can reach dispatched teams and lanes.
+import {
+  SpaceRegistryApi,
+  type SpaceRegistryBridge,
+  type SpaceRegistrySnapshot
+} from '../shared/space-registry'
+
+const spaceRegistryBridge: SpaceRegistryBridge = {
+  publish: (snapshot: SpaceRegistrySnapshot): Promise<SpaceRegistrySnapshot> =>
+    ipcRenderer.invoke(SpaceRegistryApi.publish, snapshot)
+}
+
+contextBridge.exposeInMainWorld('morzSpaces', spaceRegistryBridge)

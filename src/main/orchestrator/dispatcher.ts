@@ -46,6 +46,8 @@ import { PortPool } from './port-pool'
 import { memoryPort, prependRenderedMemory } from '../memory/learn-port'
 // w15/model-choice — per-agent CLI model suffix for the visible launch command.
 import { launchSuffixFor } from '../services/model-choice'
+// w17/context-blocks — plan.spaceRoot → the renderer's Space id.
+import { resolveSpaceId } from '../services/space-registry'
 import {
   agentTransition,
   consumeApprovedPlan,
@@ -323,9 +325,17 @@ async function launchAgent(
   mkdirSync(seedDir, { recursive: true })
   const seedPath = join(seedDir, 'kickoff.md')
   // w8/memory-learn — prepend approved memory once per dispatched agent promptSeed.
+  // w17/context-blocks — spaceId was dropped here, so a `space`-scoped fact
+  // never reached a dispatched team. Every agent of this run resolves the same
+  // Space, which is what makes the space block a TEAM block rather than
+  // per-agent copies that drift.
   const promptSeed = prependRenderedMemory(
     memoryPort,
-    { projectRoot: plan.spaceRoot, agentId: agent.agentId },
+    {
+      projectRoot: plan.spaceRoot,
+      spaceId: resolveSpaceId({ root: plan.spaceRoot }),
+      agentId: agent.agentId
+    },
     agent.promptSeed
   )
   writeFileSync(seedPath, promptSeed, 'utf8')
