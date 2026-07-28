@@ -375,30 +375,6 @@ export function PlanCard({
                   </option>
                 ))}
               </select>
-              <input
-                aria-label={`Agent model for ${agent.role}`}
-                data-testid={`plan-agent-model-${agent.agentId}`}
-                list={`plan-agent-models-${agent.agentId}`}
-                value={agent.model ?? ''}
-                placeholder="User default"
-                disabled={busy || record.state !== 'PROPOSED'}
-                onChange={(event) => editModel(index, event.target.value)}
-                onBlur={() => saveModel(index)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') event.currentTarget.blur()
-                }}
-                className="w-[112px] shrink-0 rounded-md border bg-black/10 px-1.5 py-0.5 font-mono text-[8.5px] outline-none focus:ring-1 disabled:opacity-50"
-                style={{
-                  borderColor: 'var(--color-line-strong)',
-                  color: colors.quartz,
-                  '--tw-ring-color': colors.bronze
-                } as React.CSSProperties}
-              />
-              <datalist id={`plan-agent-models-${agent.agentId}`}>
-                {PLANNER_MODEL_CATALOG[agent.cli].models.map((model) => (
-                  <option key={model} value={model} />
-                ))}
-              </datalist>
               {record.state === 'PROPOSED' && (
                 <button
                   type="button"
@@ -412,6 +388,35 @@ export function PlanCard({
                   <IconUserMinus size={12} stroke={1.8} />
                 </button>
               )}
+            </div>
+            <div className="mt-1 flex min-w-0 items-center gap-1.5">
+              <span className="shrink-0 text-[8px] font-semibold uppercase tracking-wide" style={{ color: colors.quartzDim }}>
+                Exact model
+              </span>
+              <input
+                aria-label={`Agent model for ${agent.role}`}
+                data-testid={`plan-agent-model-${agent.agentId}`}
+                list={`plan-agent-models-${agent.agentId}`}
+                value={agent.model ?? ''}
+                placeholder="User default"
+                disabled={busy || record.state !== 'PROPOSED'}
+                onChange={(event) => editModel(index, event.target.value)}
+                onBlur={() => saveModel(index)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') event.currentTarget.blur()
+                }}
+                className="min-w-0 flex-1 rounded-md border bg-black/10 px-1.5 py-0.5 font-mono text-[8.5px] outline-none focus:ring-1 disabled:opacity-50"
+                style={{
+                  borderColor: 'var(--color-line-strong)',
+                  color: colors.quartz,
+                  '--tw-ring-color': colors.bronze
+                } as React.CSSProperties}
+              />
+              <datalist id={`plan-agent-models-${agent.agentId}`}>
+                {PLANNER_MODEL_CATALOG[agent.cli].models.map((model) => (
+                  <option key={model} value={model} />
+                ))}
+              </datalist>
             </div>
             <code className="mt-0.5 block truncate text-[9px]" style={{ color: colors.quartzDim }} title={agent.branch}>
               {agent.branch}
