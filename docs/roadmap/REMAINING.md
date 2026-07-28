@@ -27,18 +27,19 @@ Exit: full e2e green → rebuild exe → dogfood.
 ## 0.1.5 — "Polish & Fix" ✅ SHIPPED (wave 16; E2E 199 passed)
 Scope: [`../in-progress/WAVE16.md`](../in-progress/WAVE16.md). Drawer portal, context-hub authority fix, draggable setup, dark dropdowns, version freshness + CLI update button, Spotlight palette, motion pass, voice module removed (Wispr Flow covers it), planner = any detected CLI (+OpenCode), memory bootstrap from existing .md files, version bump to 0.0.5.
 
-## 0.0.6 — "Memory that Works" (memory v2 + assistant/vault deepening)
-Design locked by [`../research/MEMORY-SYSTEMS-RESEARCH.md`](../research/MEMORY-SYSTEMS-RESEARCH.md) (Honcho/mem0/Letta/Zep/Claude-Code study). Build order:
-1. **Op-set reconciliation** (mem0): candidate memory → ADD/UPDATE/DELETE/NOOP against similar existing facts; the op IS the approval card; hash pre-dedup; SQLite audit log.
-2. **Bi-temporal facts** (Zep): `valid_at/invalid_at/created_at/expired_at/source_run_id`; contradictions soft-expire, never delete; inject validity windows ("used X until commit Y").
-3. **Per-CLI rendering + shared space blocks** (Letta): canonical store rendered at launch into CLAUDE.md / AGENTS.md (Codex+agy) / GEMINI.md as managed `<!-- morz:memory -->` blocks — merges with 0.0.5 context-hub; `space` scope = ONE shared block for a whole dispatched team; `read_only` locked blocks; ~200-line index budget + topic files.
-4. **Procedural learning** (the differentiator, ships last): log every CLI/tool/skill invocation + outcome; frequency × recency-decay × success-rate scoring; threshold → PROPOSE a {Title, Description, Content} card ("prefers Codex for refactors", repeated-correction coding standards). Never auto-persist; never promote failing patterns.
-5. **Obsidian deepening:** vault as optional durable backing for the store (one note per fact, morz-tagged); ADR browser; context/STATUS mirroring. Optional, no-clobber.
-6. **Hermes assistant deepening:** context-hub injection into Hermes proposals; pluggable memory providers (Honcho/mem0) behind the store interface; assistant integration slot (Morz planner / Hermes / OpenClaw / Comet).
+## 0.0.6 — "Memory that Works" (memory v2 core — REVISED 2026-07-27 by three-brain consensus)
+Original six-slice scope rejected by an AGY + Codex + Fable consensus round: op-set reconciliation and bi-temporal fields **already shipped** in waves 15/16; procedural-learning proposals have no telemetry substrate until 0.0.7's adapter seam; Obsidian backing as specced was a data-loss vector; pluggable providers contradicted our own rejected-infrastructure list. Full record: `three-brain-out/2026-07-27-morz-006-memory/SYNTHESIS.md`. Revised scope ([`../in-progress/WAVE17.md`](../in-progress/WAVE17.md)):
+1. **renderer-core**: ONE canonical memory renderer feeding both the launch preamble and the managed context-file block (today two divergent renderers, one throws on empty); enforced injection budget; superseded facts out of prompts (queryable in UI only).
+2. **context-blocks**: `proposeMemoryBlock` extended to AGENTS.md/GEMINI.md kinds; `read_only` enforced at write time; `space` scope = one shared block per dispatched team; fix dispatcher dropping `spaceId` on prompt injection; **clean-tree e2e gate** — launching a lane never dirties the worktree (kickoff-leak class regression).
+3. **supersession**: `supersedesId`/`supersededBy` links + store migration; stale-approval compare-and-swap; restore guard (never two live successors); atomic apply ordering; manual saves routed through reconciliation; memory IPC gets sender-frame validation like context-hub.
+4. **event-log** (procedural learning substrate ONLY): typed, redacted, size-capped tool-invocation log; crash-safe JSONL; secret-redaction corpus test; hard guardrail test asserting it emits ZERO proposals this version; manual mode writes nothing.
+
+Cut/deferred: Obsidian backing (revisit as one-way export mirror, separate root) · pluggable providers (dead — no second implementation, candidates rejected) · topic-file split (until CLI `@`-import behavior is validated) · procedural scoring/proposals (→ 0.0.7+, after real outcome telemetry; formula must be calibrated on logged data — no consensus formula exists in the literature, and failures are essential negative evidence).
 
 Rejected for good: graph DBs, Postgres/Redis, background daemons, LLM on the launch path, unapproved writes.
 
 ## 0.0.7 — "The Self-Closing Orchestrator" (close the ORCH-AUDIT gaps)
+Wave 17 pre-builds items 1–2 (adapter-seam bridge + auto-done plumbing) and adds: **planner model-awareness** (SpawnPlan 1.1 with per-agent `model` field + model catalog in the planner prompt, so the orchestrator knows every model it can assign) and **procedural-learning scoring/proposals** (moved from 0.0.6; consumes the 0.0.6 event log once adapter telemetry makes outcomes trustworthy).
 Everything from [`../ORCH-AUDIT.md`](../ORCH-AUDIT.md) priority list, still open:
 1. **Auto-done:** commit/review/DoD events advance agent → run state (`running → merging → done`); no more mandatory Stop.
 2. **Dispatcher ⇄ adapters unification:** dispatched panes run through the AgentAdapter seam (or a narrow terminal-event bridge) → normalized permission/block/result events, metering, interrupts. Fixes "waiting-for-approval looks like working".
