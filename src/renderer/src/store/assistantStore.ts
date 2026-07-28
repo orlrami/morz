@@ -23,7 +23,8 @@ interface AssistantStoreState {
   connect(): Promise<void>
   disconnect(): Promise<void>
   propose(goal: string, spaceRoot: string): Promise<void>
-  updatePlan(plan: SpawnPlan, expectedHash: string): Promise<void>
+  /** True only when Main accepted the edit (w17). */
+  updatePlan(plan: SpawnPlan, expectedHash: string): Promise<boolean>
   approvePlan(planHash: string): Promise<void>
   discardPlan(planHash: string): Promise<void>
 }
@@ -156,14 +157,16 @@ export const useAssistantStore = create<AssistantStoreState>((set, get) => ({
 
   updatePlan: async (plan, expectedHash) => {
     const planner = plannerBridge()
-    if (!planner) return
+    if (!planner) return false
     set({ busy: true, error: '' })
     try {
       set({ record: await planner.update(plan, expectedHash) })
+      return true
     } catch (reason) {
       const detail = errorMessage(reason)
       set({ error: detail })
       notifyFailure('approval', detail)
+      return false
     } finally {
       set({ busy: false })
     }

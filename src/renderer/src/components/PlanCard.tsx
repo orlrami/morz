@@ -61,7 +61,9 @@ const MAX_TEAM_AGENTS = 8
 interface PlanCardProps {
   record: StoredSpawnPlan
   busy: boolean
-  onUpdate(plan: SpawnPlan, expectedHash: string): Promise<void>
+  /** Resolves true only when Main accepted the edit. A rejected edit has to be
+   * distinguishable, or the card learns from choices that never landed (w17). */
+  onUpdate(plan: SpawnPlan, expectedHash: string): Promise<boolean>
   onApprove(planHash: string): Promise<void>
   onDiscard(planHash: string): Promise<void>
   /** w14/multi-agent-plan — re-plan the same goal with team constraints. */
@@ -97,25 +99,13 @@ export function PlanCard({
   const eligibleClis = new Set(connections.filter(isPlannerEligible).map((c) => c.id))
   const canPlanWith = (cli: PlannedCli): boolean =>
     connections.length === 0 || eligibleClis.has(cli)
-  // A swap only becomes the role's default once the update actually lands —
-  // a cli Main refuses must never be remembered (w17 review).
-  const [pendingDefault, setPendingDefault] = useState<{
-    role: string
-    cli: PlannedCli
-    fromHash: string
-  } | null>(null)
+  // w17 — a probe can land mid-edit and take the selected cli away. The choice
+  // stays visible (nothing is rewritten behind the user), but a plan that names
+  // an unavailable cli cannot be approved until they pick another.
+  const unavailableAgents = draft.agents.filter((agent) => !canPlanWith(agent.cli))
 
   useEffect(() => setDraft(record.plan), [record.plan])
   useEffect(() => setSizeChoice('auto'), [record.plan.id])
-  useEffect(() => {
-    // The stored plan moved on: remember the swap only if it survived.
-    if (!pendingDefault || record.plan.planHash === pendingDefault.fromHash) return
-    const landed = record.plan.agents.some(
-      (agent) => agent.role === pendingDefault.role && agent.cli === pendingDefault.cli
-    )
-    if (landed) rememberDefault(pendingDefault.role, pendingDefault.cli)
-    setPendingDefault(null)
-  }, [record.plan, pendingDefault, rememberDefault])
   useEffect(() => startConnections(), [startConnections])
   useEffect(() => {
     if (record.recommendedTeamSize) {
@@ -193,11 +183,12 @@ export function PlanCard({
   }
 
   // w14/multi-agent-plan — model swap persists as the role's new default.
-  const changeCli = (index: number, cli: PlannedCli): void => {
+  // w17 — but only if THIS update was accepted: the role default follows the
+  // very response for this swap, so a refused cli is never learned.
+  const changeCli = async (index: number, cli: PlannedCli): Promise<void> => {
     const agent = draft.agents[index]
     if (!agent || agent.cli === cli) return
-    setPendingDefault({ role: agent.role, cli, fromHash: record.plan.planHash })
-    void onUpdate(
+    const applied = await onUpdate(
       {
         ...draft,
         agents: draft.agents.map((item, i) =>
@@ -206,6 +197,7 @@ export function PlanCard({
       },
       record.plan.planHash
     )
+    if (applied) rememberDefault(agent.role, cli)
   }
 
   const editModel = (index: number, model: string): void => {
@@ -286,7 +278,7 @@ export function PlanCard({
   const applySuggestion = (index: number): void => {
     const suggestion = suggestions.get(index)
     if (!suggestion) return
-    changeCli(index, routeCli(suggestion.target))
+    void changeCli(index, routeCli(suggestion.target))
   }
 
   const keepPlannedRoute = (index: number): void => {
@@ -419,7 +411,7 @@ export function PlanCard({
                 aria-label={`Model for ${agent.role}`}
                 value={agent.cli}
                 disabled={busy || record.state !== 'PROPOSED'}
-                onChange={(event) => changeCli(index, event.target.value as PlannedCli)}
+                onChange={(event) => void changeCli(index, event.target.value as PlannedCli)}
                 className="ml-auto max-w-[130px] shrink-0 rounded-md border bg-black/10 px-1 py-0.5 text-[8.5px] font-semibold outline-none focus:ring-1 disabled:opacity-50"
                 style={{
                   borderColor: 'var(--color-line-strong)',
@@ -543,12 +535,34 @@ export function PlanCard({
         ))}
       </div>
 
+      {record.state === 'PROPOSED' && unavailableAgents.length > 0 && (
+        <p
+          role="alert"
+          data-testid="plan-unavailable-cli"
+          className="mt-2 rounded-md border px-2 py-1 text-[9.5px] leading-snug"
+          style={{
+            borderColor: `${colors.warning}55`,
+            color: colors.warning,
+            background: `${colors.warning}0d`
+          }}
+        >
+          {unavailableAgents.map((agent) => `${CLI_META[agent.cli].label} (${agent.role})`).join(', ')}
+          {unavailableAgents.length === 1 ? ' is' : ' are'} not detected on PATH. Pick an available
+          model before running this plan.
+        </p>
+      )}
       {record.state === 'PROPOSED' && (
         <div className="mt-2 flex gap-1.5">
           <button
             type="button"
-            disabled={busy || hasUnsavedEdits}
-            title={hasUnsavedEdits ? 'Save prompt edits before approval' : 'Approve this exact plan hash'}
+            disabled={busy || hasUnsavedEdits || unavailableAgents.length > 0}
+            title={
+              unavailableAgents.length > 0
+                ? 'One of this plan’s CLIs is not detected on PATH'
+                : hasUnsavedEdits
+                  ? 'Save prompt edits before approval'
+                  : 'Approve this exact plan hash'
+            }
             onClick={() => void onApprove(record.plan.planHash)}
             className="flex flex-1 items-center justify-center gap-1 rounded-md px-2 py-1.5 text-[10px] font-bold disabled:cursor-wait disabled:opacity-50"
             style={{
