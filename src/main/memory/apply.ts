@@ -71,10 +71,14 @@ export function memoryRevision(entry: MemoryEntry): string {
 // with an unrelated entry, and the store overwrites whatever lives at an id.
 const REVISION_ID_BASE_MAX = 120 - '-rev-'.length - 64
 
+function archiveId(id: string, revision: string): string {
+  const base = id.slice(0, REVISION_ID_BASE_MAX).replace(/-+$/g, '') || 'memory'
+  return `${base}-rev-${revision}`
+}
+
 function revisionId(op: MemoryOp): string {
   if (!op.targetRevision) throw new Error(CAS_ERROR)
-  const base = (op.targetId ?? 'memory').slice(0, REVISION_ID_BASE_MAX).replace(/-+$/g, '') || 'memory'
-  return `${base}-rev-${op.targetRevision}`
+  return archiveId(op.targetId ?? 'memory', op.targetRevision)
 }
 
 function matchesProposal(entry: MemoryEntry, proposal: MemoryProposal): boolean {
@@ -177,9 +181,8 @@ function recoveredPlan(
   }
   const successor = getMemory(proposal.entry.id)!
   const archived = getMemory(revisionId(op))!
-  const predecessor = rewiredPredecessor(archived, successor.id, getMemory)
   return {
-    entries: [...(predecessor ? [predecessor] : []), archived, successor],
+    entries: [...withRewiredPredecessor([], archived, successor.id, getMemory), archived, successor],
     removeIds: op.targetId === successor.id ? [] : [op.targetId!],
     result: successor,
     audit: auditFor(proposal, successor, now)
@@ -209,17 +212,66 @@ function isPartialArchive(occupant: MemoryEntry, archived: MemoryEntry): boolean
  * revision has just moved from the live clean id to the archived id. Rewiring
  * the link in the same durable write keeps the chain walkable; leaving it
  * dangling at a removed id would hide the live head from the restore guard.
+ * The predecessor can be a document this plan is already relocating, so it is
+ * updated in place rather than written twice.
  */
-function rewiredPredecessor(
+function withRewiredPredecessor(
+  planned: MemoryEntry[],
   archived: MemoryEntry,
   successorId: string,
   getMemory: (id: string) => MemoryEntry | null
-): MemoryEntry | null {
+): MemoryEntry[] {
   const id = archived.supersedesId
-  if (!id || id === archived.id || id === successorId) return null
-  const predecessor = getMemory(id)
-  if (!predecessor || predecessor.supersededBy === archived.id) return null
-  return { ...predecessor, supersededBy: archived.id }
+  if (!id || id === archived.id || id === successorId) return planned
+  const index = planned.findIndex((value) => value.id === id)
+  const predecessor = index < 0 ? getMemory(id) : planned[index]
+  if (!predecessor || predecessor.supersededBy === archived.id) return planned
+  const rewired = { ...predecessor, supersededBy: archived.id }
+  if (index < 0) return [...planned, rewired]
+  const next = [...planned]
+  next[index] = rewired
+  return next
+}
+
+interface Relocation {
+  /** The occupant, preserved verbatim under its own revision id. */
+  moved: MemoryEntry
+  /** Neighbours whose link now points at the occupant's new id. */
+  rewires: MemoryEntry[]
+  /** The target's link fix, applied to its archived copy instead. */
+  targetFix?: Partial<Pick<MemoryEntry, 'supersedesId' | 'supersededBy'>>
+}
+
+/**
+ * An expired revision already sitting on the id the successor wants is a real
+ * chain member: overwriting it destroys a revision the audit rows cannot
+ * reconstruct, and leaves its own live successor pointing at a brand new fact.
+ * It moves to its own archive id — content untouched, so a retry rewrites the
+ * identical document — and both adjacent links follow it.
+ */
+function relocateOccupant(
+  occupant: MemoryEntry,
+  targetId: string,
+  getMemory: (id: string) => MemoryEntry | null
+): Relocation {
+  const moved: MemoryEntry = { ...occupant, id: archiveId(occupant.id, memoryRevision(occupant)) }
+  const existing = getMemory(moved.id)
+  if (existing && memoryRevision(existing) !== memoryRevision(moved)) {
+    throw new Error(`${COLLISION_ERROR}: ${moved.id}`)
+  }
+  const relocation: Relocation = { moved, rewires: [] }
+  const neighbours = [
+    [occupant.supersedesId, 'supersededBy'],
+    [occupant.supersededBy, 'supersedesId']
+  ] as const
+  for (const [id, link] of neighbours) {
+    if (!id || id === occupant.id || id === moved.id) continue
+    const neighbour = getMemory(id)
+    if (!neighbour || neighbour[link] !== occupant.id) continue
+    if (id === targetId) relocation.targetFix = { ...relocation.targetFix, [link]: moved.id }
+    else relocation.rewires.push({ ...neighbour, [link]: moved.id })
+  }
+  return relocation
 }
 
 function freshPlan(
@@ -270,14 +322,17 @@ function freshPlan(
     supersedesId: archivedId
   }
   // A successor that takes an id other than the target's lands on a document
-  // no CAS has looked at. Ask for a re-propose rather than overwrite whatever
-  // live memory already lives there.
+  // no CAS has looked at. A live memory there means the proposal is stale; an
+  // expired revision is moved out of the way rather than destroyed.
+  let relocation: Relocation | null = null
   if (op.targetId !== successor.id) {
     const occupied = getMemory(successor.id)
     if (occupied && !occupied.expiredAt) throw new Error(CAS_ERROR)
+    if (occupied) relocation = relocateOccupant(occupied, target.id, getMemory)
   }
   const archived: MemoryEntry = {
     ...target,
+    ...relocation?.targetFix,
     id: archivedId,
     invalidAt: target.invalidAt ?? now,
     expiredAt: now,
@@ -289,9 +344,14 @@ function freshPlan(
   if (occupant && !isPartialArchive(occupant, archived)) {
     throw new Error(`${COLLISION_ERROR}: ${archivedId}`)
   }
-  const predecessor = rewiredPredecessor(archived, successor.id, getMemory)
+  // The relocation lands before the successor overwrites the occupant.
+  const relocated = relocation ? [relocation.moved, ...relocation.rewires] : []
   return {
-    entries: [...(predecessor ? [predecessor] : []), archived, successor],
+    entries: [
+      ...withRewiredPredecessor(relocated, archived, successor.id, getMemory),
+      archived,
+      successor
+    ],
     removeIds: op.targetId === successor.id ? [] : [op.targetId!],
     result: successor,
     audit: auditFor(proposal, successor, now)
@@ -347,11 +407,23 @@ export function applyApprovedMemoryProposal(
   return plan.result
 }
 
-/** Ids of the revisions recorded as replacing a memory (audit target_id chain). */
-export type MemoryAuditSuccessors = (memoryId: string) => string[]
+/**
+ * Everything the chain walk reads, gathered ONCE by the caller: one Markdown
+ * pass and one audit scan. Re-reading per hop turned a 200-revision chain into
+ * seconds of blocked main process.
+ */
+export interface MemoryChainSnapshot {
+  /** Every stored entry by id. */
+  entries: Map<string, MemoryEntry>
+  /** Audit adjacency: a memory id to the revisions recorded as replacing it. */
+  auditSuccessors: Map<string, string[]>
+}
 
-function successorIds(entry: MemoryEntry, audit?: MemoryAuditSuccessors): string[] {
-  return [...(entry.supersededBy ? [entry.supersededBy] : []), ...(audit?.(entry.id) ?? [])]
+function successorIds(entry: MemoryEntry, chain: MemoryChainSnapshot): string[] {
+  return [
+    ...(entry.supersededBy ? [entry.supersededBy] : []),
+    ...(chain.auditSuccessors.get(entry.id) ?? [])
+  ]
 }
 
 /**
@@ -361,27 +433,23 @@ function successorIds(entry: MemoryEntry, audit?: MemoryAuditSuccessors): string
  * legacy rows written before supersession links existed. Visited ids are
  * tracked so a cycle in the links cannot spin.
  */
-export function assertRestoreAllowed(
-  entry: MemoryEntry,
-  getMemory: (id: string) => MemoryEntry | null,
-  audit?: MemoryAuditSuccessors
-): void {
+export function assertRestoreAllowed(entry: MemoryEntry, chain: MemoryChainSnapshot): void {
   const seen = new Set<string>([entry.id])
-  const queue = successorIds(entry, audit)
+  const queue = successorIds(entry, chain)
   while (queue.length > 0) {
     const id = queue.shift()!
     if (seen.has(id)) continue
     seen.add(id)
-    const successor = getMemory(id)
+    const successor = chain.entries.get(id)
     if (!successor) {
       // The link points at a document that was archived under a revision id;
       // the audit trail still records what replaced it.
-      queue.push(...(audit?.(id) ?? []))
+      queue.push(...(chain.auditSuccessors.get(id) ?? []))
       continue
     }
     if (!successor.expiredAt) {
       throw new Error(`Cannot restore memory while its successor is active: ${successor.id}`)
     }
-    queue.push(...successorIds(successor, audit))
+    queue.push(...successorIds(successor, chain))
   }
 }

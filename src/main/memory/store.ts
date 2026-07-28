@@ -11,7 +11,7 @@ import {
 import { notify } from '../services/notify-center'
 import {
   ensureMemoryAuditTable,
-  memoryAuditSuccessorIds,
+  memoryAuditSuccessors,
   migrateMemoryFtsSchema,
   renderInjectionLines,
   restoreEntry
@@ -222,10 +222,18 @@ export function searchMemoryNeighbors(query: unknown, limit = 10): MemoryEntry[]
 }
 
 export function restoreMemory(idValue: unknown): MemoryEntry {
-  const entry = getMemory(idValue)
+  ensureInitialized()
+  const id = validateId(idValue)
+  // One Markdown pass and one audit scan feed the whole chain walk.
+  const entries = new Map<string, MemoryEntry>()
+  for (const value of readAllEntries()) {
+    const seen = entries.get(value.id)
+    if (!seen || seen.updatedAt.localeCompare(value.updatedAt) < 0) entries.set(value.id, value)
+  }
+  const entry = entries.get(id) ?? null
   if (!entry) throw new Error('Memory entry not found')
   if (!entry.expiredAt) return entry
-  assertRestoreAllowed(entry, getMemory, (id) => memoryAuditSuccessorIds(database(), id))
+  assertRestoreAllowed(entry, { entries, auditSuccessors: memoryAuditSuccessors(database()) })
   return saveMemory(restoreEntry(entry))
 }
 

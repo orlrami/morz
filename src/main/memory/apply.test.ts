@@ -16,8 +16,19 @@ import {
   memoryRevision,
   type MemoryApplyAuditInput,
   type MemoryApplyDeps,
-  type MemoryApplyFailpoint
+  type MemoryApplyFailpoint,
+  type MemoryChainSnapshot
 } from './apply'
+
+function chainOf(
+  entries: Iterable<MemoryEntry>,
+  auditSuccessors: Record<string, string[]> = {}
+): MemoryChainSnapshot {
+  return {
+    entries: new Map([...entries].map((value) => [value.id, value])),
+    auditSuccessors: new Map(Object.entries(auditSuccessors))
+  }
+}
 
 const NOW = '2026-07-28T12:00:00.000Z'
 
@@ -256,6 +267,77 @@ test('an occupied successor id aborts the apply instead of overwriting it', () =
   assert.equal(harness.audit.size, 0)
 })
 
+test('an expired successor id occupant is archived, not overwritten', () => {
+  // use-bun is an expired revision whose live successor is use-npm. A new
+  // update of prefer-pnpm wants the use-bun id for its own successor.
+  const alpha = entry()
+  const harness = new ApplyHarness(alpha)
+  const occupant = entry({
+    id: 'use-bun',
+    title: 'Use bun',
+    body: 'Use bun for JavaScript dependencies.',
+    expiredAt: NOW,
+    invalidAt: NOW,
+    supersededBy: 'use-npm'
+  })
+  const head = entry({ id: 'use-npm', title: 'Use npm', supersedesId: 'use-bun' })
+  harness.documents.set(occupant.id, occupant)
+  harness.documents.set(head.id, head)
+
+  const successor = applyApprovedMemoryProposal(
+    renameProposal(alpha, 'use-bun', 'Use bun'),
+    harness.deps()
+  )!
+
+  const movedId = `use-bun-rev-${memoryRevision(occupant)}`
+  const moved = harness.documents.get(movedId)!
+  // The old revision survives verbatim under its own archive id...
+  assert.equal(moved.body, 'Use bun for JavaScript dependencies.')
+  assert.equal(moved.expiredAt, NOW)
+  // ...and both of its links moved with it.
+  assert.equal(harness.documents.get('use-npm')?.supersedesId, movedId)
+  assert.equal(moved.supersededBy, 'use-npm')
+
+  // Exactly one live head per chain: use-npm for the old one, the new
+  // successor for prefer-pnpm's.
+  const live = [...harness.documents.values()].filter((value) => !value.expiredAt)
+  assert.deepEqual(live.map((value) => value.id).sort(), ['use-bun', 'use-npm'])
+  assert.equal(successor.id, 'use-bun')
+  assert.equal(successor.supersedesId, `prefer-pnpm-rev-${memoryRevision(alpha)}`)
+  // The relocated revision is still guarded by its own live successor.
+  assert.throws(
+    () => assertRestoreAllowed(moved, chainOf(harness.documents.values())),
+    /Cannot restore memory while its successor is active: use-npm/
+  )
+})
+
+test('a relocated occupant keeps the chain walkable through the target', () => {
+  // The occupant's successor IS the target being updated, so its link fix has
+  // to land on the target's archived copy rather than on a removed document.
+  const occupant = entry({
+    id: 'use-bun',
+    title: 'Use bun',
+    expiredAt: NOW,
+    invalidAt: NOW,
+    supersededBy: 'prefer-pnpm'
+  })
+  const target = entry({ supersedesId: 'use-bun' })
+  const harness = new ApplyHarness(target)
+  harness.documents.set(occupant.id, occupant)
+
+  applyApprovedMemoryProposal(renameProposal(target, 'use-bun', 'Use bun again'), harness.deps())
+
+  const movedId = `use-bun-rev-${memoryRevision(occupant)}`
+  const archivedTarget = harness.documents.get(`prefer-pnpm-rev-${memoryRevision(target)}`)!
+  assert.equal(archivedTarget.supersedesId, movedId)
+  // The relocated occupant now points at the archive the target moved into.
+  assert.equal(harness.documents.get(movedId)?.supersededBy, archivedTarget.id)
+  assert.throws(
+    () => assertRestoreAllowed(harness.documents.get(movedId)!, chainOf(harness.documents.values())),
+    /Cannot restore memory while its successor is active: use-bun/
+  )
+})
+
 test('a second proposal cannot adopt an identical materialized result', () => {
   const old = entry()
   const proposalA = updateProposal(old)
@@ -398,6 +480,37 @@ for (const [step, boundary] of MARKDOWN_STEPS.entries()) {
   })
 }
 
+const CHAIN_BUDGET_MS = 500
+
+test(`a 200-revision chain walk stays under ${CHAIN_BUDGET_MS}ms`, () => {
+  const root = mkdtempSync(join(tmpdir(), 'morz-memory-chain-'))
+  try {
+    ensureMemoryDirectories(root)
+    const revisions = Array.from({ length: 200 }, (_value, index) => entry({
+      id: `revision-${index}`,
+      title: `Revision ${index}`,
+      expiredAt: NOW,
+      invalidAt: NOW,
+      supersedesId: index > 0 ? `revision-${index - 1}` : undefined,
+      supersededBy: index < 199 ? `revision-${index + 1}` : 'live-head'
+    }))
+    const head = entry({ id: 'live-head', title: 'Live head', supersedesId: 'revision-199' })
+    writeEntryDocuments(root, [...revisions, head])
+
+    // The whole cost the guard is allowed: one Markdown pass, then memory.
+    const started = performance.now()
+    const chain = chainOf(readEntryDocuments(root).entries)
+    assert.throws(
+      () => assertRestoreAllowed(chain.entries.get('revision-0')!, chain),
+      /Cannot restore memory while its successor is active: live-head/
+    )
+    const elapsed = performance.now() - started
+    assert.ok(elapsed < CHAIN_BUDGET_MS, `chain walk took ${elapsed.toFixed(0)}ms`)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('restore fails while the linked successor is live', () => {
   const old = entry()
   const harness = new ApplyHarness(old)
@@ -407,12 +520,12 @@ test('restore fails while the linked successor is live', () => {
   assert.ok(expired)
 
   assert.throws(
-    () => assertRestoreAllowed(expired, harness.deps().getMemory),
+    () => assertRestoreAllowed(expired, chainOf(harness.documents.values())),
     /Cannot restore memory while its successor is active/
   )
 
   harness.documents.set(successor.id, { ...successor, expiredAt: NOW, invalidAt: NOW })
-  assert.doesNotThrow(() => assertRestoreAllowed(expired, harness.deps().getMemory))
+  assert.doesNotThrow(() => assertRestoreAllowed(expired, chainOf(harness.documents.values())))
 })
 
 test('restore walks a three-link chain to the live head', () => {
@@ -435,7 +548,7 @@ test('restore walks a three-link chain to the live head', () => {
   assert.equal(archivedBeta.supersededBy, gamma.id)
 
   assert.throws(
-    () => assertRestoreAllowed(archivedAlpha, harness.deps().getMemory),
+    () => assertRestoreAllowed(archivedAlpha, chainOf(harness.documents.values())),
     /Cannot restore memory while its successor is active: use-npm/
   )
 })
@@ -447,12 +560,14 @@ test('restore follows the audit chain for legacy link-less rows', () => {
   harness.documents.set(live.id, live)
   assert.equal(legacy.supersededBy, undefined)
 
-  const audit = (id: string): string[] => (id === 'prefer-pnpm' ? ['use-bun'] : [])
   assert.throws(
-    () => assertRestoreAllowed(legacy, harness.deps().getMemory, audit),
+    () => assertRestoreAllowed(
+      legacy,
+      chainOf(harness.documents.values(), { 'prefer-pnpm': ['use-bun'] })
+    ),
     /Cannot restore memory while its successor is active: use-bun/
   )
-  assert.doesNotThrow(() => assertRestoreAllowed(legacy, harness.deps().getMemory))
+  assert.doesNotThrow(() => assertRestoreAllowed(legacy, chainOf(harness.documents.values())))
 })
 
 test('restore survives a supersession cycle', () => {
@@ -461,7 +576,7 @@ test('restore survives a supersession cycle', () => {
   const harness = new ApplyHarness(first)
   harness.documents.set(second.id, second)
 
-  assert.doesNotThrow(() => assertRestoreAllowed(first, harness.deps().getMemory))
+  assert.doesNotThrow(() => assertRestoreAllowed(first, chainOf(harness.documents.values())))
 })
 
 test('audit input stays compatible with the public audit row shape', () => {

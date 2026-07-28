@@ -307,19 +307,24 @@ export function recordMemoryOpAudit(db: Database.Database, input: MemoryOpAuditI
 }
 
 /**
- * Revisions the audit trail records as replacing this memory. The restore
- * guard needs it for rows written before supersession links existed: their
- * successor is only discoverable through the applied op's target_id.
+ * Revisions the audit trail records as replacing each memory. The restore
+ * guard needs this for rows written before supersession links existed: their
+ * successor is only discoverable through the applied op's target_id. Built in
+ * ONE scan — the chain walk runs on the main process and cannot query per hop.
  */
-export function memoryAuditSuccessorIds(db: Database.Database, memoryId: string): string[] {
+export function memoryAuditSuccessors(db: Database.Database): Map<string, string[]> {
   ensureMemoryAuditTable(db)
   const rows = db
     .prepare(`
-      SELECT DISTINCT memory_id FROM memory_ops_audit
-      WHERE target_id = ? AND op IN ('update', 'delete') AND memory_id <> target_id
+      SELECT DISTINCT target_id, memory_id FROM memory_ops_audit
+      WHERE target_id IS NOT NULL AND op IN ('update', 'delete') AND memory_id <> target_id
     `)
-    .all(memoryId) as { memory_id: string }[]
-  return rows.map((row) => row.memory_id)
+    .all() as { target_id: string; memory_id: string }[]
+  const successors = new Map<string, string[]>()
+  for (const row of rows) {
+    successors.set(row.target_id, [...(successors.get(row.target_id) ?? []), row.memory_id])
+  }
+  return successors
 }
 
 export function listMemoryOpAudit(db: Database.Database, limit = 100): MemoryOpAuditRow[] {
