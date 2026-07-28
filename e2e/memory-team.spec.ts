@@ -14,7 +14,7 @@
  */
 import { expect, test } from '@playwright/test'
 import { execFileSync, spawnSync } from 'child_process'
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import type { SpaceRegistrySnapshot } from '../src/shared/space-registry'
 import { closeMorz, launchMorz, ROOT } from './app'
@@ -26,8 +26,9 @@ interface MemoryTeamWindow {
     run: {
       approvePlan(plan: unknown): Promise<{ planHash: string }>
       dispatch(plan: unknown): Promise<{ runId: string }>
+      listRuns(spaceRoot?: string): Promise<{ runId: string; goal: string }[]>
       runStatus(runId: string): Promise<{
-        agentsDetail: Record<string, { worktree: string | null }>
+        agentsDetail: Record<string, { worktree: string | null } | undefined>
       } | null>
       stopRun(runId: string): Promise<unknown>
       cleanup(runId: string): Promise<unknown>
@@ -149,10 +150,58 @@ test('a space-scoped fact reaches every agent of that team and no other space', 
       (value) => (window as unknown as MemoryTeamWindow).morz.run.approvePlan(value),
       plan
     )
-    const dispatched = await page.evaluate(
+    /*
+     * Codex round-1 HIGH: agents launch sequentially with git and pane work in
+     * between, so a memory change DURING dispatch used to fork the "shared"
+     * block — alpha and beta would carry different team memory. Approve a fact
+     * mid-flight: it must reach the next run, not half of this one.
+     */
+    const dispatching = page.evaluate(
       (value) => (window as unknown as MemoryTeamWindow).morz.run.dispatch(value),
       { ...plan, planHash }
     )
+    /*
+     * Land the save squarely BETWEEN the two agents: wait until alpha's seed
+     * has actually been written (not merely until its worktree exists — the
+     * seed write follows within microseconds, and a save that beats it would
+     * reach both agents and prove nothing).
+     */
+    const alphaSeed = await new Promise<string>((resolveSeed, rejectSeed) => {
+      const deadline = Date.now() + 60_000
+      const poll = async (): Promise<void> => {
+        const worktree = await page.evaluate(async () => {
+          const w = window as unknown as MemoryTeamWindow
+          const runs = await w.morz.run.listRuns()
+          const live = runs.find((run) => run.goal === 'team memory')
+          if (!live) return null
+          const status = await w.morz.run.runStatus(live.runId)
+          return status?.agentsDetail?.alpha?.worktree ?? null
+        })
+        const seed = worktree ? join(worktree, '.morz', 'kickoff.md') : null
+        if (seed && existsSync(seed)) return resolveSeed(seed)
+        if (Date.now() > deadline) return rejectSeed(new Error('alpha never wrote its seed'))
+        setTimeout(() => void poll(), 50)
+      }
+      void poll()
+    })
+    expect(readFileSync(alphaSeed, 'utf8')).toContain('You are alpha.')
+
+    await page.evaluate(async () => {
+      const now = '2026-07-27T13:00:00.000Z'
+      await (window as unknown as MemoryTeamWindow).morz.memory.save({
+        id: 'mid-dispatch-rule',
+        scope: 'space',
+        scopeRef: 'team-space',
+        kind: 'rule',
+        title: 'Approved while the team was launching',
+        body: 'Belongs to the next run, not to half of this one.',
+        origin: 'user',
+        createdAt: now,
+        updatedAt: now,
+        enabled: true
+      })
+    })
+    const dispatched = await dispatching
     runId = dispatched.runId
     const status = (await page.evaluate(
       (id) => (window as unknown as MemoryTeamWindow).morz.run.runStatus(id),
@@ -169,6 +218,9 @@ test('a space-scoped fact reaches every agent of that team and no other space', 
     // one team block, not per-agent copies: the shared prefix is identical and
     // the seeds differ only by each agent's own prompt
     expect(seeds[0].replace('You are alpha.', '')).toBe(seeds[1].replace('You are beta.', ''))
+    // whatever the mid-dispatch fact did, it did the SAME thing to both agents
+    expect(seeds[0].includes('Approved while the team was launching'))
+      .toBe(seeds[1].includes('Approved while the team was launching'))
   } finally {
     if (runId) {
       await page.evaluate(

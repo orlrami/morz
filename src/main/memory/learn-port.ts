@@ -125,6 +125,15 @@ function joinPreamble(preamble: string, prompt: string): string {
   return block ? `${block}\n\n${prompt}` : prompt
 }
 
+/**
+ * Join an ALREADY rendered preamble onto a prompt. The dispatcher renders the
+ * whole team's memory up front — one instant of the store for every agent — so
+ * it needs the join without a second render (see renderTeamMemory).
+ */
+export function joinRenderedMemory(preamble: string, prompt: string): string {
+  return joinPreamble(preamble, prompt)
+}
+
 /** Render at lane start and consume the result on the first prompt only. */
 export function createMemorySessionPreamble(
   port: MemoryPort,
