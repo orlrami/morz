@@ -72,6 +72,37 @@ export function isPlannerEligible(connection: CliConnection): boolean {
   return connection.installed && connection.present
 }
 
+/**
+ * Resolving a CLI on PATH has three outcomes, and they must not be collapsed:
+ * `probe-error` (the lookup timed out, could not spawn, or overflowed its
+ * output budget) is NOT evidence that the CLI is gone. Only an authoritative
+ * `absent` may clear presence — otherwise one flaky lookup evicts a working
+ * CLI from planning until a later probe happens to succeed (w17 review).
+ */
+export type PathResolution =
+  | { kind: 'found'; candidates: string[] }
+  | { kind: 'absent' }
+  | { kind: 'probe-error' }
+
+/**
+ * Classify a PATH lookup. Windows `where.exe` exits 1 for an authoritative
+ * "no match"; every other failure — exit 2, a timeout or spawn failure, an
+ * output overflow (exitCode null) — leaves presence unknown.
+ */
+export function classifyPathProbe(
+  probe: { ok: boolean; exitCode: number | null },
+  candidates: readonly string[]
+): PathResolution {
+  if (!probe.ok) return probe.exitCode === 1 ? { kind: 'absent' } : { kind: 'probe-error' }
+  return candidates.length > 0 ? { kind: 'found', candidates: [...candidates] } : { kind: 'absent' }
+}
+
+/** Presence after a re-probe: a probe error keeps the last good answer. */
+export function presenceAfterProbe(resolution: PathResolution, wasPresent: boolean): boolean {
+  if (resolution.kind === 'found') return true
+  return resolution.kind === 'absent' ? false : wasPresent
+}
+
 /** Map a spawned pane's argv/exe to the CliId it is running (shared by detection + lanes). */
 export function cliOfExecutable(exe: string): CliId | null {
   const base = exe.toLowerCase().replace(/\.(exe|cmd|bat)$/, '')
