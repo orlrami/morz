@@ -163,6 +163,9 @@ function startPtyHost(): void {
           if ((row.payload as SpawnJournal | null)?.paneId === paneId) journalDelete(row.id)
         }
         dropDispatchedPane(paneId) // w13/dispatch-visible — no ghost re-announce
+        // w17/adapter-seam — the pane is gone: final metering read, stale
+        // activity cleared (a title-only reader could never know it exited).
+        paneBridge.paneExited(paneId, typeof msg.exitCode === 'number' ? msg.exitCode : null)
         break
       }
       case 'pty': {
@@ -172,6 +175,10 @@ function startPtyHost(): void {
           if (!win.isDestroyed()) win.webContents.send(PtyApi.data, relayed)
         }
         if (smokeDataTap && relayed.type === 'data') smokeDataTap(relayed.paneId, relayed.data ?? '')
+        // w17/adapter-seam — observe AFTER the relay: the bridge reads terminal
+        // titles out of the identical bytes the renderer just got. It cannot
+        // rewrite, delay or swallow anything (docs/in-progress/SEAM-DESIGN.md).
+        if (relayed.type === 'data') paneBridge.observe(relayed.paneId, relayed.data ?? '')
         break
       }
     }
@@ -716,7 +723,9 @@ import {
   registerDispatchIpc,
   approvePlan,
   dispatch as dispatchPlan,
-  listRuns as listContextRuns
+  listRuns as listContextRuns,
+  // w17/adapter-seam — tapped in the pty relay above (imports are hoisted)
+  paneBridge
 } from './orchestrator/dispatcher'
 import { RunApi } from '../shared/ipc'
 import type { RunStatus } from '../shared/spawn-plan'

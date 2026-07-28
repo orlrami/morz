@@ -46,6 +46,10 @@ import { PortPool } from './port-pool'
 import { memoryPort, prependRenderedMemory } from '../memory/learn-port'
 // w15/model-choice — per-agent CLI model suffix for the visible launch command.
 import { launchSuffixFor } from '../services/model-choice'
+// w17/adapter-seam — passive observation of dispatched panes (see SEAM-DESIGN.md).
+import { scanWorktreeUsage } from './claude-usage'
+import { costMeter } from './cost-meter'
+import { createPaneBridge } from './pane-bridge'
 import {
   agentTransition,
   consumeApprovedPlan,
@@ -59,6 +63,8 @@ import {
   patchAgent,
   releaseApprovedPlan,
   runTransition,
+  setAgentActivityProvider,
+  setRunUsageProvider,
   storeApprovedPlan,
   TERMINAL_AGENT_STATES,
   TERMINAL_RUN_STATES,
@@ -233,6 +239,21 @@ function push(runId: string): void {
   if (status && host) host.push(status)
 }
 
+/* ── adapter seam: pane observation (w17, docs/in-progress/SEAM-DESIGN.md) ──
+ * The bridge reads terminal titles out of the PTY stream main has ALREADY
+ * relayed to the renderer, and reads token totals out of the CLI's own
+ * transcript. It never writes to a pane and never advances a run to done. */
+export const paneBridge = createPaneBridge({
+  setAgentState: (runId, agentId, state) => agentTransition(runId, agentId, state),
+  // Transcript scans are cumulative; the meter stores the last total and adds
+  // only the positive difference, so a repeated scan cannot double-count.
+  trackUsage: (runId, agentId, tokens) =>
+    costMeter.track(runId, agentId, { tokens, mode: 'total', source: 'transcript' }),
+  scanUsage: scanWorktreeUsage,
+  push,
+  now: () => Date.now()
+})
+
 /* ── kickoff bus tasks (DAG deps gate claiming) ── */
 
 /**
@@ -357,6 +378,9 @@ async function launchAgent(
   }
   patchAgent(runId, agent.agentId, { pane_id: paneId })
   patchAgent(runId, agent.agentId, { pid: await findPanePid(paneId) })
+  // w17/adapter-seam — observe from the pane's first byte, before the launch
+  // command is typed, so a CLI that titles itself immediately is not missed.
+  paneBridge.registerPane({ runId, agentId: agent.agentId, cli: agent.cli, paneId, worktree })
 
   // the visible launch — type what you'd type by hand (stub skips the CLI).
   // w13/dispatch-visible: push the pane into the renderer layout FIRST and wait
@@ -424,6 +448,7 @@ export async function dispatch(plan: SpawnPlan): Promise<{ runId: string }> {
 /** Kill every non-terminal agent's process tree, release its port, mark it cancelled. */
 async function teardownAgents(runId: string, spaceRoot: string, removeWorktrees = true): Promise<void> {
   const h = requireHost()
+  paneBridge.releaseRun(runId) // w17/adapter-seam — stop observing dying panes
   for (const row of getAgentRows(runId)) {
     if (!TERMINAL_AGENT_STATES.includes(row.state)) {
       if (row.pane_id) await Promise.resolve(h.killPane(row.pane_id)).catch(() => undefined)
@@ -581,6 +606,10 @@ function sweepStaleRuns(): void {
 export function registerDispatchIpc(ipcMain: IpcMain, deps: DispatcherHost): void {
   host = deps
   sweepStaleRuns()
+  // w17/adapter-seam — run status starts reporting observed activity and the
+  // meter's real totals instead of the hardcoded {usd:null,tokens:null}.
+  setAgentActivityProvider((runId, agentId) => paneBridge.activity(runId, agentId))
+  setRunUsageProvider((runId) => costMeter.usage(runId))
   ipcMain.handle(RunApi.approvePlan, (_e, plan: SpawnPlan) => approvePlan(plan))
   ipcMain.handle(RunApi.dispatch, (_e, plan: SpawnPlan) => dispatch(plan))
   // w14/orch-scoped — optional spaceRoot filter (no arg = unfiltered)

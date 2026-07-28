@@ -10,6 +10,8 @@
  * wave — coordinate anything breaking through integration.
  */
 import type { AgentId, TaskId } from './bus'
+// w17/adapter-seam — observed pane activity (type-only; no runtime dependency)
+import type { AgentActivity } from './agent-title-status'
 
 export const SPAWN_PLAN_VERSION = '1.0' as const
 
@@ -122,6 +124,11 @@ export interface AgentRunDetail {
   cli: PlannedCli
   /** Kickoff bus task gating this agent's DAG position (null until created). */
   kickoffTaskId: string | null
+  /* w17/adapter-seam — live activity observed from the pane's terminal titles.
+   * Independent of `state`: `state` is the lifecycle the orchestrator drives,
+   * `activity` is what the CLI is doing right now. null/absent = nothing
+   * observed (the CLI paints no recognizable title, or the pane is gone). */
+  activity?: AgentActivity | null
 }
 
 // declaration-merged onto RunStatus above (additive, optional)

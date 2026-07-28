@@ -9,6 +9,7 @@ import {
 } from '@tabler/icons-react'
 import type { ClearedRun, RunHistoryBridge, RunSummary } from '@shared/ipc'
 import type { MorzNotifyApi } from '@shared/notify'
+import type { AgentActivity } from '@shared/agent-title-status'
 import type { AgentRunState, RunState, RunStatus } from '@shared/spawn-plan'
 import { colors } from '@/lib/tokens'
 import {
@@ -36,6 +37,21 @@ const AGENT_STATE_COLOR: Record<AgentRunState, string> = {
   done: colors.done,
   failed: colors.error,
   cancelled: colors.quartzDim
+}
+
+/* w17/adapter-seam — what the CLI is doing right now, observed from its own
+ * terminal titles. Separate from the lifecycle state: an agent can be `running`
+ * in the ledger while its activity is `waiting` on the owner's approval. */
+const ACTIVITY_COLOR: Record<AgentActivity, string> = {
+  working: colors.working,
+  waiting: colors.blocked,
+  idle: colors.quartzDim
+}
+
+const ACTIVITY_LABEL: Record<AgentActivity, string> = {
+  working: 'working',
+  waiting: 'waiting for you',
+  idle: 'idle'
 }
 
 const RUN_STATE_COLOR: Record<RunState, string> = {
@@ -496,6 +512,21 @@ function RunDetail({
                     {state}
                   </span>
                 </div>
+                {detail?.activity && (
+                  <p
+                    className="mt-1.5 flex items-center gap-1 text-[9px]"
+                    style={{ color: ACTIVITY_COLOR[detail.activity] }}
+                    data-testid="agent-activity"
+                    data-activity={detail.activity}
+                    title="Observed from this pane's terminal title"
+                  >
+                    <span
+                      className="size-1.5 shrink-0 rounded-full"
+                      style={{ background: ACTIVITY_COLOR[detail.activity] }}
+                    />
+                    {ACTIVITY_LABEL[detail.activity]}
+                  </p>
+                )}
                 <dl className="mt-2 grid grid-cols-[42px_minmax(0,1fr)] gap-x-2 gap-y-0.5 font-mono text-[8.5px] leading-relaxed">
                   <dt style={{ color: colors.quartzDim }}>pane</dt>
                   <dd className="truncate" style={{ color: colors.quartz }} title={detail?.paneId}>
@@ -520,6 +551,29 @@ function RunDetail({
             )
           })}
         </div>
+      )}
+
+      {status && (status.usage.tokens !== null || status.usage.usd !== null) && (
+        <dl
+          className="mt-3 flex items-center gap-3 border-t pt-2 font-mono text-[8.5px]"
+          style={{ borderColor: 'var(--color-line)' }}
+          data-testid="run-usage"
+        >
+          {status.usage.tokens !== null && (
+            <div className="flex items-center gap-1">
+              <dt style={{ color: colors.quartzDim }}>tokens</dt>
+              <dd style={{ color: colors.quartz }} data-testid="run-usage-tokens">
+                {status.usage.tokens.toLocaleString()}
+              </dd>
+            </div>
+          )}
+          {status.usage.usd !== null && (
+            <div className="flex items-center gap-1">
+              <dt style={{ color: colors.quartzDim }}>usd</dt>
+              <dd style={{ color: colors.quartz }}>{status.usage.usd.toFixed(4)}</dd>
+            </div>
+          )}
+        </dl>
       )}
 
       {status && (

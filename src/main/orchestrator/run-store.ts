@@ -19,6 +19,7 @@ import { app } from 'electron'
 import { join } from 'path'
 import { mkdirSync } from 'fs'
 import type { AgentId } from '../../shared/bus'
+import type { AgentActivity } from '../../shared/agent-title-status'
 import type { ClearedRun, RunHistoryPolicy, RunSummary } from '../../shared/ipc'
 import type {
   AgentRunDetail,
@@ -299,6 +300,27 @@ export function patchAgent(
 
 /* ── status projection ── */
 
+/*
+ * w17/adapter-seam — two live facts the ledger deliberately does not persist.
+ * Observed pane activity is meaningless after a restart (the pane is gone), and
+ * usage totals belong to the cost meter's own tables. Both are injected so the
+ * run store keeps no dependency on the bridge or the meter; unset = today's
+ * behavior exactly (no activity, null usage).
+ */
+type UsageProvider = (runId: string) => { usd: number | null; tokens: number | null }
+type ActivityProvider = (runId: string, agentId: AgentId) => AgentActivity | null
+
+let usageProvider: UsageProvider | null = null
+let activityProvider: ActivityProvider | null = null
+
+export function setRunUsageProvider(provider: UsageProvider | null): void {
+  usageProvider = provider
+}
+
+export function setAgentActivityProvider(provider: ActivityProvider | null): void {
+  activityProvider = provider
+}
+
 export function getRunStatus(runId: string): RunStatus | null {
   const run = getRunRow(runId)
   if (!run) return null
@@ -313,7 +335,8 @@ export function getRunStatus(runId: string): RunStatus | null {
       worktree: row.worktree,
       branch: row.branch,
       cli: row.cli as AgentRunDetail['cli'],
-      kickoffTaskId: row.kickoff_task_id
+      kickoffTaskId: row.kickoff_task_id,
+      activity: readActivity(runId, row.agent_id)
     }
   }
   return {
@@ -323,9 +346,26 @@ export function getRunStatus(runId: string): RunStatus | null {
     state: run.state,
     agents,
     agentsDetail,
-    usage: { usd: null, tokens: null },
+    usage: readUsage(runId),
     startedAt: run.started_at,
     endedAt: run.ended_at
+  }
+}
+
+/** A failing provider must never take the whole run status down with it. */
+function readUsage(runId: string): { usd: number | null; tokens: number | null } {
+  try {
+    return usageProvider?.(runId) ?? { usd: null, tokens: null }
+  } catch {
+    return { usd: null, tokens: null }
+  }
+}
+
+function readActivity(runId: string, agentId: AgentId): AgentActivity | null {
+  try {
+    return activityProvider?.(runId, agentId) ?? null
+  } catch {
+    return null
   }
 }
 
