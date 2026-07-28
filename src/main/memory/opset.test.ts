@@ -290,10 +290,53 @@ test('audit table records and lists applied ops newest-first', () => {
   db.close()
 })
 
+test('audit migration adds an idempotency key and deduplicates crash retries', () => {
+  const db = testDb('audit-idempotency.db')
+  db.exec(`
+    CREATE TABLE memory_ops_audit (
+      seq INTEGER PRIMARY KEY AUTOINCREMENT,
+      op TEXT NOT NULL,
+      memory_id TEXT NOT NULL,
+      target_id TEXT,
+      old_title TEXT, old_body TEXT,
+      new_title TEXT, new_body TEXT,
+      reason TEXT,
+      source TEXT NOT NULL,
+      ts TEXT NOT NULL
+    );
+    INSERT INTO memory_ops_audit
+      (op, memory_id, source, ts)
+    VALUES ('add', 'legacy-rule', 'proposal:legacy', '2026-07-01T00:00:00.000Z');
+  `)
+
+  ensureMemoryAuditTable(db)
+  const columns = db.prepare('PRAGMA table_info(memory_ops_audit)').all() as { name: string }[]
+  assert.ok(columns.some((column) => column.name === 'idempotency_key'))
+
+  const retry = {
+    op: 'update' as const,
+    memoryId: 'prefer-pnpm',
+    targetId: 'prefer-pnpm',
+    old: { title: 'Use pnpm', body: 'Always.' },
+    next: { title: 'Use bun', body: 'Switched.' },
+    source: 'proposal:p2',
+    ts: '2026-07-24T11:00:00.000Z',
+    idempotencyKey: 'p2'
+  }
+  recordMemoryOpAudit(db, retry)
+  recordMemoryOpAudit(db, retry)
+
+  const rows = listMemoryOpAudit(db)
+  assert.equal(rows.length, 2)
+  assert.equal(rows[0].idempotencyKey, 'p2')
+  assert.equal(rows[1].idempotencyKey, null)
+  db.close()
+})
+
 /* ------------------------------------------------------------ soft-expiry — */
 
 test('expireEntry soft-expires (kept + restorable), restoreEntry undoes it', () => {
-  const original = entry()
+  const original = entry({ supersededBy: 'prefer-bun' })
   const expired = expireEntry(original, '2026-07-24T12:00:00.000Z', 'run-42')
   assert.equal(expired.expiredAt, '2026-07-24T12:00:00.000Z')
   assert.equal(expired.invalidAt, '2026-07-24T12:00:00.000Z')
@@ -308,6 +351,7 @@ test('expireEntry soft-expires (kept + restorable), restoreEntry undoes it', () 
   const restored = restoreEntry(expired)
   assert.equal(restored.expiredAt, undefined)
   assert.equal(restored.invalidAt, undefined)
+  assert.equal(restored.supersededBy, undefined)
   assert.equal(isActiveEntry(restored), true)
 })
 

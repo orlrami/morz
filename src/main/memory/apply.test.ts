@@ -1,0 +1,226 @@
+import assert from 'node:assert/strict'
+import test from 'node:test'
+import type { MemoryEntry, MemoryOpAuditRow, MemoryProposal } from '../../shared/memory'
+import {
+  applyApprovedMemoryProposal,
+  assertMemoryProposalCurrent,
+  assertRestoreAllowed,
+  memoryRevision,
+  type MemoryApplyAuditInput,
+  type MemoryApplyDeps,
+  type MemoryApplyFailpoint
+} from './apply'
+
+const NOW = '2026-07-28T12:00:00.000Z'
+
+function entry(overrides: Partial<MemoryEntry> = {}): MemoryEntry {
+  return {
+    id: 'prefer-pnpm',
+    scope: 'global',
+    kind: 'rule',
+    title: 'Use pnpm',
+    body: 'Use pnpm for JavaScript dependencies.',
+    origin: 'user',
+    createdAt: '2026-07-01T12:00:00.000Z',
+    updatedAt: '2026-07-01T12:00:00.000Z',
+    enabled: true,
+    ...overrides
+  }
+}
+
+function updateProposal(
+  target: MemoryEntry,
+  overrides: Partial<MemoryProposal> = {}
+): MemoryProposal {
+  return {
+    id: 'proposal-switch-package-manager',
+    entry: {
+      id: target.id,
+      scope: target.scope,
+      scopeRef: target.scopeRef,
+      kind: target.kind,
+      title: 'Use bun',
+      body: 'Use bun for JavaScript dependencies.',
+      origin: 'learned',
+      enabled: true
+    },
+    evidence: ['The user corrected the package manager.'],
+    ts: NOW,
+    state: 'approved',
+    op: {
+      kind: 'update',
+      targetId: target.id,
+      targetRevision: memoryRevision(target),
+      old: { title: target.title, body: target.body },
+      next: { title: 'Use bun', body: 'Use bun for JavaScript dependencies.' }
+    },
+    ...overrides
+  }
+}
+
+class ApplyHarness {
+  readonly documents = new Map<string, MemoryEntry>()
+  readonly index = new Map<string, MemoryEntry>()
+  readonly audit = new Map<string, MemoryApplyAuditInput>()
+  applied = false
+  private tripped = false
+
+  constructor(
+    seed: MemoryEntry,
+    private readonly failAt?: MemoryApplyFailpoint
+  ) {
+    this.documents.set(seed.id, structuredClone(seed))
+    this.index.set(seed.id, structuredClone(seed))
+  }
+
+  deps(): MemoryApplyDeps {
+    return {
+      getMemory: (id) => {
+        const found = this.documents.get(id)
+        return found ? structuredClone(found) : null
+      },
+      writeEntries: (entries, removeIds) => {
+        for (const id of removeIds) this.documents.delete(id)
+        for (const value of entries) this.documents.set(value.id, structuredClone(value))
+      },
+      indexEntries: (entries, removeIds) => {
+        for (const id of removeIds) this.index.delete(id)
+        for (const value of entries) this.index.set(value.id, structuredClone(value))
+      },
+      recordAudit: (input) => {
+        if (!this.audit.has(input.idempotencyKey)) {
+          this.audit.set(input.idempotencyKey, structuredClone(input))
+        }
+      },
+      markApplied: () => {
+        this.applied = true
+      },
+      now: () => NOW,
+      failpoint: (point) => {
+        if (!this.tripped && point === this.failAt) {
+          this.tripped = true
+          throw new Error(`simulated crash after ${point}`)
+        }
+      }
+    }
+  }
+}
+
+test('approved UPDATE keeps the clean live id and links both directions', () => {
+  const old = entry()
+  const harness = new ApplyHarness(old)
+  const saved = applyApprovedMemoryProposal(updateProposal(old), harness.deps())
+
+  assert.equal(saved?.id, 'prefer-pnpm')
+  assert.ok(saved?.supersedesId)
+  assert.match(saved.supersedesId, /^prefer-pnpm-rev-[a-f0-9]{12}$/)
+
+  const expired = harness.documents.get(saved.supersedesId)
+  assert.equal(expired?.title, 'Use pnpm')
+  assert.equal(expired?.supersededBy, 'prefer-pnpm')
+  assert.equal(expired?.expiredAt, NOW)
+  assert.equal(harness.documents.size, 2)
+  assert.equal(harness.audit.size, 1)
+})
+
+test('legacy link-less entries remain valid update targets', () => {
+  const legacy = entry()
+  assert.equal(legacy.supersedesId, undefined)
+  assert.equal(legacy.supersededBy, undefined)
+  assert.match(memoryRevision(legacy), /^[a-f0-9]{64}$/)
+
+  const harness = new ApplyHarness(legacy)
+  const saved = applyApprovedMemoryProposal(updateProposal(legacy), harness.deps())
+  assert.equal(saved?.title, 'Use bun')
+  assert.equal(harness.index.size, 2)
+})
+
+test('CAS rejects the second proposal staged against the same target revision', () => {
+  const old = entry()
+  const proposalA = updateProposal(old)
+  const proposalB = updateProposal(old, {
+    id: 'proposal-use-npm',
+    entry: {
+      ...updateProposal(old).entry,
+      title: 'Use npm',
+      body: 'Use npm for JavaScript dependencies.'
+    },
+    op: {
+      ...updateProposal(old).op!,
+      next: { title: 'Use npm', body: 'Use npm for JavaScript dependencies.' }
+    }
+  })
+  const harness = new ApplyHarness(old)
+
+  assertMemoryProposalCurrent(proposalA, harness.deps().getMemory)
+  assertMemoryProposalCurrent(proposalB, harness.deps().getMemory)
+  applyApprovedMemoryProposal(proposalA, harness.deps())
+
+  assert.throws(
+    () => assertMemoryProposalCurrent(proposalB, harness.deps().getMemory),
+    /Memory changed since this was proposed — re-propose\./
+  )
+  assert.throws(
+    () => applyApprovedMemoryProposal(proposalB, harness.deps()),
+    /Memory changed since this was proposed — re-propose\./
+  )
+  assert.equal(harness.audit.size, 1)
+})
+
+for (const failpoint of ['markdown', 'index', 'audit', 'applied'] as const) {
+  test(`UPDATE recovers exactly once after a crash at the ${failpoint} boundary`, () => {
+    const old = entry()
+    const proposal = updateProposal(old)
+    const harness = new ApplyHarness(old, failpoint)
+
+    assert.throws(
+      () => applyApprovedMemoryProposal(proposal, harness.deps()),
+      new RegExp(`simulated crash after ${failpoint}`)
+    )
+    applyApprovedMemoryProposal(proposal, harness.deps())
+
+    const active = [...harness.documents.values()].filter((value) => !value.expiredAt)
+    const expired = [...harness.documents.values()].filter((value) => value.expiredAt)
+    assert.deepEqual(active.map((value) => value.id), ['prefer-pnpm'])
+    assert.equal(active[0].title, 'Use bun')
+    assert.equal(expired.length, 1)
+    assert.equal(expired[0].supersededBy, active[0].id)
+    assert.equal(harness.index.size, 2)
+    assert.equal(harness.audit.size, 1)
+    assert.equal(harness.applied, true)
+  })
+}
+
+test('restore fails while the linked successor is live', () => {
+  const old = entry()
+  const harness = new ApplyHarness(old)
+  const successor = applyApprovedMemoryProposal(updateProposal(old), harness.deps())
+  assert.ok(successor?.supersedesId)
+  const expired = harness.documents.get(successor.supersedesId)
+  assert.ok(expired)
+
+  assert.throws(
+    () => assertRestoreAllowed(expired, harness.deps().getMemory),
+    /Cannot restore memory while its successor is active/
+  )
+
+  harness.documents.set(successor.id, { ...successor, expiredAt: NOW, invalidAt: NOW })
+  assert.doesNotThrow(() => assertRestoreAllowed(expired, harness.deps().getMemory))
+})
+
+test('audit input stays compatible with the public audit row shape', () => {
+  const row: Omit<MemoryOpAuditRow, 'seq'> = {
+    op: 'update',
+    memoryId: 'prefer-pnpm',
+    targetId: 'prefer-pnpm',
+    oldTitle: 'Use pnpm',
+    oldBody: 'Use pnpm for JavaScript dependencies.',
+    newTitle: 'Use bun',
+    newBody: 'Use bun for JavaScript dependencies.',
+    reason: null,
+    source: 'proposal:proposal-switch-package-manager',
+    ts: NOW,
+    idempotencyKey: 'proposal-switch-package-manager'
+  }
+  assert.equal(row.idempotencyKey, 'proposal-switch-package-manager')
+})
