@@ -1,9 +1,10 @@
 import { createHash } from 'node:crypto'
-import type {
-  MemoryEntry,
-  MemoryOp,
-  MemoryOpAuditRow,
-  MemoryProposal
+import {
+  memoryWriteRejection,
+  type MemoryEntry,
+  type MemoryOp,
+  type MemoryOpAuditRow,
+  type MemoryProposal
 } from '../../shared/memory'
 
 export type MemoryApplyFailpoint = 'markdown' | 'index' | 'audit' | 'applied'
@@ -139,6 +140,16 @@ export function assertMemoryProposalCurrent(
   if (!op.targetId || !op.old) throw new Error(`A ${op.kind} op requires a target snapshot`)
   const target = getMemory(op.targetId)
   if (!target || target.expiredAt) throw new Error(CAS_ERROR)
+  // w17/context-blocks — apply writes documents directly (not via saveMemory),
+  // so the read-only guard must also run here: a locked fact can never be
+  // superseded or deleted by an approved op until the user unlocks it.
+  const readOnlyRejection = memoryWriteRejection(
+    target,
+    op.kind === 'delete'
+      ? null
+      : { ...proposal.entry, createdAt: target.createdAt, updatedAt: target.updatedAt }
+  )
+  if (readOnlyRejection) throw new Error(readOnlyRejection)
   // Pre-wave proposals carry no revision hash, and their old title/body
   // snapshot ignores every other mutable field (a proposal staged while the
   // fact was enabled would still apply after the user disabled it). They must

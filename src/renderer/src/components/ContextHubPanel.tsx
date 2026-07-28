@@ -14,6 +14,7 @@ import {
 } from '@tabler/icons-react'
 import type {
   ContextFileState,
+  ContextMemoryKind,
   ContextProposal,
   ContextSharedBlockInput,
   ContextSpaceInput,
@@ -34,6 +35,13 @@ const BLOCK_KINDS: Array<{ value: ContextSharedBlockInput['kind']; label: string
   { value: 'gemini', label: 'GEMINI.md' },
   { value: 'status', label: 'STATUS.md' },
   { value: 'readme', label: 'README.md' }
+]
+// w17/context-blocks — the memory block reaches every CLI's context file, one
+// diff per file. CLAUDE.md stays the default so existing exports are unchanged.
+const MEMORY_KINDS: Array<{ value: ContextMemoryKind; label: string }> = [
+  { value: 'claude', label: 'CLAUDE.md' },
+  { value: 'agents', label: 'AGENTS.md' },
+  { value: 'gemini', label: 'GEMINI.md' }
 ]
 
 function formatTime(value: string | null): string {
@@ -295,6 +303,7 @@ export function ContextHubPanel(): JSX.Element {
   const [blockName, setBlockName] = useState('')
   const [blockContent, setBlockContent] = useState('')
   const [blockKind, setBlockKind] = useState<ContextSharedBlockInput['kind']>('claude')
+  const [memoryKinds, setMemoryKinds] = useState<Set<ContextMemoryKind>>(new Set(['claude']))
 
   const spaces = useMemo<ContextSpaceInput[]>(
     () => allSpaces
@@ -342,8 +351,20 @@ export function ContextHubPanel(): JSX.Element {
     setProposals(next)
   }
 
+  const toggleMemoryKind = (kind: ContextMemoryKind): void => {
+    setMemoryKinds((current) => {
+      const next = new Set(current)
+      if (next.has(kind)) next.delete(kind)
+      else next.add(kind)
+      return next
+    })
+  }
+
   const reviewMemory = async (): Promise<void> => {
-    const next = await proposeMemoryBlock({ spaceIds: [...selectedSpaces] })
+    const next = await proposeMemoryBlock({
+      spaceIds: [...selectedSpaces],
+      kinds: [...memoryKinds]
+    })
     setEditor(null)
     setProposals(next)
   }
@@ -466,11 +487,29 @@ export function ContextHubPanel(): JSX.Element {
                   <div className="rounded-xl border p-4" style={{ borderColor: 'var(--color-line-strong)', background: 'rgba(203,162,90,0.04)' }}>
                     <div className="flex items-center gap-2 text-sm font-semibold" style={{ color: colors.quartz }}>
                       <IconBrain size={16} style={{ color: colors.bronzeHot }} />
-                      Managed CLAUDE.md memory
+                      Managed memory block
                     </div>
                     <p className="mt-2 text-[11px] leading-relaxed" style={{ color: colors.quartzDim }}>
-                      Enabled, approved memories are rendered into one deterministic <code className="font-mono">&lt;!-- morz:memory --&gt;</code> block per selected Space.
+                      Enabled, approved memories are rendered into one deterministic <code className="font-mono">&lt;!-- morz:memory --&gt;</code> block per selected file — the same content in every CLI&apos;s context file.
                     </p>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {MEMORY_KINDS.map((kind) => (
+                        <label
+                          key={kind.value}
+                          className="flex cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-1.5 text-[11px]"
+                          style={{ color: colors.quartz, borderColor: 'var(--color-line-strong)' }}
+                        >
+                          <input
+                            type="checkbox"
+                            aria-label={`Write ${kind.label}`}
+                            checked={memoryKinds.has(kind.value)}
+                            onChange={() => toggleMemoryKind(kind.value)}
+                            className="size-4 accent-[#CBA25A]"
+                          />
+                          <span className="font-mono">{kind.label}</span>
+                        </label>
+                      ))}
+                    </div>
                   </div>
                 ) : (
                   <div className="rounded-xl border p-4" style={{ borderColor: 'var(--color-line-strong)', background: 'rgba(203,162,90,0.04)' }}>
@@ -511,10 +550,13 @@ export function ContextHubPanel(): JSX.Element {
                       : editor === 'memory'
                         ? reviewMemory()
                         : reviewStatus()
-                  )}
+                  // a refused proposal (e.g. a read-only block) is reported on
+                  // the error banner; it must not surface as an unhandled reject
+                  ).catch(() => undefined)}
                   disabled={
                     selectedSpaces.size === 0 ||
-                    (editor === 'block' && (!blockName.trim() || !blockContent.trim()))
+                    (editor === 'block' && (!blockName.trim() || !blockContent.trim())) ||
+                    (editor === 'memory' && memoryKinds.size === 0)
                   }
                   className="mt-auto min-h-9 cursor-pointer rounded-[9px] px-3 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-40"
                   style={{ color: '#241c0a', background: `linear-gradient(180deg, ${colors.bronzeHot}, ${colors.bronze})` }}
@@ -522,7 +564,7 @@ export function ContextHubPanel(): JSX.Element {
                   {editor === 'block'
                     ? `Review ${selectedSpaces.size} block diff${selectedSpaces.size === 1 ? '' : 's'}`
                     : editor === 'memory'
-                      ? `Review ${selectedSpaces.size} memory diff${selectedSpaces.size === 1 ? '' : 's'}`
+                      ? `Review ${selectedSpaces.size * memoryKinds.size} memory diff${selectedSpaces.size * memoryKinds.size === 1 ? '' : 's'}`
                       : `Review ${selectedSpaces.size} status diff${selectedSpaces.size === 1 ? '' : 's'}`}
                 </button>
               </div>

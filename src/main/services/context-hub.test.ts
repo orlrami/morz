@@ -12,6 +12,7 @@ import {
 import { tmpdir } from 'node:os'
 import { join, sep } from 'node:path'
 import { afterEach, test } from 'node:test'
+import type { MemoryEntry } from '../../shared/memory'
 import { createConfigWriter, ConfigWriterError } from './config-writer'
 import { createContextHubService } from './context-hub'
 
@@ -430,6 +431,111 @@ test('memory export neutralizes paired, unpaired, and nested Morz control marker
   assert.equal((content.match(/<!-- morz:memory -->/g) ?? []).length, 1)
   assert.equal((content.match(/<!-- morz:block:safe -->/g) ?? []).length, 1)
   assert.doesNotMatch(content, /<!-- morz:block:(?:title|paired|unpaired) -->/)
+})
+
+/* ── w17/context-blocks ── */
+
+const TEAM_MEMORIES: MemoryEntry[] = [
+  {
+    id: 'team-branching',
+    scope: 'space',
+    scopeRef: 'fixture',
+    kind: 'rule',
+    title: 'Branch per agent',
+    body: 'Every dispatched agent works in its own worktree branch.',
+    origin: 'user',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-02T00:00:00.000Z',
+    enabled: true
+  }
+]
+
+test('a memory export writes the same block into every requested CLI context file', async () => {
+  const root = tempProject('memory-kinds')
+  writeFileSync(join(root, 'CLAUDE.md'), '# Fixture\n')
+  writeFileSync(join(root, 'AGENTS.md'), '# Agents\n\n<!-- morz:block:house -->\nHouse rules\n<!-- /morz:block -->\n')
+  const service = createContextHubService({ listMemories: () => TEAM_MEMORIES })
+  await service.scan([{ id: 'fixture', name: 'Fixture', root }])
+
+  const proposals = await service.proposeMemoryBlock({
+    spaceIds: ['fixture'],
+    kinds: ['claude', 'agents', 'gemini']
+  })
+  assert.deepEqual(
+    proposals.map((proposal) => proposal.relativePath),
+    ['CLAUDE.md', 'AGENTS.md', 'GEMINI.md']
+  )
+  for (const proposal of proposals) await service.applyProposal(proposal.proposalId)
+
+  const bodies = ['CLAUDE.md', 'AGENTS.md', 'GEMINI.md'].map((name) =>
+    readFileSync(join(root, name), 'utf8')
+  )
+  for (const content of bodies) {
+    assert.equal((content.match(/<!-- morz:memory -->/g) ?? []).length, 1)
+    assert.equal((content.match(/<!-- \/morz:memory -->/g) ?? []).length, 1)
+    assert.match(content, /Branch per agent/)
+  }
+  // one canonical team render — the block body is byte-identical everywhere
+  const block = /<!-- morz:memory -->\n([\s\S]*?)\n<!-- \/morz:memory -->/
+  const [claudeBlock, agentsBlock, geminiBlock] = bodies.map((content) => block.exec(content)![1])
+  assert.equal(agentsBlock, claudeBlock)
+  assert.equal(geminiBlock, claudeBlock)
+  // an unrelated shared block in AGENTS.md survives untouched
+  assert.match(bodies[1], /<!-- morz:block:house -->\nHouse rules\n<!-- \/morz:block -->/)
+
+  // re-proposing is idempotent per file
+  const repeated = await service.proposeMemoryBlock({
+    spaceIds: ['fixture'],
+    kinds: ['claude', 'agents', 'gemini']
+  })
+  for (const proposal of repeated) await service.applyProposal(proposal.proposalId)
+  for (const name of ['CLAUDE.md', 'AGENTS.md', 'GEMINI.md']) {
+    const content = readFileSync(join(root, name), 'utf8')
+    assert.equal((content.match(/<!-- morz:memory -->/g) ?? []).length, 1)
+  }
+})
+
+test('an empty memory store proposes an empty managed block instead of throwing', async () => {
+  const root = tempProject('memory-empty')
+  writeFileSync(join(root, 'CLAUDE.md'), '# Fixture\n')
+  const service = createContextHubService({ listMemories: () => [] })
+  await service.scan([{ id: 'fixture', name: 'Fixture', root }])
+
+  const [proposal] = await service.proposeMemoryBlock({ spaceIds: ['fixture'] })
+  await service.applyProposal(proposal.proposalId)
+
+  const content = readFileSync(join(root, 'CLAUDE.md'), 'utf8')
+  assert.match(content, /<!-- morz:memory -->\n\n<!-- \/morz:memory -->/)
+})
+
+test('a read-only memory block rejects the proposal instead of rewriting the file', async () => {
+  const root = tempProject('memory-read-only')
+  const locked = '# Fixture\n\n<!-- morz:memory read-only -->\nHand written.\n<!-- /morz:memory -->\n'
+  writeFileSync(join(root, 'CLAUDE.md'), locked)
+  const service = createContextHubService({ listMemories: () => TEAM_MEMORIES })
+  await service.scan([{ id: 'fixture', name: 'Fixture', root }])
+
+  await assert.rejects(
+    () => service.proposeMemoryBlock({ spaceIds: ['fixture'] }),
+    /read-only Morz memory block/
+  )
+  assert.equal(readFileSync(join(root, 'CLAUDE.md'), 'utf8'), locked)
+})
+
+test('memory export rejects unknown target files', async () => {
+  const root = tempProject('memory-kind-invalid')
+  writeFileSync(join(root, 'CLAUDE.md'), '# Fixture\n')
+  const service = createContextHubService({ listMemories: () => TEAM_MEMORIES })
+  await service.scan([{ id: 'fixture', name: 'Fixture', root }])
+
+  await assert.rejects(
+    () => service.proposeMemoryBlock({ spaceIds: ['fixture'], kinds: ['status'] as never }),
+    /Memory target files are invalid/
+  )
+  await assert.rejects(
+    () => service.proposeMemoryBlock({ spaceIds: ['fixture'], kinds: [] }),
+    /Memory target files are invalid/
+  )
 })
 
 test('status upkeep proposes a deterministic managed block from verified branch, run, and E2E data', async () => {

@@ -81,8 +81,15 @@ export interface ContextSharedBlockInput {
   kind: 'claude' | 'agents' | 'gemini' | 'status' | 'readme'
 }
 
+/** Context files that can carry the managed `<!-- morz:memory -->` block. */
+export type ContextMemoryKind = 'claude' | 'agents' | 'gemini'
+
+export const CONTEXT_MEMORY_KINDS: readonly ContextMemoryKind[] = ['claude', 'agents', 'gemini']
+
 export interface ContextMemoryBlockInput {
   spaceIds: string[]
+  /** One proposal per space × kind. Omitted = CLAUDE.md only (0.0.5 behavior). */
+  kinds?: ContextMemoryKind[]
 }
 
 export interface ContextStatusBlockInput {

@@ -4,6 +4,7 @@ import { mkdirSync } from 'fs'
 import { join } from 'path'
 import {
   MemoryApi,
+  memoryWriteRejection,
   type MemoryEntry,
   type MemoryInjection as MemoryInjectionContract,
   type MemoryScope
@@ -166,7 +167,14 @@ function saveMemory(value: unknown): MemoryEntry {
   ensureInitialized()
   const candidate = value && typeof value === 'object' ? value as Record<string, unknown> : null
   const id = validateId(candidate?.id)
-  const entry = normalizeEntry(value, getMemory(id))
+  const existing = getMemory(id)
+  const entry = normalizeEntry(value, existing)
+  // w17/context-blocks — read-only is enforced here on the direct-save path.
+  // The guard runs on the NORMALIZED candidate so an unlock is compared field
+  // by field against what is stored — unlocking and rewriting in one call is
+  // not an unlock. The op-set apply path enforces the same guard in apply.ts.
+  const rejection = memoryWriteRejection(existing, entry)
+  if (rejection) throw new Error(rejection)
   writeMemoryEntries([entry])
   indexMemoryEntries([entry])
   emitMemoryChanged()

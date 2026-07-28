@@ -43,13 +43,19 @@ import { acceptTask, createTask } from '../bus/board'
 import { journalEntries } from '../store/db'
 import { PortPool } from './port-pool'
 // Memory launch helper; the marked write-site below is the only behavior change.
-import { memoryPort, prependRenderedMemory } from '../memory/learn-port'
+import { joinRenderedMemory, memoryPort } from '../memory/learn-port'
 import {
   logDispatchedInterrupt,
   logDispatchedSpawn
 } from '../memory/event-log'
 // w15/model-choice — per-agent CLI model suffix for the visible launch command.
 import { launchSuffixFor } from '../services/model-choice'
+// w17/context-blocks — plan.spaceRoot → the renderer's Space id.
+import {
+  awaitSpaceRegistryReady,
+  resolveSpaceId,
+  spaceRegistryReady
+} from '../services/space-registry'
 import {
   agentTransition,
   consumeApprovedPlan,
@@ -98,6 +104,8 @@ export interface DispatcherHost {
 let host: DispatcherHost | null = null
 /** Renderer attach handshake bound (window open; a silent renderer is a bug). */
 const ATTACH_TIMEOUT_MS = 30_000
+/** How long a dispatch waits for the renderer's first Space publish. */
+const SPACE_REGISTRY_TIMEOUT_MS = 5_000
 const pool = new PortPool()
 const watchers = new Map<string, NodeJS.Timeout>()
 /** Runs mid-stop — the watcher must not race the kill with 'failed' marks. */
@@ -302,12 +310,34 @@ async function addWorktreeExclude(worktree: string, pattern: string): Promise<vo
 
 /* ── dispatch ── */
 
+/**
+ * w17/context-blocks — the team's memory, rendered ONCE for the whole run.
+ *
+ * Agents launch sequentially with git and pane work between them, so rendering
+ * inside `launchAgent` let a memory change mid-dispatch hand later agents a
+ * different "shared" block (Codex round-1). These renders are synchronous and
+ * consecutive, so every agent of a run sees one instant of the store: the
+ * shared portion is byte-identical by construction, and a fact approved while
+ * the team is still coming up reaches the NEXT run, not half of this one.
+ */
+function renderTeamMemory(plan: SpawnPlan, spaceId: string | undefined): Map<string, string> {
+  const byAgent = new Map<string, string>()
+  for (const agent of plan.agents) {
+    byAgent.set(
+      agent.agentId,
+      memoryPort.render({ projectRoot: plan.spaceRoot, spaceId, agentId: agent.agentId })
+    )
+  }
+  return byAgent
+}
+
 async function launchAgent(
   runId: string,
   runTag: string,
   plan: SpawnPlan,
   agent: PlannedAgent,
-  kickoffTaskId: string
+  kickoffTaskId: string,
+  renderedMemory: string
 ): Promise<void> {
   const h = requireHost()
   // ..\<run-tag>-<agent> beside the space root, exactly like a by-hand worktree
@@ -326,13 +356,9 @@ async function launchAgent(
   const seedDir = join(worktree, '.morz')
   mkdirSync(seedDir, { recursive: true })
   const seedPath = join(seedDir, 'kickoff.md')
-  // w8/memory-learn — prepend approved memory once per dispatched agent promptSeed.
-  const promptSeed = prependRenderedMemory(
-    memoryPort,
-    { projectRoot: plan.spaceRoot, agentId: agent.agentId },
-    agent.promptSeed
-  )
-  writeFileSync(seedPath, promptSeed, 'utf8')
+  // w8/memory-learn — approved memory rides this agent's promptSeed, rendered
+  // once for the whole run before any agent launched (see renderTeamMemory).
+  writeFileSync(seedPath, joinRenderedMemory(renderedMemory, agent.promptSeed), 'utf8')
 
   const paneId = `${runTag}-${agent.agentId}`
   const env: Record<string, string> = {
@@ -399,6 +425,21 @@ export async function dispatch(plan: SpawnPlan): Promise<{ runId: string }> {
     throw new Error('[dispatch] plan hash mismatch — submitted plan differs from the stored approved plan')
   }
 
+  /*
+   * w17/context-blocks — a team must not launch with space memory silently
+   * missing (Codex round-1). An unready registry is a cold-start race, so wait
+   * briefly, then fail closed. A root the READY registry simply does not know
+   * is a different thing — a folder that is not one of the user's Spaces — and
+   * launches fine with no space-scoped facts.
+   */
+  if (!spaceRegistryReady()) await awaitSpaceRegistryReady(SPACE_REGISTRY_TIMEOUT_MS)
+  if (!spaceRegistryReady()) {
+    throw new Error(
+      '[dispatch] space registry unavailable — Morz cannot tell which Space this plan belongs to, so its memory would be dropped; reopen the window and retry'
+    )
+  }
+  const spaceId = resolveSpaceId({ root: stored.spaceRoot })
+
   const runId = randomUUID()
   if (!consumeApprovedPlan(planHash, runId)) {
     throw new Error('[dispatch] plan already dispatched — approve a fresh plan')
@@ -410,8 +451,16 @@ export async function dispatch(plan: SpawnPlan): Promise<{ runId: string }> {
 
   try {
     const kickoffTasks = createKickoffTasks(stored)
+    const memoryByAgent = renderTeamMemory(stored, spaceId)
     for (const agent of stored.agents) {
-      await launchAgent(runId, runTag, stored, agent, kickoffTasks.get(agent.agentId)!)
+      await launchAgent(
+        runId,
+        runTag,
+        stored,
+        agent,
+        kickoffTasks.get(agent.agentId)!,
+        memoryByAgent.get(agent.agentId) ?? ''
+      )
     }
     runTransition(runId, 'running')
     push(runId)

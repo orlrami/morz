@@ -173,6 +173,14 @@ function EntryCard({ entry }: { entry: MemoryEntry }): JSX.Element {
                     Replaced by #{entry.supersededBy} on {(entry.invalidAt ?? entry.expiredAt ?? entry.updatedAt).slice(0, 10)}
                   </span>
                 )}
+                {entry.readOnly && (
+                  <span
+                    className="rounded-full border px-1.5 py-0.5"
+                    style={{ borderColor: 'rgba(203,162,90,0.45)', color: colors.bronzeHot }}
+                  >
+                    read-only
+                  </span>
+                )}
               </div>
             </div>
             {entry.expiredAt ? (
@@ -192,7 +200,7 @@ function EntryCard({ entry }: { entry: MemoryEntry }): JSX.Element {
                   type="checkbox"
                   aria-label={`Enable ${entry.title}`}
                   checked={entry.enabled}
-                  disabled={isBusy}
+                  disabled={isBusy || entry.readOnly === true}
                   onChange={(event) => void setEnabled(entry.id, event.target.checked)}
                   className="size-3.5 accent-[#CBA25A]"
                 />
@@ -206,16 +214,31 @@ function EntryCard({ entry }: { entry: MemoryEntry }): JSX.Element {
             </p>
           )}
           <div className="mt-2 flex justify-end gap-1">
-            <button
-              type="button"
-              aria-label={`Edit ${entry.title}`}
-              onClick={() => setEditing(true)}
-              className="rounded-md p-1.5"
-              style={{ color: colors.quartzDim }}
-            >
-              <IconPencil size={12} stroke={1.5} />
-            </button>
-            {confirmDelete ? (
+            {/* w17/context-blocks — a locked fact rejects writes in the store;
+                unlocking is the one write it accepts, so the lock is reversible. */}
+            {entry.readOnly ? (
+              <button
+                type="button"
+                aria-label={`Unlock ${entry.title}`}
+                disabled={isBusy}
+                onClick={() => void save({ ...entry, readOnly: false })}
+                className="rounded-md border px-2 py-1 text-[9.5px] disabled:opacity-40"
+                style={{ borderColor: 'var(--color-line-strong)', color: colors.bronzeHot }}
+              >
+                Unlock to edit
+              </button>
+            ) : (
+              <button
+                type="button"
+                aria-label={`Edit ${entry.title}`}
+                onClick={() => setEditing(true)}
+                className="rounded-md p-1.5"
+                style={{ color: colors.quartzDim }}
+              >
+                <IconPencil size={12} stroke={1.5} />
+              </button>
+            )}
+            {entry.readOnly ? null : confirmDelete ? (
               <button
                 type="button"
                 aria-label={`Confirm delete ${entry.title}`}

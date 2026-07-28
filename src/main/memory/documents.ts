@@ -106,7 +106,10 @@ export function normalizeEntry(value: unknown, existing?: MemoryEntry | null): M
     sourceRunId,
     source,
     supersedesId: optionalLink('supersedesId'),
-    supersededBy: optionalLink('supersededBy')
+    supersededBy: optionalLink('supersededBy'),
+    // w17/context-blocks — absent stays absent so unlocked facts serialize
+    // exactly as they did before the flag existed.
+    readOnly: input.readOnly === true ? true : undefined
   }
 }
 
@@ -145,7 +148,8 @@ function serialize(entry: MemoryEntry): string {
       'sourceRunId',
       'source',
       'supersedesId',
-      'supersededBy'
+      'supersededBy',
+      'readOnly'
     ] as const)
       .filter((key) => entry[key] !== undefined)
       .map((key) => [key, entry[key]] as [keyof MemoryEntry, unknown])
@@ -169,7 +173,8 @@ function parseMemoryFile(root: string, path: string): MemoryEntry {
   const metadata: Record<string, unknown> = Object.create(null) as Record<string, unknown>
   const allowed = new Set([
     'id', 'scope', 'scopeRef', 'kind', 'title', 'origin', 'createdAt', 'updatedAt', 'enabled',
-    'validAt', 'invalidAt', 'expiredAt', 'sourceRunId', 'source', 'supersedesId', 'supersededBy'
+    'validAt', 'invalidAt', 'expiredAt', 'sourceRunId', 'source', 'supersedesId', 'supersededBy',
+    'readOnly'
   ])
   for (const line of match[1].split(/\r?\n/)) {
     const separator = line.indexOf(':')
