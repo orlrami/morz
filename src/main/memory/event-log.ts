@@ -67,6 +67,19 @@ export interface MemoryEventLogOptions {
   keepFiles?: number
 }
 
+export interface ClaudeInvocationContext {
+  sessionKind: Extract<MemoryEventSessionKind, 'lane' | 'dispatched'>
+  agentId?: string
+  spaceId?: string
+}
+
+export interface DispatchedInvocationContext {
+  cli: MemoryEventCli
+  agentId?: string
+  spaceId?: string
+  cwd?: string
+}
+
 const SESSION_KINDS = new Set<MemoryEventSessionKind>(['lane', 'dispatched', 'planner'])
 const CLIS = new Set<MemoryEventCli>(['claude', 'codex', 'agy', 'opencode'])
 const EVENT_TYPES = new Set<MemoryEventType>(['spawn', 'exit', 'tool', 'block', 'interrupt'])
@@ -254,7 +267,123 @@ export class MemoryEventLog {
   }
 }
 
+/**
+ * Correlates Claude's structured tool_use/tool_result blocks without retaining
+ * tool inputs or result bodies. PTY text is intentionally never inspected.
+ */
+export class ClaudeInvocationTracker {
+  private readonly toolNames = new Map<string, string>()
+
+  constructor(private readonly context: ClaudeInvocationContext) {}
+
+  observe(value: unknown, ts = Date.now()): MemoryInvocationEvent[] {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return []
+    const input = value as Record<string, unknown>
+    if (input.type !== 'assistant' && input.type !== 'user') return []
+    const message = input.message
+    if (!message || typeof message !== 'object' || Array.isArray(message)) return []
+    const content = (message as Record<string, unknown>).content
+    if (!Array.isArray(content)) return []
+
+    const events: MemoryInvocationEvent[] = []
+    for (const item of content) {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) continue
+      const block = item as Record<string, unknown>
+      if (input.type === 'assistant' && block.type === 'tool_use') {
+        const id = typeof block.id === 'string' ? block.id : undefined
+        const name = cleanToolName(block.name)
+        if (id && name) this.toolNames.set(id, name)
+        events.push(this.toolEvent(ts, name, 'unknown', 'start'))
+      } else if (input.type === 'user' && block.type === 'tool_result') {
+        const id = typeof block.tool_use_id === 'string' ? block.tool_use_id : undefined
+        const name = id ? this.toolNames.get(id) : undefined
+        if (id) this.toolNames.delete(id)
+        events.push(this.toolEvent(ts, name, block.is_error === true ? 'error' : 'ok', 'result'))
+      }
+    }
+    return events
+  }
+
+  private toolEvent(
+    ts: number,
+    name: string | undefined,
+    outcome: MemoryEventOutcome,
+    phase: 'start' | 'result'
+  ): MemoryInvocationEvent {
+    return {
+      v: 1,
+      ts,
+      sessionKind: this.context.sessionKind,
+      cli: 'claude',
+      ...(this.context.agentId ? { agentId: this.context.agentId } : {}),
+      ...(this.context.spaceId ? { spaceId: this.context.spaceId } : {}),
+      event: 'tool',
+      ...(name ? { name } : {}),
+      outcome,
+      meta: { phase, source: 'structured' }
+    }
+  }
+}
+
+export class DispatchedInvocationTracker {
+  private readonly sessions = new Map<
+    string,
+    DispatchedInvocationContext & { startedAt: number }
+  >()
+
+  spawn(
+    paneId: string,
+    context: DispatchedInvocationContext,
+    ts = Date.now()
+  ): MemoryInvocationEvent {
+    this.sessions.set(paneId, { ...context, startedAt: ts })
+    return this.lifecycleEvent('spawn', context, ts, undefined)
+  }
+
+  exit(paneId: string, exitCode: number | null, ts = Date.now()): MemoryInvocationEvent | null {
+    const session = this.sessions.get(paneId)
+    if (!session) return null
+    this.sessions.delete(paneId)
+    return this.lifecycleEvent('exit', session, ts, ts - session.startedAt, exitCode)
+  }
+
+  interrupt(paneId: string, ts = Date.now()): MemoryInvocationEvent | null {
+    const session = this.sessions.get(paneId)
+    if (!session) return null
+    return {
+      ...this.lifecycleEvent('interrupt', session, ts, ts - session.startedAt),
+      outcome: 'unknown'
+    }
+  }
+
+  private lifecycleEvent(
+    event: Extract<MemoryEventType, 'spawn' | 'exit' | 'interrupt'>,
+    context: DispatchedInvocationContext,
+    ts: number,
+    durationMs: number | undefined,
+    exitCode?: number | null
+  ): MemoryInvocationEvent {
+    return {
+      v: 1,
+      ts,
+      sessionKind: 'dispatched',
+      cli: context.cli,
+      ...(context.agentId ? { agentId: context.agentId } : {}),
+      ...(context.spaceId ? { spaceId: context.spaceId } : {}),
+      event,
+      outcome: 'unknown',
+      ...(durationMs === undefined ? {} : { durationMs }),
+      meta: {
+        source: 'pty',
+        ...(event === 'spawn' && context.cwd ? { cwd: context.cwd } : {}),
+        ...(exitCode === undefined || exitCode === null ? {} : { exitCode })
+      }
+    }
+  }
+}
+
 let activeLog: MemoryEventLog | null = null
+const dispatchedTracker = new DispatchedInvocationTracker()
 
 function defaultLog(): MemoryEventLog {
   if (!activeLog) {
@@ -287,4 +416,21 @@ export function eventLogStats(): MemoryEventLogStats {
 
 export function clearEventLog(): void {
   defaultLog().clear()
+}
+
+export function logDispatchedSpawn(
+  paneId: string,
+  context: DispatchedInvocationContext
+): void {
+  logMemoryEvent(dispatchedTracker.spawn(paneId, context))
+}
+
+export function logDispatchedExit(paneId: string, exitCode: number | null): void {
+  const event = dispatchedTracker.exit(paneId, exitCode)
+  if (event) logMemoryEvent(event)
+}
+
+export function logDispatchedInterrupt(paneId: string): void {
+  const event = dispatchedTracker.interrupt(paneId)
+  if (event) logMemoryEvent(event)
 }

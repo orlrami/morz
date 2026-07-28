@@ -41,6 +41,10 @@ import {
   memoryPort,
   resolveMemoryProposal
 } from '../memory/learn-port'
+import {
+  ClaudeInvocationTracker,
+  logMemoryEvent
+} from '../memory/event-log'
 // w15/model-choice — session-flag model resolution + e2e spawn-args seam.
 import { modelArgsForLaunch, recordLaneSpawnArgs } from '../services/model-choice'
 import {
@@ -61,6 +65,8 @@ interface ClaudeProc {
   /** Running totals captured from result events. */
   totalCostUsd: number
   controlSeq: number
+  startedAt: number
+  invocationTracker: ClaudeInvocationTracker
   // Rendered at start, consumed by the first user prompt.
   applyMemoryPreamble: (prompt: string) => string
 }
@@ -285,6 +291,7 @@ function onStdout(proc: ClaudeProc, chunk: Buffer): void {
 }
 
 function handleEvent(proc: ClaudeProc, event: ClaudeEvent): void {
+  for (const invocation of proc.invocationTracker.observe(event)) logMemoryEvent(invocation)
   if (event.type === 'system' && (event as { subtype?: string }).subtype === 'init') {
     const init = event as { session_id?: string; model?: string; capabilities?: unknown }
     proc.sessionId = init.session_id ?? null
@@ -314,6 +321,17 @@ function handleControlRequest(proc: ClaudeProc, event: ClaudeEvent): void {
   const request = (event as { request?: { subtype?: string; tool_name?: string; input?: unknown } })
     .request
   if (request?.subtype === 'can_use_tool') {
+    logMemoryEvent({
+      v: 1,
+      ts: Date.now(),
+      sessionKind: 'lane',
+      cli: 'claude',
+      agentId: proc.agentId,
+      event: 'block',
+      name: request.tool_name,
+      outcome: 'blocked',
+      meta: { source: 'structured' }
+    })
     pendingPermissions.set(requestId, { agentId: proc.agentId, input: request.input })
     const req: ClaudePermissionReq = {
       agentId: proc.agentId,
@@ -357,6 +375,11 @@ function start(opts: ClaudeStartOpts): { agentId: string } {
     capabilities: null,
     totalCostUsd: 0,
     controlSeq: 0,
+    startedAt: Date.now(),
+    invocationTracker: new ClaudeInvocationTracker({
+      sessionKind: 'lane',
+      agentId: opts.agentId
+    }),
     // w8/memory-learn (b) — render at lane launch; never re-render/repeat per turn.
     applyMemoryPreamble: (() => {
       try {
@@ -371,6 +394,16 @@ function start(opts: ClaudeStartOpts): { agentId: string } {
     })()
   }
   procs.set(opts.agentId, proc)
+  logMemoryEvent({
+    v: 1,
+    ts: proc.startedAt,
+    sessionKind: 'lane',
+    cli: 'claude',
+    agentId: opts.agentId,
+    event: 'spawn',
+    outcome: 'unknown',
+    meta: { source: 'structured', cwd: opts.cwd }
+  })
   child.stdout.on('data', (d: Buffer) => onStdout(proc, d))
   child.stderr.on('data', (d: Buffer) =>
     emit(opts.agentId, { type: 'stderr', text: d.toString('utf8').slice(0, 2000) })
@@ -385,6 +418,17 @@ function start(opts: ClaudeStartOpts): { agentId: string } {
     for (const [rid, p] of pendingPermissions) {
       if (p.agentId === opts.agentId) pendingPermissions.delete(rid)
     }
+    logMemoryEvent({
+      v: 1,
+      ts: Date.now(),
+      sessionKind: 'lane',
+      cli: 'claude',
+      agentId: opts.agentId,
+      event: 'exit',
+      outcome: code === 0 ? 'ok' : 'error',
+      durationMs: Date.now() - proc.startedAt,
+      meta: { source: 'structured', ...(code === null ? {} : { exitCode: code }) }
+    })
     emit(opts.agentId, { type: 'process_exit', code, sessionId: proc.sessionId })
   })
   return { agentId: opts.agentId }
@@ -426,6 +470,17 @@ export function injectPointerPrompt(agentId: string, text: string): boolean {
 function interrupt(agentId: string): void {
   const proc = procs.get(agentId)
   if (!proc) return
+  logMemoryEvent({
+    v: 1,
+    ts: Date.now(),
+    sessionKind: 'lane',
+    cli: 'claude',
+    agentId,
+    event: 'interrupt',
+    outcome: 'unknown',
+    durationMs: Date.now() - proc.startedAt,
+    meta: { source: 'structured' }
+  })
   writeLine(proc, {
     type: 'control_request',
     request_id: `morz-${proc.agentId}-${++proc.controlSeq}`,

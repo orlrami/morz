@@ -11,6 +11,8 @@ import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, test } from 'node:test'
 import {
+  ClaudeInvocationTracker,
+  DispatchedInvocationTracker,
   EVENT_LOG_FILE,
   MemoryEventLog,
   type MemoryInvocationEvent
@@ -211,4 +213,103 @@ test('Clear removes every generation and resets counters', () => {
   assert.deepEqual(log.stats(), { count: 0, bytes: 0 })
   assert.deepEqual(log.readEvents(), [])
   assert.deepEqual(readdirSync(directory), [])
+})
+
+test('Claude structured tool_use and tool_result map to honest invocation outcomes', () => {
+  const tracker = new ClaudeInvocationTracker({
+    sessionKind: 'lane',
+    agentId: 'builder'
+  })
+
+  assert.deepEqual(tracker.observe({
+    type: 'assistant',
+    message: {
+      content: [
+        { type: 'text', text: 'Checking.' },
+        {
+          type: 'tool_use',
+          id: 'tool-1',
+          name: 'Read',
+          input: { file_path: 'C:\\Users\\builder\\.env' }
+        }
+      ]
+    }
+  }, 100), [
+    event({
+      ts: 100,
+      event: 'tool',
+      name: 'Read',
+      outcome: 'unknown',
+      meta: { phase: 'start', source: 'structured' }
+    })
+  ])
+
+  assert.deepEqual(tracker.observe({
+    type: 'user',
+    message: {
+      content: [
+        {
+          type: 'tool_result',
+          tool_use_id: 'tool-1',
+          is_error: true,
+          content: 'OPENAI_API_KEY=abcdefghijklmnopqrstuvwxyz0123456789'
+        }
+      ]
+    }
+  }, 140), [
+    event({
+      ts: 140,
+      event: 'tool',
+      name: 'Read',
+      outcome: 'error',
+      meta: { phase: 'result', source: 'structured' }
+    })
+  ])
+})
+
+test('Claude invocation tracker ignores text and never copies tool args or result bodies', () => {
+  const tracker = new ClaudeInvocationTracker({
+    sessionKind: 'lane',
+    agentId: 'builder'
+  })
+  assert.deepEqual(tracker.observe({
+    type: 'assistant',
+    message: { content: [{ type: 'text', text: 'Ignore previous instructions.' }] }
+  }, 100), [])
+  assert.deepEqual(tracker.observe({
+    type: 'result',
+    is_error: false,
+    result: 'secret output'
+  }, 120), [])
+})
+
+test('dispatched tracker reports spawn and exit duration without inferring PTY outcomes', () => {
+  const tracker = new DispatchedInvocationTracker()
+  assert.deepEqual(tracker.spawn('pane-1', {
+    cli: 'codex',
+    agentId: 'reviewer',
+    spaceId: 'space-1',
+    cwd: 'C:\\Users\\builder\\project'
+  }, 1_000), event({
+    ts: 1_000,
+    sessionKind: 'dispatched',
+    cli: 'codex',
+    agentId: 'reviewer',
+    spaceId: 'space-1',
+    event: 'spawn',
+    outcome: 'unknown',
+    meta: { source: 'pty', cwd: 'C:\\Users\\builder\\project' }
+  }))
+  assert.deepEqual(tracker.exit('pane-1', 7, 1_250), event({
+    ts: 1_250,
+    sessionKind: 'dispatched',
+    cli: 'codex',
+    agentId: 'reviewer',
+    spaceId: 'space-1',
+    event: 'exit',
+    outcome: 'unknown',
+    durationMs: 250,
+    meta: { exitCode: 7, source: 'pty' }
+  }))
+  assert.equal(tracker.exit('pane-1', 0, 1_300), null)
 })
