@@ -125,7 +125,7 @@ export function assertMemoryProposalCurrent(
   const op = proposal.op ?? { kind: 'add' as const }
   if (op.kind === 'noop') return
   // Only the proposal that already owns this outcome may skip the CAS. Its
-  // idempotency key is the proposal id, so recognising the retry is the
+  // idempotency key is the proposal id, so recognizing the retry is the
   // caller's job: it re-approves a persisted approved+unapplied proposal.
   if (options.isRetry && isMaterialized(proposal, getMemory)) return
   if (op.kind === 'add') {

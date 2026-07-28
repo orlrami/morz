@@ -1,6 +1,14 @@
 import assert from 'node:assert/strict'
+import { mkdtempSync, readdirSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import test from 'node:test'
 import type { MemoryEntry, MemoryOpAuditRow, MemoryProposal } from '../../shared/memory'
+import {
+  ensureMemoryDirectories,
+  readEntryDocuments,
+  writeEntryDocuments
+} from './documents'
 import {
   applyApprovedMemoryProposal,
   assertMemoryProposalCurrent,
@@ -274,6 +282,103 @@ for (const failpoint of ['markdown', 'index', 'audit', 'applied'] as const) {
     assert.equal(harness.index.size, 2)
     assert.equal(harness.audit.size, 1)
     assert.equal(harness.applied, true)
+  })
+}
+
+/**
+ * The Map harness above cannot die between two Markdown documents. This one
+ * drives the real document writer against a temp directory and crashes after
+ * a chosen durable step — archive write, successor write, or prune — then
+ * restarts against whatever is actually on disk.
+ */
+class DiskHarness {
+  readonly root: string
+  readonly index = new Map<string, MemoryEntry>()
+  readonly audit = new Map<string, MemoryApplyAuditInput>()
+  applied = false
+
+  constructor(seed: MemoryEntry) {
+    this.root = mkdtempSync(join(tmpdir(), 'morz-memory-apply-'))
+    ensureMemoryDirectories(this.root)
+    writeEntryDocuments(this.root, [seed])
+    this.index.set(seed.id, seed)
+  }
+
+  entries(): MemoryEntry[] {
+    const { entries, invalid } = readEntryDocuments(this.root)
+    assert.equal(invalid, 0)
+    return entries
+  }
+
+  /** One process run: crash after `crashAfter` durable steps (0 = never). */
+  deps(crashAfter = 0, isRetry = false): MemoryApplyDeps {
+    let steps = 0
+    return {
+      isRetry,
+      getMemory: (id) => this.entries().find((entry) => entry.id === id) ?? null,
+      writeEntries: (entries, removeIds) =>
+        writeEntryDocuments(this.root, entries, removeIds, (step) => {
+          steps += 1
+          if (steps === crashAfter) {
+            throw new Error(`simulated crash after ${step.phase} of ${step.id}`)
+          }
+        }),
+      indexEntries: (entries, removeIds) => {
+        for (const id of removeIds) this.index.delete(id)
+        for (const value of entries) this.index.set(value.id, value)
+      },
+      recordAudit: (input) => {
+        if (!this.audit.has(input.idempotencyKey)) this.audit.set(input.idempotencyKey, input)
+      },
+      markApplied: () => {
+        this.applied = true
+      },
+      // A real restart never reuses the crashed run's clock.
+      now: () => new Date().toISOString()
+    }
+  }
+
+  cleanup(): void {
+    rmSync(this.root, { recursive: true, force: true })
+  }
+}
+
+const MARKDOWN_STEPS = [
+  'write of prefer-pnpm-rev-',
+  'write of use-bun',
+  'prune of prefer-pnpm'
+]
+
+for (const [step, boundary] of MARKDOWN_STEPS.entries()) {
+  test(`markdown UPDATE recovers exactly once after a crash at the ${boundary}`, () => {
+    const alpha = entry()
+    const harness = new DiskHarness(alpha)
+    const proposal = renameProposal(alpha, 'use-bun', 'Use bun')
+    try {
+      assert.throws(
+        () => applyApprovedMemoryProposal(proposal, harness.deps(step + 1)),
+        new RegExp(`simulated crash after ${boundary}`)
+      )
+      applyApprovedMemoryProposal(proposal, harness.deps(0, true))
+
+      const entries = harness.entries()
+      const live = entries.filter((value) => !value.expiredAt)
+      const expired = entries.filter((value) => value.expiredAt)
+      assert.deepEqual(live.map((value) => value.id), ['use-bun'])
+      assert.equal(live[0].title, 'Use bun')
+      // Exactly one archived revision: a shifted derived id would leave two.
+      assert.equal(expired.length, 1)
+      assert.equal(expired[0].title, 'Use pnpm')
+      assert.equal(expired[0].supersededBy, 'use-bun')
+      assert.equal(live[0].supersedesId, expired[0].id)
+      assert.equal(entries.length, 2)
+      assert.equal(readdirSync(join(harness.root, 'global')).length, 2)
+      assert.equal(harness.index.size, 2)
+      assert.equal(harness.audit.size, 1)
+      assert.equal(harness.applied, true)
+    } finally {
+      harness.cleanup()
+    }
   })
 }
 

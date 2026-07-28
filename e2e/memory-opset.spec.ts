@@ -15,6 +15,7 @@ import type {
   MemoryProposal,
   MorzMemoryApi
 } from '../src/shared/memory'
+import { memoryRevision } from '../src/main/memory/apply'
 import { closeMorz, launchMorz, type MorzApp } from './app'
 
 interface MemoryE2eApi extends MorzMemoryApi {
@@ -282,6 +283,13 @@ test.describe.serial('Memory op-set reconciliation', () => {
   })
 
   test('applied DELETE keeps the row expired and restorable', async () => {
+    // Every UPDATE/DELETE op carries the target's revision hash: the approval
+    // CAS rejects revision-less proposals and asks for a re-propose.
+    const target = await morz.page.evaluate(
+      (id) => (window as unknown as MemoryWindow).morz.memory.get(id),
+      'learned-bun'
+    )
+    expect(target).toBeTruthy()
     const staged = await morz.page.evaluate(
       (value) => (window as unknown as MemoryWindow).morz.memory.testPropose(value),
       {
@@ -293,10 +301,8 @@ test.describe.serial('Memory op-set reconciliation', () => {
         op: {
           kind: 'delete' as const,
           targetId: 'learned-bun',
-          old: {
-            title: 'Use pnpm for JavaScript dependencies',
-            body: 'Correction: the user has switched every repository to bun.'
-          },
+          targetRevision: memoryRevision(target!),
+          old: { title: target!.title, body: target!.body },
           reason: 'Reverted by the user'
         }
       }
