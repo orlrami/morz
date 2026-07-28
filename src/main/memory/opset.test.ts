@@ -17,7 +17,6 @@ import {
   parseClassifierOutput,
   reconcileCandidate,
   recordMemoryOpAudit,
-  renderInjectionLines,
   restoreEntry,
   type MemoryCandidate
 } from './opset'
@@ -311,27 +310,8 @@ test('expireEntry soft-expires (kept + restorable), restoreEntry undoes it', () 
   assert.equal(isActiveEntry(restored), true)
 })
 
-/* -------------------------------------------------------------- injection — */
-
-test('renderInjectionLines keeps actives, adds validity windows for superseded facts', () => {
-  const active = entry({ id: 'use-bun', title: 'Use bun for JavaScript dependencies' })
-  const superseded = expireEntry(
-    entry({ id: 'prefer-pnpm', updatedAt: '2026-06-01T00:00:00.000Z' }),
-    '2026-07-20T00:00:00.000Z'
-  )
-  const rendered = renderInjectionLines([active, superseded])
-  assert.match(rendered, /## How the user works/)
-  assert.match(rendered, /- \*\*rule:\*\* Use bun for JavaScript dependencies/)
-  assert.match(rendered, /- \*\*superseded rule:\*\* Use pnpm for JavaScript dependencies \(used until 2026-07-20\)/)
-})
-
-test('renderInjectionLines excludes disabled and stays inside the budget', () => {
-  const disabled = entry({ id: 'off', title: 'Disabled rule', enabled: false })
-  assert.equal(renderInjectionLines([disabled]), '')
-
-  const many = Array.from({ length: 100 }, (_value, index) =>
-    entry({ id: `rule-${index}`, title: `Rule number ${index} with a reasonably long title` }))
-  const rendered = renderInjectionLines(many, 500)
-  assert.ok(rendered.length <= 500)
-  assert.match(rendered, /## How the user works/)
-})
+/*
+ * Injection rendering moved to render.ts in w17/renderer-core, where the
+ * launch preamble and the context-file block share one selection pass.
+ * Superseded facts no longer render at all — see render.test.ts.
+ */
