@@ -18,6 +18,7 @@ function candidate(id: string): SpawnPlan {
       {
         agentId: 'builder',
         cli: 'claude',
+        model: null,
         role: 'Builder',
         branch: `run/${id}/builder`,
         worktree: null,
@@ -82,6 +83,7 @@ test('persists one-agent amendments behind their own approval hash', () => {
       agent: {
         agentId: 'reviewer',
         cli: 'codex',
+        model: null,
         role: 'Reviewer',
         branch: 'run/plan-amend/reviewer',
         worktree: null,

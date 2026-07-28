@@ -17,13 +17,14 @@ import {
 import { assertPlanEditAllowed, hashSpawnPlan } from './plan-store'
 
 const basePlan: SpawnPlan = {
-  version: '1.0',
+  version: '1.1',
   id: '00000000-0000-4000-8000-000000000001',
   goal: 'Ship the planner',
   agents: [
     {
       agentId: 'builder',
       cli: 'claude',
+      model: null,
       role: 'Planner builder',
       branch: 'run/planner/builder',
       worktree: null,
@@ -138,6 +139,91 @@ test('validateSpawnPlan accepts the shared contract and rejects unsafe planner f
   const extraResult = validateSpawnPlan(extraField)
   assert.equal(extraResult.ok, false)
   assert.match(extraResult.issues.join('\n'), /unknown field/)
+})
+
+test('SpawnPlan 1.0 normalizes missing models while 1.1 round-trips an explicit model', () => {
+  const legacy = {
+    ...structuredClone(basePlan),
+    version: '1.0',
+    agents: basePlan.agents.map(({ model: _model, ...agent }) => agent)
+  }
+  const normalized = validateSpawnPlan(legacy)
+  assert.equal(normalized.ok, true)
+  assert.equal(normalized.value?.version, '1.1')
+  assert.equal(normalized.value?.agents[0].model, null)
+
+  const current = {
+    ...structuredClone(basePlan),
+    version: '1.1',
+    agents: [{ ...structuredClone(basePlan.agents[0]), model: 'opus' }]
+  }
+  const roundTripped = validateSpawnPlan(current)
+  assert.equal(roundTripped.ok, true)
+  assert.equal(roundTripped.value?.version, '1.1')
+  assert.equal(roundTripped.value?.agents[0].model, 'opus')
+})
+
+test('planner prompt lists only detected CLIs and corrects an undetected model proposal', async () => {
+  const prompts: string[] = []
+  let calls = 0
+  const result = await planGoalWithEngine(
+    'Ship the planner',
+    'C:\\Projects\\morz-planner',
+    'claude',
+    {
+      createId: () => '00000000-0000-4000-8000-000000000001',
+      now: () => '2026-07-14T12:00:00.000Z',
+      connections: [
+        {
+          id: 'claude',
+          label: 'Claude Code',
+          installed: true,
+          version: '1.0.0',
+          detectedAt: 0,
+          versionStale: false,
+          update: null,
+          authed: true,
+          plan: null,
+          model: null,
+          usage: null
+        },
+        {
+          id: 'codex',
+          label: 'Codex',
+          installed: false,
+          version: null,
+          detectedAt: 0,
+          versionStale: false,
+          update: null,
+          authed: null,
+          plan: null,
+          model: null,
+          usage: null
+        }
+      ],
+      runEngine: async (_engine, prompt) => {
+        prompts.push(prompt)
+        calls += 1
+        if (calls === 1) {
+          return fenced({
+            ...structuredClone(basePlan),
+            version: '1.1',
+            agents: [{ ...structuredClone(basePlan.agents[0]), cli: 'codex', model: 'gpt-5.6-sol' }]
+          })
+        }
+        return fenced({
+          ...structuredClone(basePlan),
+          version: '1.1',
+          agents: [{ ...structuredClone(basePlan.agents[0]), model: 'opus' }]
+        })
+      }
+    }
+  )
+
+  assert.equal(result.plan.agents[0].model, 'opus')
+  assert.match(prompts[0], /claude.*sonnet.*opus.*fable/is)
+  assert.doesNotMatch(prompts[0], /gpt-5\.6-sol/)
+  assert.match(prompts[1], /codex.*not detected/is)
 })
 
 test('validateSpawnPlan repairs overlong roles and unsafe branches with warnings', () => {
@@ -355,6 +441,7 @@ test('plan edits may append a new agent but never take over an original branch',
   appended.agents.push({
     agentId: 'reviewer',
     cli: 'codex',
+    model: null,
     role: 'Reviewer',
     branch: 'run/planner/reviewer',
     worktree: null,

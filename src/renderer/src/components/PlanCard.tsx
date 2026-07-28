@@ -30,7 +30,7 @@ function routeCli(target: RoutingTarget): 'agy' | 'codex' | 'claude' {
 // shaped like a rule decision so both share one suggestion pipeline.
 const SAVED_DEFAULT_RULE_ID = 'saved-default'
 
-function savedDefaultDecision(cli: PlannedCli): RouteDecision {
+function savedDefaultDecision(cli: Exclude<PlannedCli, 'opencode'>): RouteDecision {
   return {
     target: cli,
     reason: 'You picked this model for the role last time.',
@@ -49,10 +49,11 @@ function savedDefaultDecision(cli: PlannedCli): RouteDecision {
 const CLI_META: Record<PlannedCli, { label: string; tint: string }> = {
   claude: { label: 'Claude', tint: colors.bronze },
   codex: { label: 'Codex', tint: colors.working },
-  agy: { label: 'Antigravity', tint: colors.done }
+  agy: { label: 'Antigravity', tint: colors.done },
+  opencode: { label: 'OpenCode', tint: colors.quartzDim }
 }
 
-const PLAN_CLIS: readonly PlannedCli[] = ['claude', 'codex', 'agy']
+const PLAN_CLIS: readonly PlannedCli[] = ['claude', 'codex', 'agy', 'opencode']
 const MAX_TEAM_AGENTS = 8
 
 interface PlanCardProps {
@@ -125,7 +126,7 @@ export function PlanCard({
       const next = new Map<number, RouteDecision>()
       record.plan.agents.forEach((agent, index) => {
         const preferred = teamDefaults[roleKey(agent.role)]
-        if (preferred && preferred !== agent.cli) {
+        if (preferred && preferred !== 'opencode' && preferred !== agent.cli) {
           next.set(index, savedDefaultDecision(preferred))
           return
         }
@@ -181,6 +182,7 @@ export function PlanCard({
     const added: PlannedAgent = {
       agentId,
       cli: teamDefaults[roleKey('agent')] ?? 'claude',
+      model: null,
       role: `Agent ${n}`,
       branch: `run/plan/${record.plan.id.slice(0, 8).toLowerCase()}-${agentId}`,
       worktree: null,

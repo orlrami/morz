@@ -34,6 +34,7 @@ export function hashPlanAmendment(amendment: PlanAmendment): string {
 function normalizeAgent(agent: SpawnPlan['agents'][number]): SpawnPlan['agents'][number] {
   return {
     ...agent,
+    model: agent.model ?? null,
     dependsOn: agent.dependsOn ?? [],
     worktree: agent.worktree ?? null,
     port: agent.port ?? null
@@ -43,6 +44,7 @@ function normalizeAgent(agent: SpawnPlan['agents'][number]): SpawnPlan['agents']
 function normalizePlan(plan: SpawnPlan): SpawnPlan {
   return {
     ...plan,
+    version: '1.1',
     agents: plan.agents.map(normalizeAgent),
     caps: {
       maxUsd: plan.caps.maxUsd ?? null,
@@ -58,8 +60,8 @@ function immutablePlanFields(plan: SpawnPlan): Omit<SpawnPlan, 'agents' | 'planH
 
 function immutableAgentFields(
   agent: SpawnPlan['agents'][number]
-): Omit<SpawnPlan['agents'][number], 'cli' | 'promptSeed'> {
-  const { cli: _cli, promptSeed: _promptSeed, ...fixed } = normalizeAgent(agent)
+): Omit<SpawnPlan['agents'][number], 'cli' | 'model' | 'promptSeed'> {
+  const { cli: _cli, model: _model, promptSeed: _promptSeed, ...fixed } = normalizeAgent(agent)
   return fixed
 }
 

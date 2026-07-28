@@ -798,6 +798,11 @@ function probe(forceBroadcast: boolean): Promise<CliConnection[]> {
   return probeInFlight
 }
 
+/** Current CONNECTIONS roster, probing once when startup detection is still in flight. */
+export function listDetectedConnections(): Promise<CliConnection[]> {
+  return cache ? Promise.resolve(cache) : probe(false)
+}
+
 function shellCommand(command: UpdateCommand): {
   shell: string
   argv: string[]

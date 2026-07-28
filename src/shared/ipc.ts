@@ -1117,7 +1117,7 @@ export interface RunPaneCreated {
   runId: string
   agentId: string
   cwd: string
-  cli: AdapterCli
+  cli: PlannedAgent['cli']
 }
 export const RunPaneApi = {
   created: 'run:pane-created', // push main→renderer: RunPaneCreated

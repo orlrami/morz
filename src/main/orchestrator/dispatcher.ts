@@ -203,6 +203,8 @@ function launchCommand(cli: PlannedCli, seedPath: string, spaceRoot: string): st
       // agy takes no prompt argument — the adapter injects the seed via
       // bracketed paste once the TUI is up (Agent 4's lane).
       return `agy${modelSuffix}`
+    case 'opencode':
+      return `opencode${modelSuffix} run "$(Get-Content -Raw ${quoted})"`
   }
 }
 
