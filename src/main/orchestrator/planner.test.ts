@@ -308,7 +308,7 @@ test('parseClaudeStreamOutput reads JSONL events rather than regex-parsing termi
 
 test('planGoal retries one schema violation and returns a canonical non-placeholder hash', async () => {
   let calls = 0
-  const plan = await planGoal('Ship the planner', 'C:\\Projects\\morz-planner', {
+  const { plan } = await planGoal('Ship the planner', 'C:\\Projects\\morz-planner', {
     createId: () => '00000000-0000-4000-8000-000000000001',
     now: () => '2026-07-14T12:00:00.000Z',
     connections: allDetected,
@@ -322,6 +322,25 @@ test('planGoal retries one schema violation and returns a canonical non-placehol
   assert.equal(calls, 2)
   assert.equal(plan.planHash, hashSpawnPlan(plan))
   assert.notEqual(plan.planHash, '0'.repeat(64))
+})
+
+test('planGoal hands its repair warnings back to the caller', async () => {
+  // The assistant bridge proposes through planGoal; a repair it cannot see is
+  // a repair the user never learns about.
+  const { plan, warnings } = await planGoal('Ship the planner', 'C:\\Projects\\morz-planner', {
+    createId: () => '00000000-0000-4000-8000-000000000001',
+    now: () => '2026-07-14T12:00:00.000Z',
+    connections: allDetected,
+    runClaude: async () =>
+      fenced({
+        ...structuredClone(basePlan),
+        version: '1.0',
+        agents: [{ ...structuredClone(basePlan.agents[0]), model: 'opus' }]
+      })
+  })
+
+  assert.equal(plan.agents[0].model, null)
+  assert.match(warnings.join('\n'), /not part of SpawnPlan 1\.0/)
 })
 
 test('a repaired plan is accepted on the first attempt without consuming the retry', async () => {

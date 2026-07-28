@@ -1005,12 +1005,15 @@ async function generatePlan(
   throw new Error('Planner failed unexpectedly')
 }
 
+/** Warnings ride back with the plan: a repair the user cannot see (a stripped
+ * 1.0 model, a truncated role) may as well not have been reported (w17). */
 export async function planGoal(
   rawGoal: string,
   spaceRoot: string,
   dependencies: PlannerDependencies = {}
-): Promise<SpawnPlan> {
-  return (await generatePlan(rawGoal, spaceRoot, 'claude', dependencies)).plan
+): Promise<{ plan: SpawnPlan; warnings: string[] }> {
+  const generated = await generatePlan(rawGoal, spaceRoot, 'claude', dependencies)
+  return { plan: generated.plan, warnings: generated.warnings }
 }
 
 export async function planGoalWithEngine(
@@ -1336,7 +1339,8 @@ export async function registerPlannerIpc(dispatcher: DispatchPort = new LoggingD
       // detected-only roster as a generated one (w17 review).
       const validation = validateSpawnPlan(input.plan, { connections: await resolveConnections({}) })
       if (!validation.value) throw new Error(`Invalid plan update: ${validation.issues.join('; ')}`)
-      return store.updateProposed(validation.value, input.expectedHash)
+      const stored = store.updateProposed(validation.value, input.expectedHash)
+      return validation.warnings.length > 0 ? { ...stored, warnings: validation.warnings } : stored
     }
   )
   ipcMain.handle(PlannerApi.approveAndRun, async (_event, planHash: unknown) => {

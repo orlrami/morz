@@ -44,7 +44,9 @@ function normalizeAgent(agent: SpawnPlan['agents'][number]): SpawnPlan['agents']
 function normalizePlan(plan: SpawnPlan): SpawnPlan {
   return {
     ...plan,
-    version: '1.1',
+    // The declared version is preserved: relabelling a 1.0 plan as 1.1 would
+    // claim per-agent model support the plan never had (w17 review).
+    version: plan.version === '1.0' ? '1.0' : '1.1',
     agents: plan.agents.map(normalizeAgent),
     caps: {
       maxUsd: plan.caps.maxUsd ?? null,

@@ -56,6 +56,24 @@ test('persists DRAFT to PROPOSED, re-hashes edits, and dispatch-gates on the lat
   store.close()
 })
 
+test('storage keeps the plan version the caller declared', () => {
+  const store = new PlanStore(join(root, 'versions.db'))
+  // Relabelling a 1.0 plan as 1.1 would claim per-agent model support it
+  // never had, and would hide that its model was stripped (w17 review).
+  const legacy = store.createDraft(candidate('plan-1-0'))
+  assert.equal(legacy.plan.version, '1.0')
+  assert.equal(legacy.plan.agents[0].model, null)
+
+  const current = store.createDraft({
+    ...candidate('plan-1-1'),
+    version: '1.1',
+    agents: [{ ...candidate('plan-1-1').agents[0], model: 'opus' }]
+  })
+  assert.equal(current.plan.version, '1.1')
+  assert.equal(current.plan.agents[0].model, 'opus')
+  store.close()
+})
+
 test('persists one-agent amendments behind their own approval hash', () => {
   const store = new PlanStore(join(root, 'amendments.db'))
   const draft = store.createDraft(candidate('plan-amend'))
