@@ -395,11 +395,11 @@ class DiskHarness {
   readonly audit = new Map<string, MemoryApplyAuditInput>()
   applied = false
 
-  constructor(seed: MemoryEntry) {
+  constructor(seeds: MemoryEntry[]) {
     this.root = mkdtempSync(join(tmpdir(), 'morz-memory-apply-'))
     ensureMemoryDirectories(this.root)
-    writeEntryDocuments(this.root, [seed])
-    this.index.set(seed.id, seed)
+    writeEntryDocuments(this.root, seeds)
+    for (const seed of seeds) this.index.set(seed.id, seed)
   }
 
   entries(): MemoryEntry[] {
@@ -436,6 +436,17 @@ class DiskHarness {
     }
   }
 
+  /**
+   * Deps for the process that comes back up. Startup rebuilds the disposable
+   * FTS rows from Markdown before it replays approved+unapplied proposals, so
+   * the harness does the same before handing back the retry.
+   */
+  restart(): MemoryApplyDeps {
+    this.index.clear()
+    for (const value of this.entries()) this.index.set(value.id, value)
+    return this.deps(0, true)
+  }
+
   cleanup(): void {
     rmSync(this.root, { recursive: true, force: true })
   }
@@ -450,14 +461,14 @@ const MARKDOWN_STEPS = [
 for (const [step, boundary] of MARKDOWN_STEPS.entries()) {
   test(`markdown UPDATE recovers exactly once after a crash at the ${boundary}`, () => {
     const alpha = entry()
-    const harness = new DiskHarness(alpha)
+    const harness = new DiskHarness([alpha])
     const proposal = renameProposal(alpha, 'use-bun', 'Use bun')
     try {
       assert.throws(
         () => applyApprovedMemoryProposal(proposal, harness.deps(step + 1)),
         new RegExp(`simulated crash after ${boundary}`)
       )
-      applyApprovedMemoryProposal(proposal, harness.deps(0, true))
+      applyApprovedMemoryProposal(proposal, harness.restart())
 
       const entries = harness.entries()
       const live = entries.filter((value) => !value.expiredAt)
@@ -474,6 +485,76 @@ for (const [step, boundary] of MARKDOWN_STEPS.entries()) {
       assert.equal(harness.index.size, 2)
       assert.equal(harness.audit.size, 1)
       assert.equal(harness.applied, true)
+    } finally {
+      harness.cleanup()
+    }
+  })
+}
+
+/*
+ * The relocation case, on real documents: the occupant of the successor id is
+ * an expired revision whose own successor IS the target being updated, so the
+ * plan writes the relocated copy, the target's archive carrying the link fix,
+ * the new successor over the occupant's document, and finally the prune. Every
+ * one of those boundaries must recover — including the first, where the
+ * relocated copy on disk already carries the rewired link.
+ */
+function relocationFixture(): { occupant: MemoryEntry; target: MemoryEntry } {
+  return {
+    occupant: entry({
+      id: 'use-bun',
+      title: 'Use bun',
+      expiredAt: NOW,
+      invalidAt: NOW,
+      supersededBy: 'prefer-pnpm'
+    }),
+    target: entry({ supersedesId: 'use-bun' })
+  }
+}
+
+for (const step of [1, 2, 3, 4]) {
+  test(`relocating UPDATE recovers exactly once after a crash at step ${step}`, () => {
+    const { occupant, target } = relocationFixture()
+    const movedId = `use-bun-rev-${memoryRevision(occupant)}`
+    const archivedId = `prefer-pnpm-rev-${memoryRevision(target)}`
+    const boundary = [
+      `write of ${movedId}`,
+      `write of ${archivedId}`,
+      'write of use-bun',
+      'prune of prefer-pnpm'
+    ][step - 1]
+    const harness = new DiskHarness([target, occupant])
+    const proposal = renameProposal(target, 'use-bun', 'Use bun again')
+    try {
+      assert.throws(
+        () => applyApprovedMemoryProposal(proposal, harness.deps(step)),
+        new RegExp(`simulated crash after ${boundary}$`)
+      )
+      applyApprovedMemoryProposal(proposal, harness.restart())
+
+      const entries = harness.entries()
+      const byId = new Map(entries.map((value) => [value.id, value]))
+      const live = entries.filter((value) => !value.expiredAt)
+      assert.deepEqual(live.map((value) => value.id), ['use-bun'])
+      assert.equal(live[0].title, 'Use bun again')
+      // The occupant survived verbatim, and the chain runs
+      // moved -> archived target -> new successor with no dangling link.
+      assert.equal(byId.get(movedId)?.title, 'Use bun')
+      assert.equal(byId.get(movedId)?.expiredAt, NOW)
+      assert.equal(byId.get(movedId)?.supersededBy, archivedId)
+      assert.equal(byId.get(archivedId)?.supersedesId, movedId)
+      assert.equal(byId.get(archivedId)?.supersededBy, 'use-bun')
+      assert.equal(live[0].supersedesId, archivedId)
+      assert.equal(byId.get('prefer-pnpm'), undefined)
+      assert.equal(entries.length, 3)
+      assert.equal(readdirSync(join(harness.root, 'global')).length, 3)
+      assert.equal(harness.index.size, 3)
+      assert.equal(harness.audit.size, 1)
+      assert.equal(harness.applied, true)
+      assert.throws(
+        () => assertRestoreAllowed(byId.get(movedId)!, chainOf(entries)),
+        /Cannot restore memory while its successor is active: use-bun/
+      )
     } finally {
       harness.cleanup()
     }

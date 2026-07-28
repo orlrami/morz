@@ -246,8 +246,9 @@ interface Relocation {
  * An expired revision already sitting on the id the successor wants is a real
  * chain member: overwriting it destroys a revision the audit rows cannot
  * reconstruct, and leaves its own live successor pointing at a brand new fact.
- * It moves to its own archive id — content untouched, so a retry rewrites the
- * identical document — and both adjacent links follow it.
+ * It moves to its own archive id — content untouched — and both adjacent links
+ * follow it. The collision check waits for the final form (see
+ * assertRelocationSafe): the predecessor rewire can still change this entry.
  */
 function relocateOccupant(
   occupant: MemoryEntry,
@@ -255,10 +256,6 @@ function relocateOccupant(
   getMemory: (id: string) => MemoryEntry | null
 ): Relocation {
   const moved: MemoryEntry = { ...occupant, id: archiveId(occupant.id, memoryRevision(occupant)) }
-  const existing = getMemory(moved.id)
-  if (existing && memoryRevision(existing) !== memoryRevision(moved)) {
-    throw new Error(`${COLLISION_ERROR}: ${moved.id}`)
-  }
   const relocation: Relocation = { moved, rewires: [] }
   const neighbours = [
     [occupant.supersedesId, 'supersededBy'],
@@ -272,6 +269,26 @@ function relocateOccupant(
     else relocation.rewires.push({ ...neighbour, [link]: moved.id })
   }
   return relocation
+}
+
+/**
+ * The relocated occupant may only land on an id that is free or already holds
+ * the byte-identical document this plan is about to write. It is checked
+ * against the FINAL planned entry, not the verbatim copy: the predecessor
+ * rewire can repoint the relocated entry first, and a retry that hashed the
+ * pre-rewire form would report a phantom collision with its own crashed write.
+ */
+function assertRelocationSafe(
+  movedId: string,
+  planned: MemoryEntry[],
+  getMemory: (id: string) => MemoryEntry | null
+): void {
+  const existing = getMemory(movedId)
+  if (!existing) return
+  const final = planned.find((value) => value.id === movedId)
+  if (!final || memoryRevision(existing) !== memoryRevision(final)) {
+    throw new Error(`${COLLISION_ERROR}: ${movedId}`)
+  }
 }
 
 function freshPlan(
@@ -346,12 +363,10 @@ function freshPlan(
   }
   // The relocation lands before the successor overwrites the occupant.
   const relocated = relocation ? [relocation.moved, ...relocation.rewires] : []
+  const planned = withRewiredPredecessor(relocated, archived, successor.id, getMemory)
+  if (relocation) assertRelocationSafe(relocation.moved.id, planned, getMemory)
   return {
-    entries: [
-      ...withRewiredPredecessor(relocated, archived, successor.id, getMemory),
-      archived,
-      successor
-    ],
+    entries: [...planned, archived, successor],
     removeIds: op.targetId === successor.id ? [] : [op.targetId!],
     result: successor,
     audit: auditFor(proposal, successor, now)
