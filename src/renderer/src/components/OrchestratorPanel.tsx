@@ -11,6 +11,7 @@ import type {
   StoredPlanAmendment,
   StoredSpawnPlan
 } from '@shared/ipc'
+import { isPlannerEligible } from '@shared/connections'
 import { colors } from '@/lib/tokens'
 import { springs, staggerContainer, staggerItem } from '@/lib/springs'
 import { useModeStore } from '@/store/modeStore'
@@ -319,7 +320,11 @@ function PlannerFlow(): JSX.Element {
   useEffect(() => startConnections(), [startConnections])
   // end w12/orch-engine
 
-  const installed = new Map(connections.map((connection) => [connection.id, connection.installed]))
+  // w17 — an engine whose CLI left PATH is not a usable engine, so eligibility
+  // (installed AND present) drives the dropdown, not last-known install state.
+  const installed = new Map(
+    connections.map((connection) => [connection.id, isPlannerEligible(connection)])
+  )
   const engineOptions: Array<{ value: PlannerEngine; label: string; detected: boolean }> = [
     {
       value: 'fast',
