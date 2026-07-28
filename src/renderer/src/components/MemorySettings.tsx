@@ -54,7 +54,7 @@ function OpDiff({ op }: { op: MemoryOp }): JSX.Element | null {
         <p className="mt-1 italic" style={{ color: colors.quartzDim }}>{op.reason}</p>
       )}
       <p className="mt-1 text-[9px]" style={{ color: colors.quartzDim }}>
-        The old memory is kept expired and can be restored from this list.
+        The old memory is kept as linked history. Restore is allowed after its successor expires.
       </p>
     </div>
   )
@@ -149,6 +149,16 @@ function EntryCard({ entry }: { entry: MemoryEntry }): JSX.Element {
                     style={{ borderColor: 'rgba(213,106,106,0.45)', color: colors.error }}
                   >
                     expired {entry.expiredAt.slice(0, 10)}
+                  </span>
+                )}
+                {entry.supersedesId && (
+                  <span className="normal-case tracking-normal">
+                    Replaced #{entry.supersedesId} on {(entry.validAt ?? entry.createdAt).slice(0, 10)}
+                  </span>
+                )}
+                {entry.supersededBy && (
+                  <span className="normal-case tracking-normal">
+                    Replaced by #{entry.supersededBy} on {(entry.invalidAt ?? entry.expiredAt ?? entry.updatedAt).slice(0, 10)}
                   </span>
                 )}
               </div>

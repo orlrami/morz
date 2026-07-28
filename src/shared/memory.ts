@@ -50,6 +50,10 @@ export interface MemoryEntry {
   sourceRunId?: string
   /** File provenance for bootstrap imports (`absolute-path#heading`). */
   source?: string
+  /** Previous revision in this fact's supersession chain. */
+  supersedesId?: string
+  /** Live successor that replaced this expired revision. */
+  supersededBy?: string
 }
 
 /*
@@ -68,6 +72,8 @@ export interface MemoryOp {
   kind: MemoryOpKind
   /** Existing entry this op targets (update/delete/noop-duplicate). */
   targetId?: string
+  /** SHA-256 revision captured when the proposal was staged (approval CAS). */
+  targetRevision?: string
   /** Target's content at classification time (update/delete diff rendering). */
   old?: MemoryOpSnapshot
   /** Candidate content to write (add/update). */
@@ -89,6 +95,8 @@ export interface MemoryOpAuditRow {
   reason: string | null
   source: string
   ts: string
+  /** Stable proposal/manual-operation key used for crash-safe audit deduplication. */
+  idempotencyKey: string | null
 }
 
 /** A staged write awaiting the user's approval (never auto-applied). */
@@ -151,8 +159,8 @@ export interface MemoryBootstrapApplyResult {
 export const MemoryApi = {
   list: 'memory:list', // (scope?: MemoryScope, scopeRef?: string) => Promise<MemoryEntry[]>
   get: 'memory:get', // (id) => Promise<MemoryEntry | null>
-  save: 'memory:save', // (entry) => Promise<MemoryEntry>   direct user-initiated write (Settings UI)
-  remove: 'memory:remove', // (id) => Promise<void>
+  save: 'memory:save', // (entry) => Promise<MemoryEntry>   pre-approved reconciled Settings write
+  remove: 'memory:remove', // (id) => Promise<void>          pre-approved reconciled soft-delete
   setEnabled: 'memory:set-enabled', // ({id, enabled}) => Promise<MemoryEntry>
   search: 'memory:search', // (query, limit?) => Promise<MemoryEntry[]>  local index
   /** Staged learning writes (w8/memory-learn produces; user approves). */
