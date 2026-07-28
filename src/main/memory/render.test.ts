@@ -68,6 +68,28 @@ test('duplicate ids collapse to the first occurrence', () => {
   assert.ok(renderMemoryPreamble(entries).includes('First'))
 })
 
+test('an inactive duplicate never shadows the live fact sharing its id', () => {
+  // Scope files are hand-editable and the loader accepts duplicate ids, so the
+  // dead row can come first. Filtering must therefore precede deduplication.
+  const live = entry({ id: 'dup', title: 'Live version' })
+  const pairs: Array<readonly [string, MemoryEntry]> = [
+    ['disabled', entry({ id: 'dup', title: 'Dead version', enabled: false })],
+    ['expired', expireEntry(entry({ id: 'dup', title: 'Dead version' }), '2026-07-20T00:00:00.000Z')],
+    ['superseded', { ...entry({ id: 'dup', title: 'Dead version' }), supersededBy: 'dup' } as MemoryEntry]
+  ]
+
+  for (const [label, dead] of pairs) {
+    const entries = [dead, live]
+    assert.deepEqual(
+      selectRenderableMemories(entries).map((item) => item.title),
+      ['Live version'],
+      `${label} duplicate suppressed the live fact`
+    )
+    assert.ok(renderMemoryPreamble(entries).includes('Live version'), `preamble lost ${label} pair`)
+    assert.ok(renderMemoryBlock(entries).includes('Live version'), `block lost ${label} pair`)
+  }
+})
+
 /* -------------------------------------------------------- empty behaviour — */
 
 test('an empty or all-disabled store renders empty and never throws', () => {
@@ -99,19 +121,74 @@ test('an over-budget block falls back to summaries and says how much it kept', (
     }))
 
   const full = renderMemoryBlock(many)
-  assert.ok(full.split('\n').length <= MEMORY_BLOCK_LINE_BUDGET)
+  assert.ok(full.split('\n').length <= MEMORY_BLOCK_LINE_BUDGET - 2)
   assert.match(full, /truncated: \d+ of 60 facts/)
   // Summary mode keeps every kept fact on one line instead of a body section.
   assert.match(full, /- \*\*rule:\*\* Rule number 0 — Body for rule 0/)
   assert.ok(!full.includes('### Rule number 0'))
 })
 
-test('a tiny line budget keeps the truncation line rather than dropping facts silently', () => {
+test('the line budget covers the markers the caller adds', () => {
+  // 194+ facts used to render exactly 200 body lines, so the managed block in
+  // the file came to 202 once the marker pair was wrapped around it.
+  for (const count of [194, 300]) {
+    const many = Array.from({ length: count }, (_value, index) =>
+      entry({ id: `rule-${index}`, title: `Rule number ${index}`, body: 'Body text.' }))
+    const body = renderMemoryBlock(many)
+    const managedBlockLines = body.split('\n').length + 2
+    assert.ok(
+      managedBlockLines <= MEMORY_BLOCK_LINE_BUDGET,
+      `${count} facts produced a ${managedBlockLines}-line managed block`
+    )
+  }
+})
+
+test('budgets below the mandatory output still report what was dropped', () => {
   const many = Array.from({ length: 20 }, (_value, index) =>
     entry({ id: `rule-${index}`, title: `Rule number ${index}`, body: 'Body text.' }))
-  const rendered = renderMemoryBlock(many, { lineBudget: 8 })
-  assert.ok(rendered.split('\n').length <= 8)
-  assert.match(rendered, /<!-- morz:memory truncated: 2 of 20 facts, open Morz > Memory -->/)
+
+  // Room for the header plus two summaries, once the markers are reserved.
+  const small = renderMemoryBlock(many, { lineBudget: 10 })
+  assert.ok(small.split('\n').length <= 8)
+  assert.match(small, /<!-- morz:memory truncated: 2 of 20 facts, open Morz > Memory -->/)
+
+  // Too small for the header: the notice survives, everything else goes.
+  for (const lineBudget of [3, 4, 5]) {
+    const tiny = renderMemoryBlock(many, { lineBudget })
+    assert.equal(tiny, '<!-- morz:memory truncated: 0 of 20 facts, open Morz > Memory -->')
+    assert.ok(tiny.split('\n').length + 2 <= lineBudget)
+  }
+
+  // No room for a body line at all.
+  for (const lineBudget of [0, 1, 2]) {
+    assert.equal(renderMemoryBlock(many, { lineBudget }), '')
+  }
+})
+
+test('a zero preamble budget renders nothing, not a bare heading', () => {
+  const many = [entry({ id: 'rule-0', title: 'Rule zero' })]
+  for (const budget of [0, 5, 21]) {
+    assert.equal(renderMemoryPreamble(many, { budget }), '', `budget ${budget} leaked a heading`)
+  }
+  // Enough for the heading and exactly one bullet.
+  const fits = renderMemoryPreamble(many, { budget: 60 })
+  assert.ok(fits.length <= 60)
+  assert.ok(fits.includes('Rule zero'))
+})
+
+test('an over-budget block never materializes the discarded full render', () => {
+  // 500 permitted-size bodies used to allocate ~25MB to produce a ~32KB block.
+  const body = 'x'.repeat(50_000)
+  const many = Array.from({ length: 500 }, (_value, index) =>
+    entry({ id: `rule-${index}`, title: `Rule number ${index}`, body }))
+
+  const before = process.memoryUsage().heapUsed
+  const rendered = renderMemoryBlock(many)
+  const heapDeltaMB = (process.memoryUsage().heapUsed - before) / 1_048_576
+
+  assert.ok(rendered.split('\n').length + 2 <= MEMORY_BLOCK_LINE_BUDGET)
+  assert.match(rendered, /truncated: \d+ of 500 facts/)
+  assert.ok(heapDeltaMB < 8, `rendering allocated ${heapDeltaMB.toFixed(1)}MB`)
 })
 
 test('a block inside budget renders full bodies and no truncation line', () => {
