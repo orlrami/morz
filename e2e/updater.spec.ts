@@ -1,11 +1,18 @@
 import { createHash } from 'crypto'
+import { readFileSync } from 'fs'
 import { createServer, type Server } from 'http'
+import { join } from 'path'
 import { expect, test } from '@playwright/test'
 import type { UpdaterBridge, UpdaterSnapshot } from '../src/shared/ipc'
 import { closeMorz, launchMorz, type MorzApp } from './app'
 
 const FAKE_INSTALLER = Buffer.from('morz-e2e-update-fixture')
 const FAKE_SHA512 = createHash('sha512').update(FAKE_INSTALLER).digest('base64')
+// Read the shipped version instead of hardcoding it: a release bump must not
+// require editing this spec (it did, and the spec went stale).
+const APP_VERSION = (JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf8')) as {
+  version: string
+}).version
 
 test.describe.serial('Morz updater', () => {
   let feed: Server
@@ -74,7 +81,7 @@ test.describe.serial('Morz updater', () => {
     expect(snapshot).toMatchObject<Partial<UpdaterSnapshot>>({
       enabled: false,
       status: 'disabled',
-      version: '0.1.5',
+      version: APP_VERSION,
       channel: 'stable'
     })
 
@@ -89,7 +96,7 @@ test.describe.serial('Morz updater', () => {
     await morz.page.getByRole('button', { name: 'Settings' }).click()
     await morz.page.getByRole('button', { name: 'About' }).click()
     const settings = morz.page.getByRole('region', { name: 'Update settings' })
-    await expect(settings).toContainText('Version 0.1.5 · Stable channel')
+    await expect(settings).toContainText(`Version ${APP_VERSION} · Stable channel`)
     await expect(settings.getByRole('button', { name: 'Check for updates' })).toBeDisabled()
   })
 
