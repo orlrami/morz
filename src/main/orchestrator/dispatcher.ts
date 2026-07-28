@@ -47,7 +47,9 @@ import { memoryPort, prependRenderedMemory } from '../memory/learn-port'
 // w15/model-choice — per-agent CLI model suffix for the visible launch command.
 import { launchSuffixFor } from '../services/model-choice'
 // w17/adapter-seam — passive observation of dispatched panes (see SEAM-DESIGN.md).
-import { scanWorktreeUsage } from './claude-usage'
+import { app } from 'electron'
+import { homedir } from 'os'
+import { createTranscriptReader } from './claude-usage'
 import { costMeter } from './cost-meter'
 import { createPaneBridge } from './pane-bridge'
 import {
@@ -55,6 +57,7 @@ import {
   consumeApprovedPlan,
   createRun,
   getAgentRows,
+  getAgentState,
   getApprovedPlan,
   getRunRow,
   getRunStatus,
@@ -241,15 +244,30 @@ function push(runId: string): void {
 
 /* ── adapter seam: pane observation (w17, docs/in-progress/SEAM-DESIGN.md) ──
  * The bridge reads terminal titles out of the PTY stream main has ALREADY
- * relayed to the renderer, and reads token totals out of the CLI's own
+ * relayed to the renderer, and reads token counts out of the CLI's own
  * transcript. It never writes to a pane and never advances a run to done. */
+
+/**
+ * Transcript root. The override exists so the e2e suite can prove the real
+ * metering path against a fixture instead of writing into the owner's
+ * ~/.claude. It requires BOTH the e2e flag and an unpackaged build, so a
+ * shipped Morz cannot be pointed at another transcript root at runtime.
+ */
+function transcriptRoot(): string {
+  const testRoot =
+    process.env.MORZ_E2E === '1' && !app.isPackaged ? process.env.MORZ_E2E_CLAUDE_HOME : undefined
+  return testRoot || homedir()
+}
+
 export const paneBridge = createPaneBridge({
   setAgentState: (runId, agentId, state) => agentTransition(runId, agentId, state),
-  // Transcript scans are cumulative; the meter stores the last total and adds
-  // only the positive difference, so a repeated scan cannot double-count.
+  getAgentState: (runId, agentId) => getAgentState(runId, agentId) ?? null,
+  // Readings are per-record and deduplicated, so what arrives here is already a
+  // delta of newly-seen records — never a running total to be differenced.
   trackUsage: (runId, agentId, tokens) =>
-    costMeter.track(runId, agentId, { tokens, mode: 'total', source: 'transcript' }),
-  scanUsage: scanWorktreeUsage,
+    costMeter.track(runId, agentId, { tokens, mode: 'delta', source: 'transcript' }),
+  createUsageReader: (worktree, since) =>
+    createTranscriptReader({ worktree, root: transcriptRoot(), since }),
   push,
   now: () => Date.now()
 })
@@ -448,15 +466,22 @@ export async function dispatch(plan: SpawnPlan): Promise<{ runId: string }> {
 /** Kill every non-terminal agent's process tree, release its port, mark it cancelled. */
 async function teardownAgents(runId: string, spaceRoot: string, removeWorktrees = true): Promise<void> {
   const h = requireHost()
-  paneBridge.releaseRun(runId) // w17/adapter-seam — stop observing dying panes
-  for (const row of getAgentRows(runId)) {
+  const rows = getAgentRows(runId)
+  for (const row of rows) {
     if (!TERMINAL_AGENT_STATES.includes(row.state)) {
       if (row.pane_id) await Promise.resolve(h.killPane(row.pane_id)).catch(() => undefined)
       if (row.pid !== null) killPidTree(row.pid)
       agentTransition(runId, row.agent_id, 'cancelled')
     }
     if (row.port !== null) pool.release(row.port)
-    if (removeWorktrees && row.worktree) {
+  }
+  /* w17/adapter-seam — the agents are dead but their last turn's tokens are
+   * still only on disk. Take the final metered reading BEFORE the worktrees go,
+   * or a run stopped mid-turn reports zero usage. */
+  await paneBridge.finalizeRun(runId)
+  if (removeWorktrees) {
+    for (const row of rows) {
+      if (!row.worktree) continue
       await removeWorktree(spaceRoot, row.worktree, row.branch)
       patchAgent(runId, row.agent_id, { worktree: null })
     }

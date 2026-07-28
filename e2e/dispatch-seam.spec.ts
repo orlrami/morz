@@ -135,15 +135,25 @@ function writeFakeCli(path: string): void {
   )
 }
 
-/** A transcript in the shape Claude Code writes, attributed to one worktree. */
+/*
+ * A transcript in the shape Claude Code writes. Both fields the reader uses to
+ * attribute a record are present and load-bearing: `cwd` is what proves the
+ * record belongs to THIS agent's worktree (the directory name is a lossy slug
+ * that two different worktrees can share), and `message.id` is what stops a
+ * forked session's copied history from being counted twice.
+ */
 function seedTranscript(claudeHome: string, worktree: string, turns: number[][]): void {
   const slug = worktree.replace(/[^a-zA-Z0-9]/g, '-')
   const dir = join(claudeHome, '.claude', 'projects', slug)
   mkdirSync(dir, { recursive: true })
-  const lines = turns.map(([input, output]) =>
+  const lines = turns.map(([input, output], index) =>
     JSON.stringify({
       type: 'assistant',
-      message: { usage: { input_tokens: input, output_tokens: output } }
+      cwd: worktree,
+      message: {
+        id: `msg-e2e-${index}`,
+        usage: { input_tokens: input, output_tokens: output }
+      }
     })
   )
   writeFileSync(join(dir, 'session-e2e.jsonl'), lines.join('\n') + '\n', 'utf8')
@@ -279,12 +289,23 @@ test('dispatched panes report real activity and real usage; a silent CLI reports
       'only the agent that announced itself gets an activity chip'
     ).toBe(1)
 
+    // ── a final turn's tokens must survive Stop ──
+    // The agent writes one more turn and is killed before any idle transition
+    // could trigger a read. Teardown has to take a last reading itself, and the
+    // two turns already counted must NOT be counted a second time.
+    seedTranscript(claudeHome, talker.worktree!, [
+      [1000, 250],
+      [800, 150],
+      [300, 100]
+    ])
+
     // stop + cleanup still behave exactly as before the seam existed
     const stopped = await page.evaluate(
       (id) => (window as unknown as MorzRunWindow).morz.run.stopRun(id),
       runId
     )
     expect(stopped.state).toBe('aborted')
+    expect(stopped.usage.tokens, 'the last turn is metered during teardown, once').toBe(2600)
     await page.evaluate((id) => (window as unknown as MorzRunWindow).morz.run.cleanup(id), runId)
   } finally {
     await closeMorz(app)

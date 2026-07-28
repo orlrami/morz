@@ -29,24 +29,39 @@ Two channels feed it, both zero-install:
 
 Agent CLIs announce their own state in the terminal title (`ESC ] 0|1|2 ; <title> BEL`). This is a structured terminal protocol signal, not TUI text scraping: we never regex the screen. Ported from Orca (`onorca.dev`, MIT — attributed in the source headers), whose implementation encodes traps we would otherwise hit blind:
 
-- **Hand-rolled parser, never a regex** (`src/shared/osc-title.ts`). PTY chunks can embed megabyte pastes; a global regex over every chunk is a performance and correctness trap. Terminated by BEL or ST, whichever comes first.
-- **1024-char head+tail truncation**, not a prefix clip — the trailing status word *is* the signal.
-- **Cross-chunk carry**, because a title routinely splits across two `onData` chunks, with a bounded pending buffer so a malformed sequence cannot grow memory without limit.
-- **All titles per chunk, in byte order** — a `working → idle` pair coalesced inside one chunk is invisible if you only read the chunk's last title.
-- **A keyword boundary guard that also excludes path separators**: `(?<![\w./\\-])(ready|idle|done)(?![\w-])`. Plain `\b` matches inside cwd paths like `~/codex/ready`. This single line is the difference between a working classifier and a useless one.
-- **Bail to `null` when no known agent token appears** — this is what stops ordinary shell titles from being classified as agent state.
+- **Hand-rolled parser, never a regex** (`src/shared/osc-title.ts`). PTY chunks can embed megabyte pastes; a global regex over every chunk is a performance and correctness trap.
+- **Termination follows xterm exactly**, because xterm renders the same bytes and any divergence means Morz classifies text the user never saw as a title. An OSC string ends at BEL, at C1 ST, at `ESC \`, or at **any other ESC** — the escape both ends this string and begins the next sequence. CAN and SUB abort it, discarding the title. Both `ESC ]` and C1 introducers are accepted. Accepting only BEL and `ESC \` is what let `OSC 2;Claude idle ESC X permission BEL` be read as a *waiting* agent.
+- **1024-char head+tail truncation**, not a prefix clip — the trailing status word *is* the signal. The bound is applied while slicing out of the chunk, so an enormous title is never materialized in full first.
+- **Cross-chunk carry**, because a title routinely splits across two `onData` chunks, with a bounded pending buffer so a malformed sequence cannot grow memory without limit. An ESC at the chunk edge is carried rather than guessed: it may be ST or a new sequence, and the two end the title in different places.
+- **All titles per chunk, in byte order**, capped by a fixed-capacity ring — a `working → idle` pair coalesced inside one chunk is invisible if you only read the chunk's last title.
+- **A keyword boundary guard that also excludes path separators**: `(?<![\w./\\-])(ready|idle|done)(?![\w-])`. Plain `\b` matches inside cwd paths like `~/codex/ready`. This single line is the difference between a working classifier and a useless one. The same guard matches agent *names*, so `claude-tools` is not an agent.
 - **Animation frames normalized before storage**, or the UI strobes several times per second.
-- **Edge-triggered, no timers.** A `null` classification never overwrites the last known state, and reverting to `null` counts as an exit only from idle/waiting — while working it is usually a transient internal title.
+- **Edge-triggered, no timers.** A `null` classification never overwrites the last known state — while working, transient internal titles are common.
 
 Classifier output is three states: `working`, `waiting` (Orca calls it `permission`), `idle`.
 
+**The classifier fails closed, which is stricter than Orca.** Anything a pane's child process writes reaches it, and an activity moves an agent's lifecycle state, so a title must prove it belongs to an agent before it is read as one:
+
+1. **Ownership first.** Either the caller names the CLI the pane was launched with — the dispatcher always knows — or the title carries a boundary-matched product name. Without ownership the answer is `null`, whatever the title says.
+2. **Glyphs are anchored** to the canonical leading position and scoped to the CLI that uses them. `✋ build paused` in an unowned pane is not waiting; `Claude Code ✳` is not idle.
+3. **Keyword rules additionally require a named agent**, because `permission`, `ready` and `working` are ordinary English that anything may print.
+4. **No fallback.** A title matching nothing returns `null` rather than defaulting to a state.
+
+Orca can afford looser heuristics because their authoritative channel is agent hooks and titles are only a fallback. Here, titles *are* the channel, so an unowned title has to mean nothing at all.
+
 **Deliberately not built here:** any transition to `done`. Orca's own source documents why (`orca-runtime.ts` ~8471): fast tasks jump `null → idle` skipping `working` entirely, so a `working → idle` waiter hangs forever; and `waiting → idle` means the user *denied* an approval, which is not completion. `idle` means "the CLI is at its prompt", nothing more. Auto-advancing a run to `done` is 0.0.7 and needs a definition-of-done signal, not a title.
 
-### Channel B — transcript scan → real metering
+### Channel B — transcript reads → real metering
 
-Each dispatched agent gets its own git worktree, so `~/.claude/projects/<slug(worktree)>/*.jsonl` belongs to exactly one agent of one run — attribution needs no session id. The scan sums `message.usage` token counts per assistant record (the same shape `adapters/claude.ts:151` already reads for lanes) and feeds `costMeter.track(runId, agentId, …)`, which has been the documented dispatch integration seam since wave 5 and was never called with a `runId`. `getRunStatus().usage` then reports the meter's real per-run totals instead of the hardcoded nulls.
+Claude Code writes a per-project JSONL transcript, and this reads it. Two properties do the work:
 
-Scanning is triggered by a Channel A transition **to** idle or waiting — a turn just ended — plus once at agent exit. No polling loop.
+**Attribution is per record, never per directory.** The transcript directory name is a lossy slug: `C:\Projects\foo-bar` and `C:\Projects\foo\bar` both become `C--Projects-foo-bar`, so two different worktrees can share one directory. The directory only narrows the search; ownership is decided by canonically matching each record's own `cwd` against the agent's worktree (`realpath`, case-folded on Windows). A record that cannot prove ownership is skipped rather than guessed, and records stamped before the run began belong to an earlier run.
+
+**Accounting is incremental and deduplicated by message id.** Claude Code's session fork copies history into the new session file — the Orca research (§P2.6b) records that naive counting double-counts across forks — so a reader returns only records it has never seen, as a **delta**. Nothing ever re-reports a running total, which also removes the failure mode where a transcript reading lower than last time (rotation, truncation) gets added a second time. A read is therefore idempotent, which is what makes the extra teardown pass free.
+
+Token keys match the preload lane meter (`src/preload/index.ts:381-386`): input, output, **and both cache fields**. The deltas feed `costMeter.track(runId, agentId, …)`, the documented dispatch integration seam since wave 5 that had never been called with a `runId`, and `getRunStatus().usage` reports the meter's real per-run totals instead of the hardcoded nulls.
+
+Reads are triggered by a Channel A transition **to** idle or waiting — a turn just ended — plus once during teardown. No polling loop. They are serialized per agent: a request arriving mid-read queues a rescan rather than being dropped, so the last turn of a burst is never the one that is lost.
 
 **Honest limit:** transcripts carry tokens, not dollars, and Morz ships no price table. Dispatched runs report real `tokens` and leave `usd: null`. Lane runs are unaffected — they still get `costUsd` straight from claude's `result` event.
 
@@ -54,17 +69,17 @@ Scanning is triggered by a Channel A transition **to** idle or waiting — a tur
 
 | CLI | State | Metering |
 |---|---|---|
-| `claude` | working / waiting / idle from titles (`✳` U+2733 prefix, braille U+2800–28FF spinner, `". "` / `"* "` conventions) | real tokens from the transcript scan |
-| `codex` | spawn / exit / duration always; title states only when it paints a recognizable title | none — nothing structured to read |
-| `agy` | spawn / exit / duration; Gemini glyphs `✦` `⏲` `◇` `✋` when present | none |
-| `opencode` | spawn / exit / duration | none |
+| `claude` | working / waiting / idle: leading `✳` U+2733, leading braille U+2800–28FF spinner, `". "` / `"* "` conventions, plus named-agent keywords | real tokens from the transcript |
+| `codex` | spawn / exit / duration always; leading braille spinner; named-agent keywords. No verified glyph vocabulary, so none is invented | none — nothing structured to read |
+| `agy` | spawn / exit / duration; leading Gemini glyphs `✦` `⏲` `◇` `✋`; braille spinner | none |
+| `opencode` | spawn / exit / duration; leading braille spinner | none |
 
-The table is a claim about what the classifier *can* resolve, not a promise that every CLI paints titles. A title carrying no agent name at all — every ordinary shell and cwd title — classifies as nothing, and the run card shows no activity chip. That is the honest empty state, and the e2e spec asserts it against a deliberately title-silent agent.
+The table is a claim about what the classifier *can* resolve, not a promise that every CLI paints titles. A title that proves nothing classifies as nothing, and the run card shows no activity chip — the honest empty state, asserted in the e2e against a deliberately title-silent agent.
 
-Two precise limits, both found while building this and worth knowing before trusting the chip:
+Two precise limits worth knowing before trusting the chip:
 
-- **The fallback for an agent-named title is `idle`, never `working` or `waiting`.** A title that names an agent but matches no glyph or keyword (a cwd that happens to contain "codex", say) reads as idle. That is chosen, not accidental: `idle` moves no lifecycle state, so the cost of the fallback being wrong is a stale chip, while a `working`/`waiting` fallback would move the agent's state on a guess.
-- **On Windows the glyph channel depends on the CLI declaring UTF-8.** A CLI that writes its spinner under the default OEM code page emits `?` instead of the braille frame, and that title degrades to the `idle` fallback rather than reading as working. The real node-based CLIs set UTF-8 themselves; the e2e fixture has to do it explicitly, and it is the first thing to check if a CLI's activity ever looks stuck at idle.
+- **The spinner is treated as universal, but only inside a pane an agent owns.** A dispatched pane's own child process (an `npm install` with a braille spinner in its title, say) can therefore read as `working`. The blast radius is bounded by design: the only lifecycle states a title can reach are `running` and `blocked`, both non-terminal and reversible, and no title can ever reach `done`.
+- **On Windows the glyph channel depends on the CLI declaring UTF-8.** A CLI writing its spinner under the default OEM code page emits `?` instead of the braille frame, and that title then classifies as nothing rather than as working. The real node-based CLIs set UTF-8 themselves; the e2e fixture has to do it explicitly, and it is the first thing to check if a CLI's activity never appears.
 
 ## Event contract
 
@@ -95,13 +110,22 @@ They land in the run store and ride the **existing** `run:changed` push. No new 
 
 `AGENT_TRANSITIONS` (`run-store.ts:115`) already has `running ⇄ blocked`, both non-terminal and reversible. That is the honest home for `waiting`:
 
-| Title activity | Lifecycle state | Direction |
+| Title activity | Lifecycle state | Condition |
 |---|---|---|
-| `waiting` | `blocked` | running → blocked |
-| `working` | `running` | blocked → running |
-| `idle` | *unchanged* | — |
+| `waiting` | `blocked` | always |
+| `working` | `running` | always |
+| `idle` | `running` | **only** when this bridge applied the `blocked` |
+| `idle` | *unchanged* | otherwise |
 
-`idle` moves no lifecycle state — see above. Every transition is wrapped: an agent that has reached a terminal state (cancelled by Stop, failed by the liveness watcher) rejects the update and the bridge drops it silently. The bridge never creates, deletes, or terminates a run.
+`idle` still never means done. But it does end a wait: when the bridge blocked the agent and the CLI returns to its prompt — including when the owner **denied** the approval — leaving the ledger `blocked` forever is simply wrong, and that is exactly what the first cut did. Only a block this bridge applied is cleared, so a block from anywhere else is left alone.
+
+Every decision reads the ledger's **current** state rather than a cached value, because Stop and the liveness watcher can invalidate the cache underneath an in-flight observation. Transitions are wrapped: an agent that has reached a terminal state rejects the update and the bridge drops it silently. The bridge never creates, deletes, or terminates a run.
+
+Ledger writes are coalesced to **one per chunk**. Every title is still classified and every transition still emits a `state` event, but only where the chunk *landed* is written to SQLite and broadcast — a chunk carrying thousands of alternating titles would otherwise put thousands of synchronous writes in front of the PTY relay. Intermediate states inside a single chunk are sub-frame.
+
+## Teardown ordering
+
+Stop kills the panes, but the last turn's tokens are still only on disk, and nothing has read them. So `teardownAgents` kills every agent, then **awaits** `paneBridge.finalizeRun(runId)` — which drains any in-flight read and takes one guaranteed final reading — and only then removes the worktrees. Getting this backwards (detaching before the kill, as the first cut did) meant a run stopped while an agent was still `working` reported zero usage. The e2e asserts the exact figure after Stop, so a regression shows up as a wrong number rather than a missing feature.
 
 ## What stays PTY-only, permanently
 
@@ -120,17 +144,19 @@ They land in the run store and ride the **existing** `run:changed` push. No new 
 
 | Path | Role |
 |---|---|
-| `src/shared/osc-title.ts` | OSC 0/1/2 extractor + cross-chunk tail (pure, unit-tested) |
-| `src/shared/agent-title-status.ts` | title → activity classifier + edge-triggered tracker (pure, unit-tested) |
+| `src/shared/osc-title.ts` | OSC extractor, xterm termination, cross-chunk carry (pure) |
+| `src/shared/agent-title-status.ts` | ownership-first activity classifier + edge-triggered tracker (pure) |
 | `src/main/orchestrator/pane-bridge.ts` | pane registry, chunk observation, run-store + meter wiring |
-| `src/main/orchestrator/claude-usage.ts` | worktree-attributed transcript token scan |
-| `src/main/orchestrator/run-store.ts` | `activity` column, usage provider hook |
-| `src/main/orchestrator/dispatcher.ts` | register/unregister panes at launch and teardown |
+| `src/main/orchestrator/claude-usage.ts` | per-record attributed, deduplicated transcript reader |
+| `src/main/orchestrator/run-store.ts` | activity/usage provider hooks, `getAgentState` |
+| `src/main/orchestrator/dispatcher.ts` | pane registration, transcript root, teardown ordering |
 | `src/main/index.ts` | the one-line observation tap |
 | `src/renderer/src/components/RunsPanel.tsx` | activity chip + usage row |
 | `e2e/dispatch-seam.spec.ts` | real dispatch, real ConPTY, real OSC titles |
 
-Unit tests for the pure layer and the event mapper live in `src/main/orchestrator/title-seam.test.ts` and `pane-bridge.test.ts` (under `src/main` by repo convention — `src/shared` is compiled by the web tsconfig, which has no node types).
+Unit tests live in `src/main/orchestrator/title-seam.test.ts` (parser + classifier), `pane-bridge.test.ts` (event mapper, lifecycle, scan serialization, teardown) and `claude-usage.test.ts` (attribution, dedupe, delta accounting) — under `src/main` by repo convention, because `src/shared` is compiled by the web tsconfig, which has no node types.
+
+The transcript root is **injected** by the dispatcher, so `claude-usage.ts` reads no environment at all. The e2e override requires both `MORZ_E2E=1` and an unpackaged build, so a shipped Morz cannot be pointed at another transcript root at runtime.
 
 ## Reversibility
 

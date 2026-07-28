@@ -285,6 +285,12 @@ function currentAgentState(runId: string, agentId: AgentId): string | undefined 
   return row?.state
 }
 
+/** w17/adapter-seam — the ledger's CURRENT state, so an observer reconciles
+ * against the truth rather than a cache Stop may already have invalidated. */
+export function getAgentState(runId: string, agentId: AgentId): string | undefined {
+  return currentAgentState(runId, agentId)
+}
+
 export function patchAgent(
   runId: string,
   agentId: AgentId,
