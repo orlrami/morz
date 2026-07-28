@@ -28,6 +28,16 @@ export function projectSlug(cwd: string): string {
   return cwd.replace(/[^a-zA-Z0-9]/g, '-')
 }
 
+/**
+ * Transcript root. The override is gated on MORZ_E2E so the suite can prove the
+ * real metering path against a fixture transcript without writing into the
+ * owner's ~/.claude — it is inert in every shipped build.
+ */
+function claudeHome(): string {
+  const override = process.env.MORZ_E2E === '1' ? process.env.MORZ_E2E_CLAUDE_HOME : undefined
+  return override || homedir()
+}
+
 function sumLine(line: string, totals: TranscriptUsage): void {
   if (!line.includes('"usage"')) return
   try {
@@ -50,7 +60,7 @@ function sumLine(line: string, totals: TranscriptUsage): void {
  * Read line-by-line: a long session's transcript is not something to buffer.
  */
 export async function scanWorktreeUsage(worktree: string): Promise<TranscriptUsage | null> {
-  const dir = join(homedir(), '.claude', 'projects', projectSlug(worktree))
+  const dir = join(claudeHome(), '.claude', 'projects', projectSlug(worktree))
   let files: string[]
   try {
     files = (await readdir(dir)).filter((name) => name.endsWith('.jsonl'))
