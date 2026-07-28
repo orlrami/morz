@@ -11,6 +11,7 @@ import {
   ConnectionsApi,
   classifyPathProbe,
   cliOfExecutable,
+  keepsPreviousRow,
   presenceAfterProbe,
   type CliConnection,
   type CliId,
@@ -698,9 +699,10 @@ async function detectConnection(
   if (resolution.kind !== 'found') {
     // The last known version stays visible (honest staleness). Presence only
     // drops on an authoritative no-match — a failed lookup (timeout, spawn
-    // error) preserves it rather than evicting a working CLI (w17 review).
-    if (previous?.installed && previous.version) {
-      const present = presenceAfterProbe(resolution, previous.present)
+    // error) preserves it rather than evicting a working CLI, including one
+    // whose version is still unknown because --version failed (w17 review).
+    const present = presenceAfterProbe(resolution, previous?.present ?? false)
+    if (previous && keepsPreviousRow(previous, present)) {
       return { ...previous, detectedAt, present, versionStale: true, update: null }
     }
     return {

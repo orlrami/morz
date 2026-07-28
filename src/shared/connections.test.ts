@@ -3,6 +3,7 @@ import { test } from 'node:test'
 import {
   classifyPathProbe,
   isPlannerEligible,
+  keepsPreviousRow,
   presenceAfterProbe,
   type CliConnection
 } from './connections'
@@ -63,4 +64,25 @@ test('a transient PATH probe failure keeps the CLI planner-eligible', () => {
   assert.equal(presenceAfterProbe(transient, false), false)
   // A successful lookup restores it.
   assert.equal(presenceAfterProbe({ kind: 'found', candidates: ['claude'] }, false), true)
+})
+
+test('a present CLI with no known version survives a probe error', () => {
+  // Found on PATH, but its --version call failed: installed with version null.
+  const versionless = { installed: true, version: null }
+  const transient = classifyPathProbe({ ok: false, exitCode: 2 }, [])
+  const present = presenceAfterProbe(transient, true)
+
+  assert.equal(present, true)
+  assert.equal(keepsPreviousRow(versionless, present), true)
+  assert.equal(isPlannerEligible(connection({ present, version: null })), true)
+
+  // Authoritatively gone with nothing worth remembering: the row is dropped
+  // rather than kept as an installed CLI with neither version nor presence.
+  const absent = presenceAfterProbe(classifyPathProbe({ ok: false, exitCode: 1 }, []), true)
+  assert.equal(keepsPreviousRow(versionless, absent), false)
+  // A remembered version still keeps the row so staleness stays visible.
+  assert.equal(keepsPreviousRow({ installed: true, version: '1.0.0' }, absent), true)
+  // A CLI that was never installed has no row to keep.
+  assert.equal(keepsPreviousRow(undefined, true), false)
+  assert.equal(keepsPreviousRow({ installed: false, version: null }, true), false)
 })

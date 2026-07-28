@@ -103,6 +103,20 @@ export function presenceAfterProbe(resolution: PathResolution, wasPresent: boole
   return resolution.kind === 'absent' ? false : wasPresent
 }
 
+/**
+ * Whether a known CLI's row survives a probe that resolved no executable. A
+ * remembered version keeps it so the UI can show honest staleness — and so
+ * does presence a failed probe could not disprove, even when the version is
+ * still unknown because an earlier `--version` call failed (w17 review).
+ */
+export function keepsPreviousRow(
+  previous: Pick<CliConnection, 'installed' | 'version'> | undefined,
+  present: boolean
+): boolean {
+  if (!previous?.installed) return false
+  return previous.version !== null || present
+}
+
 /** Map a spawned pane's argv/exe to the CliId it is running (shared by detection + lanes). */
 export function cliOfExecutable(exe: string): CliId | null {
   const base = exe.toLowerCase().replace(/\.(exe|cmd|bat)$/, '')
