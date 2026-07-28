@@ -634,7 +634,11 @@ export function registerDispatchIpc(ipcMain: IpcMain, deps: DispatcherHost): voi
   // w17/adapter-seam — run status starts reporting observed activity and the
   // meter's real totals instead of the hardcoded {usd:null,tokens:null}.
   setAgentActivityProvider((runId, agentId) => paneBridge.activity(runId, agentId))
-  setRunUsageProvider((runId) => costMeter.usage(runId))
+  setRunUsageProvider((runId) => ({
+    ...costMeter.usage(runId),
+    // A read abandoned on deadline makes the number a floor, not a total.
+    partial: paneBridge.meteringIncomplete(runId) || undefined
+  }))
   ipcMain.handle(RunApi.approvePlan, (_e, plan: SpawnPlan) => approvePlan(plan))
   ipcMain.handle(RunApi.dispatch, (_e, plan: SpawnPlan) => dispatch(plan))
   // w14/orch-scoped — optional spaceRoot filter (no arg = unfiltered)

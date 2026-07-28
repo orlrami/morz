@@ -313,7 +313,8 @@ export function patchAgent(
  * run store keeps no dependency on the bridge or the meter; unset = today's
  * behavior exactly (no activity, null usage).
  */
-type UsageProvider = (runId: string) => { usd: number | null; tokens: number | null }
+type RunUsage = { usd: number | null; tokens: number | null; partial?: boolean }
+type UsageProvider = (runId: string) => RunUsage
 type ActivityProvider = (runId: string, agentId: AgentId) => AgentActivity | null
 
 let usageProvider: UsageProvider | null = null
@@ -359,7 +360,7 @@ export function getRunStatus(runId: string): RunStatus | null {
 }
 
 /** A failing provider must never take the whole run status down with it. */
-function readUsage(runId: string): { usd: number | null; tokens: number | null } {
+function readUsage(runId: string): RunUsage {
   try {
     return usageProvider?.(runId) ?? { usd: null, tokens: null }
   } catch {

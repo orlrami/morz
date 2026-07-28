@@ -82,8 +82,10 @@ export interface RunStatus {
   state: RunState
   /** Live per-agent states, keyed by agentId. */
   agents: Record<AgentId, AgentRunState>
-  /** Running usage for the kill-switch (null until first sample). */
-  usage: { usd: number | null; tokens: number | null }
+  /** Running usage for the kill-switch (null until first sample).
+   * w17/adapter-seam — `partial` marks a FLOOR rather than a total: teardown
+   * abandoned a transcript read on deadline, so real usage is at least this. */
+  usage: { usd: number | null; tokens: number | null; partial?: boolean }
   startedAt: string | null
   endedAt: string | null
 }

@@ -30,7 +30,7 @@ Two channels feed it, both zero-install:
 Agent CLIs announce their own state in the terminal title (`ESC ] 0|1|2 ; <title> BEL`). This is a structured terminal protocol signal, not TUI text scraping: we never regex the screen. Ported from Orca (`onorca.dev`, MIT — attributed in the source headers), whose implementation encodes traps we would otherwise hit blind:
 
 - **Hand-rolled parser, never a regex** (`src/shared/osc-title.ts`). PTY chunks can embed megabyte pastes; a global regex over every chunk is a performance and correctness trap.
-- **Termination follows xterm exactly**, because xterm renders the same bytes and any divergence means Morz classifies text the user never saw as a title. An OSC string ends at BEL, at C1 ST, at `ESC \`, or at **any other ESC** — the escape both ends this string and begins the next sequence. CAN and SUB abort it, discarding the title. Both `ESC ]` and C1 introducers are accepted. Accepting only BEL and `ESC \` is what let `OSC 2;Claude idle ESC X permission BEL` be read as a *waiting* agent.
+- **Termination follows xterm exactly**, because xterm renders the same bytes and any divergence means Morz classifies text the user never saw as a title. An OSC string ends at BEL, at C1 ST, at `ESC \`, or at **any other ESC** — the escape both ends this string and begins the next sequence, so it is consumed by neither and scanning resumes *on* it. CAN and SUB abort, discarding the title. Both `ESC ]` and C1 introducers are accepted. Accepting only BEL and `ESC \` let `OSC 2;Claude idle ESC X permission BEL` read as a *waiting* agent; consuming that terminating ESC then swallowed the whole next sequence, so `ESC]2;first ESC]2;second BEL` yielded only `first` — a CLI that chains title writes without BEL would have lost every transition but the first.
 - **1024-char head+tail truncation**, not a prefix clip — the trailing status word *is* the signal. The bound is applied while slicing out of the chunk, so an enormous title is never materialized in full first.
 - **Cross-chunk carry**, because a title routinely splits across two `onData` chunks, with a bounded pending buffer so a malformed sequence cannot grow memory without limit. An ESC at the chunk edge is carried rather than guessed: it may be ST or a new sequence, and the two end the title in different places.
 - **All titles per chunk, in byte order**, capped by a fixed-capacity ring — a `working → idle` pair coalesced inside one chunk is invisible if you only read the chunk's last title.
@@ -126,6 +126,18 @@ Ledger writes are coalesced to **one per chunk**. Every title is still classifie
 ## Teardown ordering
 
 Stop kills the panes, but the last turn's tokens are still only on disk, and nothing has read them. So `teardownAgents` kills every agent, then **awaits** `paneBridge.finalizeRun(runId)` — which drains any in-flight read and takes one guaranteed final reading — and only then removes the worktrees. Getting this backwards (detaching before the kill, as the first cut did) meant a run stopped while an agent was still `working` reported zero usage. The e2e asserts the exact figure after Stop, so a regression shows up as a wrong number rather than a missing feature.
+
+**That await is bounded.** A filesystem read cannot be cancelled, so a stalled or locked transcript would otherwise hang Stop indefinitely — an unbounded wait on an uncancellable operation is a deadlock, not a safeguard. `finalizeRun` races the read against a 5s deadline (`DEFAULT_FINALIZE_TIMEOUT_MS`, injectable for tests). On expiry the pane is released and teardown proceeds immediately; the abandoned read still resolves eventually, sees `released`, and records nothing.
+
+A skipped read is reported, never silently treated as final. The run is flagged, `RunStatus.usage.partial` goes true, a `metering-gap` event is emitted, and a warning naming the agent and the wait is logged. The run card then renders the figure as `2,600+` beside an "at least" marker, so the owner sees a floor rather than a number that quietly under-reports.
+
+## Publishing changes to the UI
+
+The renderer learns about runs from exactly one place: the `run:changed` push (`runsStore.ts:223`, plus a single hydrate when the panel subscribes). So **any observable change must push**, not only the ones that write a ledger row. Pushing on ledger writes alone left the activity chip frozen for whole runs, because the most common transition — `working → idle` — moves no row at all: the agent was already `running` and stays `running`.
+
+`observe()` therefore pushes once per chunk when the ledger changed **or** the observed activity changed, and `finalize` pushes when it clears a dead pane's activity. It is still at most one push per chunk. The e2e proves this specifically: it mounts the run card *before* the agent writes its first title, so the store's one hydrate-on-subscribe cannot be what fills the chip in, then asserts the chip appears on a `working` transition that provably moves no ledger row. Reverting the fix makes that assertion fail — verified, not assumed.
+
+One accepted consequence of coalescing: a `waiting → idle` pair landing inside a single chunk shows the owner only the `idle` it settled on. The `state` events still record both, so an event log (0.0.7) can surface the transient wait; the chip reflects where things actually are.
 
 ## What stays PTY-only, permanently
 

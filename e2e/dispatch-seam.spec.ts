@@ -117,6 +117,9 @@ function writeFakeCli(path: string): void {
       '}',
       'Write-Host "MORZ_FAKE_CLI_READY"',
       'if ($prompt -match "EMIT_TITLES") {',
+      // the FIRST title is gated too, so the spec can mount the run card while
+      // this agent has no observed activity at all
+      '  Wait-Gate "go-working.txt"',
       '  Set-AgentTitle "$([char]0x280B) Claude Code"',
       '  Write-Host "MORZ_FAKE_WORKING"',
       '  Wait-Gate "go-waiting.txt"',
@@ -250,9 +253,25 @@ test('dispatched panes report real activity and real usage; a silent CLI reports
     const release = (gate: string): void =>
       writeFileSync(join(talker.worktree!, gate), 'go\n', 'utf8')
 
+    // The run card is mounted BEFORE the agent has written a single title, so
+    // the store's one hydrate-on-subscribe fetch cannot be what fills the chip
+    // in. From here the run is known to the store and the only remaining update
+    // path is a `run:changed` push.
+    await page.getByRole('radio', { name: 'Orchestrated' }).click()
+    await page.getByRole('tab', { name: 'Runs' }).click()
+    await expect(page.getByTestId('run-agent')).toHaveCount(2)
+    await expect(page.locator('[data-testid="agent-activity"]')).toHaveCount(0)
+
+    // `working` moves NO ledger row — the agent is already `running` — so a
+    // push that only fires on a ledger change leaves this chip frozen forever.
+    release('go-working.txt')
     await expect
       .poll(async () => (await readStatus())?.agentsDetail?.talker.activity, { timeout: 30_000 })
       .toBe('working')
+    expect((await readStatus())!.agents.talker).toBe('running')
+    await expect(
+      page.locator('[data-testid="agent-activity"][data-activity="working"]').first()
+    ).toBeVisible({ timeout: 20_000 })
 
     release('go-waiting.txt')
     await expect
@@ -265,10 +284,7 @@ test('dispatched panes report real activity and real usage; a silent CLI reports
       .poll(async () => (await readStatus())?.agents.talker, { timeout: 30_000 })
       .toBe('blocked')
 
-    // the run card shows it, in the words the owner reads
-    await page.getByRole('radio', { name: 'Orchestrated' }).click()
-    await page.getByRole('tab', { name: 'Runs' }).click()
-    await expect(page.getByTestId('run-agent')).toHaveCount(2)
+    // and the card follows it live, in the words the owner reads
     const activityChip = page.locator('[data-testid="agent-activity"][data-activity="waiting"]')
     await expect(activityChip.first()).toBeVisible({ timeout: 20_000 })
     await expect(activityChip.first()).toContainText('waiting for you')

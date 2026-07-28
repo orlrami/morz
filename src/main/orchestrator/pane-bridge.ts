@@ -66,6 +66,8 @@ export type PaneBridgeEvent =
       durationMs: number
       at: number
     }
+  /** Teardown gave up on a transcript read: this agent's usage is a floor, not a total. */
+  | { type: 'metering-gap'; runId: string; agentId: string; waitedMs: number; at: number }
 
 export interface PaneBridgeDeps {
   /** Guarded run-store transition. May throw (terminal/illegal) — the bridge catches. */
@@ -79,7 +81,12 @@ export interface PaneBridgeDeps {
   /** Broadcast the refreshed RunStatus. */
   push(runId: string): void
   now(): number
+  /** How long teardown may wait on a transcript read before giving up. */
+  finalizeTimeoutMs?: number
 }
+
+/** Stop must stay instant: teardown never waits longer than this on a read. */
+export const DEFAULT_FINALIZE_TIMEOUT_MS = 5_000
 
 type Lifecycle = 'running' | 'blocked'
 
@@ -108,6 +115,8 @@ export interface PaneBridge {
   /** Final metered read for every pane of a run, then detach. Await before cleanup. */
   finalizeRun(runId: string): Promise<void>
   activity(runId: string, agentId: string): AgentActivity | null
+  /** True when a read was abandoned on deadline, so this run's usage is a floor. */
+  meteringIncomplete(runId: string): boolean
   onEvent(listener: (event: PaneBridgeEvent) => void): () => void
 }
 
@@ -116,9 +125,30 @@ function titleCliFor(cli: PlannedCli): TitleCli {
   return cli === 'claude' || cli === 'codex' || cli === 'agy' ? cli : 'opencode'
 }
 
+/**
+ * Resolves true when `work` finished first, false when the deadline won. The
+ * loser is not cancellable — a filesystem read cannot be aborted — so callers
+ * must make a late result harmless rather than rely on it never arriving.
+ */
+async function within(work: Promise<unknown>, ms: number): Promise<boolean> {
+  let timer: NodeJS.Timeout | undefined
+  const expired = new Promise<false>((resolve) => {
+    timer = setTimeout(() => resolve(false), ms)
+    timer.unref?.()
+  })
+  try {
+    return await Promise.race([work.then(() => true, () => true), expired])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 export function createPaneBridge(deps: PaneBridgeDeps): PaneBridge {
   const panes = new Map<string, PaneState>()
   const listeners = new Set<(event: PaneBridgeEvent) => void>()
+  /** Runs whose usage is known to be a floor because a read was abandoned. */
+  const incompleteRuns = new Set<string>()
+  const finalizeTimeoutMs = deps.finalizeTimeoutMs ?? DEFAULT_FINALIZE_TIMEOUT_MS
 
   const emit = (event: PaneBridgeEvent): void => {
     for (const listener of listeners) {
@@ -215,15 +245,37 @@ export function createPaneBridge(deps: PaneBridgeDeps): PaneBridge {
    */
   const finalize = async (pane: PaneState): Promise<void> => {
     pane.closed = true
+    const hadActivity = pane.activity !== null
     pane.activity = null
-    try {
-      await (pane.scanPromise ?? Promise.resolve())
-      await runScans(pane)
-    } catch {
-      // teardown must never fail on a metering read
-    } finally {
-      pane.released = true
+
+    const startedAt = deps.now()
+    const finished = await within(
+      (async () => {
+        await (pane.scanPromise ?? Promise.resolve())
+        await runScans(pane)
+      })(),
+      finalizeTimeoutMs
+    )
+    // Released either way. A read that resolves after this sees `released` and
+    // records nothing, so abandoning it is safe even though it cannot be killed.
+    pane.released = true
+
+    if (!finished) {
+      incompleteRuns.add(pane.runId)
+      const waitedMs = deps.now() - startedAt
+      console.warn(
+        `[morz] metering incomplete for ${pane.agentId} (run ${pane.runId}): transcript read exceeded ${finalizeTimeoutMs}ms — reported usage is a floor, not a total`
+      )
+      emit({
+        type: 'metering-gap',
+        runId: pane.runId,
+        agentId: pane.agentId,
+        waitedMs,
+        at: deps.now()
+      })
     }
+    // The chip must clear even when nothing else pushes for this run.
+    if (hadActivity) deps.push(pane.runId)
   }
 
   return {
@@ -259,6 +311,7 @@ export function createPaneBridge(deps: PaneBridgeDeps): PaneBridge {
     observe(paneId: string, data: string): void {
       const pane = panes.get(paneId)
       if (!pane || pane.closed || !data) return
+      const activityBefore = pane.activity
       let settled: AgentActivity | null = null
       let turnEnded = false
       // Every title is classified, in byte order: a working→idle pair coalesced
@@ -282,7 +335,11 @@ export function createPaneBridge(deps: PaneBridgeDeps): PaneBridge {
       // The ledger only needs where the chunk LANDED. One SQLite write, one
       // broadcast and one metering read per chunk, however many titles it
       // carried — intermediate states inside a single chunk are sub-frame.
-      if (settled && applyLifecycle(pane, settled)) deps.push(pane.runId)
+      const ledgerChanged = settled !== null && applyLifecycle(pane, settled)
+      // The activity chip rides `run:changed` like everything else, and most
+      // real transitions (working → idle) move no ledger row at all — pushing
+      // only on a row change left the chip frozen for the whole run.
+      if (ledgerChanged || pane.activity !== activityBefore) deps.push(pane.runId)
       if (turnEnded) void runScans(pane)
     },
 
@@ -319,6 +376,10 @@ export function createPaneBridge(deps: PaneBridgeDeps): PaneBridge {
         if (pane.runId === runId && pane.agentId === agentId) return pane.activity
       }
       return null
+    },
+
+    meteringIncomplete(runId: string): boolean {
+      return incompleteRuns.has(runId)
     },
 
     onEvent(listener: (event: PaneBridgeEvent) => void): () => void {

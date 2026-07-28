@@ -52,6 +52,19 @@ test('any ESC ends the OSC string, as xterm renders it', () => {
   assert.equal(detectActivityFromTitle(titles[0]), 'idle')
 })
 
+test('a terminating ESC is reconsidered as the next introducer, not swallowed', () => {
+  // Round-2 repro: consuming the bare ESC ate the whole sequence behind it, so
+  // a CLI chaining title writes without BEL lost every title but the first.
+  assert.deepEqual(scanOscTitles('\x1b]2;first\x1b]2;second\x07').titles, ['first', 'second'])
+  // the same shape carrying the signal that actually matters
+  assert.deepEqual(scanOscTitles('\x1b]2;⠋ Claude\x1b]2;✳ Claude\x07').titles, [
+    '⠋ Claude',
+    '✳ Claude'
+  ])
+  // three chained, the last ST-terminated
+  assert.deepEqual(scanOscTitles(`\x1b]2;a\x1b]2;b\x1b]2;c${ST}`).titles, ['a', 'b', 'c'])
+})
+
 test('CAN and SUB abort the sequence — the title is discarded, not truncated', () => {
   assert.deepEqual(scanOscTitles('\x1b]2;Claude working\x18').titles, [])
   assert.deepEqual(scanOscTitles('\x1b]2;Claude working\x1a').titles, [])

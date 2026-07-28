@@ -564,6 +564,7 @@ function RunDetail({
               <dt style={{ color: colors.quartzDim }}>tokens</dt>
               <dd style={{ color: colors.quartz }} data-testid="run-usage-tokens">
                 {status.usage.tokens.toLocaleString()}
+                {status.usage.partial ? '+' : ''}
               </dd>
             </div>
           )}
@@ -572,6 +573,15 @@ function RunDetail({
               <dt style={{ color: colors.quartzDim }}>usd</dt>
               <dd style={{ color: colors.quartz }}>{status.usage.usd.toFixed(4)}</dd>
             </div>
+          )}
+          {status.usage.partial && (
+            <span
+              style={{ color: colors.warning }}
+              data-testid="run-usage-partial"
+              title="A transcript read was abandoned during teardown, so the real figure is higher."
+            >
+              at least
+            </span>
           )}
         </dl>
       )}

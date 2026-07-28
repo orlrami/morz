@@ -141,12 +141,14 @@ export function scanOscTitles(data: string): OscTitleScan {
         break
       }
       if (code === ESC) {
-        // `ESC \` is ST; any other ESC still ends this string and starts the
-        // next sequence, so it is not consumed. At the chunk edge we cannot yet
-        // tell which, and guessing would split a title in the wrong place.
+        // `ESC \` is ST and belongs to this sequence. Any OTHER escape both
+        // ends this string and introduces the next one, so it is consumed by
+        // neither — scanning resumes ON it. Consuming it swallowed a chained
+        // `ESC]2;first ESC]2;second BEL` down to just "first".
+        // At the chunk edge we cannot yet tell the two apart, so we carry.
         if (cursor + 1 >= data.length) return carry(start)
         end = cursor
-        consumed = data[cursor + 1] === '\\' ? 2 : 1
+        consumed = data[cursor + 1] === '\\' ? 2 : 0
         break
       }
       cursor += 1

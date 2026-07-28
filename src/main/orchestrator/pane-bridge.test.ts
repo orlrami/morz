@@ -44,7 +44,11 @@ interface Harness {
 }
 
 /** `reads` supplies the usage for each successive read (past the end ⇒ null). */
-function harness(reads: (TranscriptUsage | null)[] = [], reader?: TranscriptReader): Harness {
+function harness(
+  reads: (TranscriptUsage | null)[] = [],
+  reader?: TranscriptReader,
+  opts: { finalizeTimeoutMs?: number } = {}
+): Harness {
   const ledger = new Map<string, string>([['run-1/solo', 'running']])
   const h: Harness = {
     bridge: null as never,
@@ -81,7 +85,8 @@ function harness(reads: (TranscriptUsage | null)[] = [], reader?: TranscriptRead
         }
       },
     push: (runId) => h.pushes.push(runId),
-    now: () => 1000
+    now: () => 1000,
+    finalizeTimeoutMs: opts.finalizeTimeoutMs
   })
   h.bridge.onEvent((event) => h.events.push(event))
   return h
@@ -142,8 +147,53 @@ test('a rejected lifecycle transition never escapes the bridge', () => {
   h.ledger.set('run-1/solo', 'cancelled') // Stop won the race
   assert.doesNotThrow(() => h.bridge.observe('pane-1', title('Claude — action required')))
   assert.deepEqual(activities(h), ['waiting'], 'the observation still stands')
-  assert.deepEqual(h.pushes, [], 'a refused transition pushes nothing')
+  assert.deepEqual(h.states, [], 'the ledger refused the write')
   assert.equal(h.ledger.get('run-1/solo'), 'cancelled', 'the terminal state is untouched')
+})
+
+/* ── the chip rides run:changed, so activity alone must push (round-2 #2) ── */
+
+test('working → idle pushes even though the lifecycle row never moves', () => {
+  const h = harness()
+  register(h)
+  h.bridge.observe('pane-1', title('⠋ Claude Code'))
+  h.bridge.observe('pane-1', title('✳ Claude Code'))
+
+  assert.deepEqual(h.states, [], 'neither transition writes to the ledger')
+  assert.deepEqual(
+    h.pushes,
+    ['run-1', 'run-1'],
+    'the renderer only ingests run:changed — no push means a frozen chip'
+  )
+})
+
+test('an observation that changes nothing does not push', () => {
+  const h = harness()
+  register(h)
+  h.bridge.observe('pane-1', title('⠋ Claude Code'))
+  h.pushes.length = 0
+  h.bridge.observe('pane-1', title('⠙ Claude Code')) // another spinner frame
+  h.bridge.observe('pane-1', title('C:\\Projects\\morz')) // unclassifiable
+  assert.deepEqual(h.pushes, [])
+})
+
+test('a refused ledger write still pushes, because the activity changed', () => {
+  const h = harness()
+  register(h)
+  h.ledger.set('run-1/solo', 'cancelled')
+  h.bridge.observe('pane-1', title('Claude — action required'))
+  assert.deepEqual(h.pushes, ['run-1'], 'what the agent is doing is still news')
+})
+
+test('clearing activity at exit pushes, so a dead pane loses its chip', async () => {
+  const h = harness()
+  register(h)
+  h.bridge.observe('pane-1', title('⠋ Claude Code'))
+  h.pushes.length = 0
+
+  h.bridge.paneExited('pane-1', 0)
+  await h.settle()
+  assert.deepEqual(h.pushes, ['run-1'])
 })
 
 /* ── waiting → idle must not strand the ledger (Codex finding 3) ── */
@@ -348,6 +398,53 @@ test('observation stops after exit and after finalizeRun', async () => {
   await h.bridge.finalizeRun('run-1')
   h.bridge.observe('pane-1', title('⠋ Claude Code'))
   assert.deepEqual(activities(h), [])
+})
+
+/* ── a hung read must not deadlock Stop (round-2 #1) ── */
+
+test('finalizeRun gives up on a hung read, reports the gap, and lets teardown proceed', async () => {
+  // a reader that never resolves — a locked or stalled transcript file
+  const h = harness([], { read: () => new Promise(() => undefined) }, { finalizeTimeoutMs: 30 })
+  register(h)
+  h.bridge.observe('pane-1', title('⠋ Claude Code'))
+
+  const startedAt = Date.now()
+  await h.bridge.finalizeRun('run-1') // used to hang forever
+  const waited = Date.now() - startedAt
+
+  assert.ok(waited < 2000, `teardown must not block on a hung read (waited ${waited}ms)`)
+  assert.equal(
+    h.bridge.meteringIncomplete('run-1'),
+    true,
+    'the usage figure is a floor and must say so'
+  )
+  const gap = h.events.find((e) => e.type === 'metering-gap')
+  assert.ok(gap, 'the gap is reported, not silently swallowed')
+  assert.equal((gap as { agentId: string }).agentId, 'solo')
+})
+
+test('a completed finalize never marks the run incomplete', async () => {
+  const h = harness([{ inputTokens: 1, outputTokens: 1 }])
+  register(h)
+  await h.bridge.finalizeRun('run-1')
+  assert.equal(h.bridge.meteringIncomplete('run-1'), false)
+  assert.deepEqual(h.events.filter((e) => e.type === 'metering-gap'), [])
+})
+
+test('a hung read that finally resolves cannot record usage after release', async () => {
+  const { reader, pending } = deferredReader()
+  const h = harness([], reader, { finalizeTimeoutMs: 30 })
+  register(h)
+  h.bridge.observe('pane-1', title('✳ Claude Code'))
+  await h.settle()
+
+  await h.bridge.finalizeRun('run-1')
+  assert.equal(h.bridge.meteringIncomplete('run-1'), true)
+
+  // the abandoned read completes long after teardown moved on
+  for (const resolve of pending) resolve({ inputTokens: 500, outputTokens: 500 })
+  await h.settle()
+  assert.deepEqual(h.usage, [], 'a released pane records nothing, however late it answers')
 })
 
 test('a read resolving after release cannot touch the ledger', async () => {
