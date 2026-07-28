@@ -402,7 +402,7 @@ function start(opts: ClaudeStartOpts): { agentId: string } {
     agentId: opts.agentId,
     event: 'spawn',
     outcome: 'unknown',
-    meta: { source: 'structured', cwd: opts.cwd }
+    meta: { source: 'structured' }
   })
   child.stdout.on('data', (d: Buffer) => onStdout(proc, d))
   child.stderr.on('data', (d: Buffer) =>

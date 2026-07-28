@@ -361,8 +361,7 @@ async function launchAgent(
   }
   logDispatchedSpawn(paneId, {
     cli: agent.cli,
-    agentId: agent.agentId,
-    cwd: paneCwd
+    agentId: agent.agentId
   })
   patchAgent(runId, agent.agentId, { pane_id: paneId })
   patchAgent(runId, agent.agentId, { pid: await findPanePid(paneId) })

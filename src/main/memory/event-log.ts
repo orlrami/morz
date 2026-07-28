@@ -1,4 +1,5 @@
 import { app } from 'electron'
+import { createHash } from 'node:crypto'
 import {
   appendFileSync,
   closeSync,
@@ -12,7 +13,6 @@ import {
   statSync,
   truncateSync
 } from 'node:fs'
-import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type {
   MemoryEventCli,
@@ -26,9 +26,15 @@ import type {
 } from '../../shared/memory'
 
 export const EVENT_LOG_FILE = 'memory-events.jsonl'
+/** Hidden so directory scans keyed on `memory-events` never treat it as a generation. */
+export const EVENT_LOG_LOCK_FILE = '.memory-events.lock'
 export const EVENT_LOG_MAX_BYTES = 5 * 1024 * 1024
 export const EVENT_LOG_MAX_RECORD_BYTES = 64 * 1024
 export const EVENT_LOG_KEEP_FILES = 2
+/** A lock older than this belonged to a process that died mid-rotation. */
+export const EVENT_LOG_LOCK_STALE_MS = 30_000
+/** Total time an append waits for another instance before giving up (fail-closed). */
+export const EVENT_LOG_LOCK_WAIT_MS = 1_000
 
 export type {
   MemoryEventCli,
@@ -64,16 +70,24 @@ export interface DispatchedInvocationContext {
   cli: MemoryEventCli
   agentId?: string
   spaceId?: string
-  cwd?: string
 }
 
 const SESSION_KINDS = new Set<MemoryEventSessionKind>(['lane', 'dispatched', 'planner'])
 const CLIS = new Set<MemoryEventCli>(['claude', 'codex', 'agy', 'opencode'])
 const EVENT_TYPES = new Set<MemoryEventType>(['spawn', 'exit', 'tool', 'block', 'interrupt'])
 const OUTCOMES = new Set<MemoryEventOutcome>(['ok', 'error', 'blocked', 'unknown'])
-const SAFE_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:/~-]*$/
+/** No path separators or drive colons, so an identifier can never carry a filesystem path. */
+const SAFE_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
 const SAFE_TOOL_NAME = /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/
+/** Model ids are vendor slugs; anything else is opaque data and gets dropped. */
+const SAFE_MODEL = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/
 const MEMORY_EVENT_MODES = new Set<MemoryEventMode>(['manual', 'assisted', 'orchestrated'])
+const SIGNALS = new Set([
+  'SIGABRT', 'SIGALRM', 'SIGBREAK', 'SIGBUS', 'SIGCHLD', 'SIGCONT', 'SIGFPE',
+  'SIGHUP', 'SIGILL', 'SIGINT', 'SIGKILL', 'SIGPIPE', 'SIGQUIT', 'SIGSEGV',
+  'SIGSTOP', 'SIGTERM', 'SIGTRAP', 'SIGTSTP', 'SIGTTIN', 'SIGTTOU', 'SIGUSR1',
+  'SIGUSR2', 'SIGWINCH'
+])
 const MAX_PENDING_TOOL_IDS = 256
 const MAX_TOOL_ID_LENGTH = 256
 
@@ -88,22 +102,100 @@ const SECRET_PATTERNS: RegExp[] = [
   /<\s*\/?\s*(?:system|developer|assistant)\b[^>]*>/gi
 ]
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+/**
+ * Profile roots on all three platforms, so a path that reaches a persisted
+ * field never carries the account name. Deliberately independent of
+ * `homedir()`, which only matches one separator form and only this machine.
+ */
+const PROFILE_ROOT = /(?:[A-Za-z]:)?[\\/]{1,2}(?:Users|home)[\\/]+[^\\/\s"']+/gi
+
+/*
+ * Canonicalization must run before any pattern: NFKC folds compatibility
+ * lookalikes, and default-ignorable/format characters are deleted so a key
+ * written as `sk-proj-<ZWSP>ABC...` cannot walk past a word-boundary pattern
+ * and still be recoverable by deleting the invisible character.
+ *
+ * Ranges are built at runtime rather than written as escapes in a character
+ * class, so this source file stays free of invisible characters.
+ */
+const IGNORABLE_RANGES: Array<[number, number]> = [
+  [0x0000, 0x0008], [0x000b, 0x000c], [0x000e, 0x001f], [0x007f, 0x009f],
+  [0x00ad, 0x00ad], [0x034f, 0x034f], [0x061c, 0x061c], [0x115f, 0x1160],
+  [0x17b4, 0x17b5], [0x180b, 0x180f], [0x200b, 0x200f], [0x202a, 0x202e],
+  [0x2060, 0x206f], [0x3164, 0x3164], [0xfe00, 0xfe0f], [0xfeff, 0xfeff],
+  [0xffa0, 0xffa0], [0xfff0, 0xfff8], [0xe0000, 0xe0fff]
+]
+
+function characterClass(ranges: Array<[number, number]>, flags: string): RegExp {
+  const body = ranges
+    .map(([from, to]) => `\\u{${from.toString(16)}}-\\u{${to.toString(16)}}`)
+    .join('')
+  return new RegExp(`[${body}]`, flags)
 }
 
-function redactText(value: string, maxLength: number): string {
+const DEFAULT_IGNORABLE = characterClass(IGNORABLE_RANGES, 'gu')
+const BINARY_BYTES = characterClass([[0x0000, 0x0008], [0x000e, 0x001f], [0xfffd, 0xfffd]], 'u')
+/** Bounded so an ordinary long token never turns into an expensive decode. */
+const BASE64_CANDIDATE = /[A-Za-z0-9+/=_-]{24,512}/g
+
+function canonicalize(value: string): string {
+  return value.normalize('NFKC').replace(DEFAULT_IGNORABLE, '')
+}
+
+function containsSecret(value: string): boolean {
+  return SECRET_PATTERNS.some((pattern) => {
+    pattern.lastIndex = 0
+    return pattern.test(value)
+  })
+}
+
+/** Decodes a base64/base64url run to text, or undefined when it is not text. */
+function decodeCandidate(candidate: string): string | undefined {
+  const body = candidate.replace(/-/g, '+').replace(/_/g, '/').replace(/=+$/, '')
+  if (body.length < 24 || body.length % 4 === 1) return undefined
+  const decoded = Buffer.from(body, 'base64').toString('utf8')
+  if (decoded.length === 0 || BINARY_BYTES.test(decoded)) return undefined
+  return canonicalize(decoded)
+}
+
+/**
+ * Catches secrets that survived plaintext scanning by being base64-wrapped.
+ * One decode level only; deeper nesting is not claimed to be covered.
+ */
+function redactEncodedSecrets(value: string): string {
+  return value.replace(BASE64_CANDIDATE, (candidate) => {
+    const decoded = decodeCandidate(candidate)
+    return decoded !== undefined && containsSecret(decoded) ? '[redacted]' : candidate
+  })
+}
+
+/** Keeps attribution without the payload: unsafe shapes become a stable digest. */
+function hashIdentifier(value: string): string {
+  return `h-${createHash('sha256').update(value).digest('hex').slice(0, 16)}`
+}
+
+/**
+ * Every persisted string goes through here.
+ *
+ * Known limitation: scanning is per record, so a secret deliberately split
+ * across two records cannot be detected. That is why the record shape carries
+ * no free-form text — `meta` is enum/shape validated and `cwd` is never
+ * persisted, so there is no field an attacker can stream a secret through.
+ *
+ * Exported so the adversarial corpus can assert on redaction itself rather
+ * than on the field validators that sit in front of it.
+ */
+export function redactText(value: string, maxLength: number): string {
   let clean = value.replace(/\u0000/g, '').replace(/\r\n/g, '\n')
-  const home = homedir()
-  if (home) clean = clean.replace(new RegExp(escapeRegExp(home), 'gi'), '~')
+  clean = canonicalize(clean).replace(PROFILE_ROOT, '~')
   for (const pattern of SECRET_PATTERNS) clean = clean.replace(pattern, '[redacted]')
-  return clean.slice(0, maxLength)
+  return redactEncodedSecrets(clean).slice(0, maxLength)
 }
 
 function cleanIdentifier(value: unknown, maxLength: number): string | undefined {
   if (typeof value !== 'string' || value.length === 0) return undefined
   const clean = redactText(value, maxLength)
-  return SAFE_IDENTIFIER.test(clean) ? clean : '[redacted]'
+  return SAFE_IDENTIFIER.test(clean) ? clean : hashIdentifier(clean)
 }
 
 function cleanToolName(value: unknown): string | undefined {
@@ -125,15 +217,18 @@ function normalizeMeta(value: unknown): MemoryEventMeta | undefined {
   if (typeof input.exitCode === 'number' && Number.isInteger(input.exitCode)) {
     meta.exitCode = input.exitCode
   }
-  if (typeof input.signal === 'string') meta.signal = redactText(input.signal, 32)
+  if (typeof input.signal === 'string' && SIGNALS.has(input.signal)) meta.signal = input.signal
   if (input.phase === 'start' || input.phase === 'result') meta.phase = input.phase
   if (input.source === 'structured' || input.source === 'pty') {
     meta.source = input.source
   } else if (input.source !== undefined) {
     meta.source = '[redacted]'
   }
-  if (typeof input.model === 'string') meta.model = redactText(input.model, 128)
-  if (typeof input.cwd === 'string') meta.cwd = redactText(input.cwd, 512)
+  if (typeof input.model === 'string') {
+    const model = redactText(input.model, 64)
+    if (SAFE_MODEL.test(model)) meta.model = model
+  }
+  // `cwd` is never persisted: it leaks profile names, and agentId/spaceId already attribute.
   return Object.keys(meta).length > 0 ? meta : undefined
 }
 
@@ -166,6 +261,56 @@ function normalizeEvent(value: unknown): MemoryInvocationEvent | null {
   if (durationMs !== undefined) normalized.durationMs = durationMs
   if (meta) normalized.meta = meta
   return normalized
+}
+
+/*
+ * Serializing writers. Every log operation is synchronous, so within one
+ * process the only way to re-enter is nesting (append -> rotate); `heldLocks`
+ * covers that and keeps a second store instance from taking the lockfile it
+ * already owns. The lockfile is what stops a second Morz instance from
+ * rotating, repairing or truncating the same file concurrently.
+ */
+const heldLocks = new Set<string>()
+const sleepSignal = new Int32Array(new SharedArrayBuffer(4))
+
+function sleepSync(ms: number): void {
+  Atomics.wait(sleepSignal, 0, 0, ms)
+}
+
+function lockIsStale(path: string): boolean {
+  try {
+    return Date.now() - statSync(path).mtimeMs > EVENT_LOG_LOCK_STALE_MS
+  } catch {
+    return false // It vanished; the next create attempt wins it honestly.
+  }
+}
+
+/** Runs `fn` as the only writer for `directory`, or returns `fallback` if the wait expires. */
+function withDirectoryLock<T>(directory: string, fallback: T, fn: () => T): T {
+  if (heldLocks.has(directory)) return fn()
+  const path = join(directory, EVENT_LOG_LOCK_FILE)
+  const deadline = Date.now() + EVENT_LOG_LOCK_WAIT_MS
+  for (;;) {
+    try {
+      closeSync(openSync(path, 'wx'))
+      break
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+      if (lockIsStale(path)) {
+        rmSync(path, { force: true })
+        continue
+      }
+      if (Date.now() >= deadline) return fallback
+      sleepSync(25)
+    }
+  }
+  heldLocks.add(directory)
+  try {
+    return fn()
+  } finally {
+    heldLocks.delete(directory)
+    rmSync(path, { force: true })
+  }
 }
 
 function writeAllowed(getMode: () => MemoryEventMode): boolean {
@@ -201,12 +346,14 @@ export class MemoryEventLog {
     if (bytes > this.maxRecordBytes || bytes > this.maxFileBytes) return false
 
     mkdirSync(this.options.directory, { recursive: true })
-    const current = this.pathFor(0)
-    this.repairTruncatedTail(current)
-    const currentBytes = existsSync(current) ? statSync(current).size : 0
-    if (currentBytes > 0 && currentBytes + bytes > this.maxFileBytes) this.rotate()
-    appendFileSync(current, line, { encoding: 'utf8', mode: 0o600 })
-    return true
+    return withDirectoryLock(this.options.directory, false, () => {
+      const current = this.pathFor(0)
+      this.repairTruncatedTail(current)
+      const currentBytes = existsSync(current) ? statSync(current).size : 0
+      if (currentBytes > 0 && currentBytes + bytes > this.maxFileBytes) this.rotate()
+      appendFileSync(current, line, { encoding: 'utf8', mode: 0o600 })
+      return true
+    })
   }
 
   readEvents(filter: MemoryEventFilter = {}): MemoryInvocationEvent[] {
@@ -241,9 +388,12 @@ export class MemoryEventLog {
   }
 
   clear(): void {
-    for (let generation = 0; generation < this.keepFiles; generation++) {
-      rmSync(this.pathFor(generation), { force: true })
-    }
+    if (!existsSync(this.options.directory)) return
+    withDirectoryLock(this.options.directory, undefined, () => {
+      for (let generation = 0; generation < this.keepFiles; generation++) {
+        rmSync(this.pathFor(generation), { force: true })
+      }
+    })
   }
 
   private rotate(): void {
@@ -341,7 +491,11 @@ export class ClaudeInvocationTracker {
             : undefined
         const name = id ? this.toolNames.get(id) : undefined
         if (id) this.toolNames.delete(id)
-        events.push(this.toolEvent(ts, name, block.is_error === true ? 'error' : 'ok', 'result'))
+        // Only an explicit boolean is a claim about the result; absent or
+        // malformed status stays 'unknown' rather than being called success.
+        const outcome: MemoryEventOutcome =
+          block.is_error === true ? 'error' : block.is_error === false ? 'ok' : 'unknown'
+        events.push(this.toolEvent(ts, name, outcome, 'result'))
       }
     }
     return events
@@ -418,7 +572,6 @@ export class DispatchedInvocationTracker {
       ...(durationMs === undefined ? {} : { durationMs }),
       meta: {
         source: 'pty',
-        ...(event === 'spawn' && context.cwd ? { cwd: context.cwd } : {}),
         ...(exitCode === undefined || exitCode === null ? {} : { exitCode })
       }
     }
