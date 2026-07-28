@@ -40,16 +40,20 @@ interface ModulesState {
 
 let hydration: Promise<void> | null = null
 
-/** Drop the dial to Manual the same way ModeDialCompact does: last Claude calls
- * happen here, then nothing in the renderer touches window.morz.claude. */
-function dropDialToManual(): void {
+/** Drop the dial to Manual only after Main acknowledges the fail-closed gate. */
+async function dropDialToManual(): Promise<void> {
+  if (!(await useModeStore.getState().setMode('manual'))) {
+    throw new Error('Main process did not acknowledge Manual mode')
+  }
   const morz = getMorz()
   for (const lane of useLaneStore.getState().lanes) {
     morz?.claude.interrupt(lane.agentId)
     useLayoutStore.getState().removePane(lane.paneId)
     useLaneStore.getState().removeLane(lane.paneId)
   }
-  useModeStore.getState().setMode('manual')
+}
+
+function notifyOrchestrationInterlock(): void {
   notifyBridge()?.emit({
     id: ORCHESTRATION_INTERLOCK_NOTICE_ID,
     level: 'warning',
@@ -80,6 +84,10 @@ export const useModulesStore = create<ModulesState>((set, get) => ({
   },
   setEnabled: async (id, on) => {
     const api = bridge()
+    const dropsOrchestration =
+      id === 'orchestration' && !on && useModeStore.getState().mode === 'orchestrated'
+    if (dropsOrchestration) await dropDialToManual()
+
     let next = { ...get().enabled }
     if (on) {
       // Contract: enabling a module brings its prerequisites with it.
@@ -89,9 +97,7 @@ export const useModulesStore = create<ModulesState>((set, get) => ({
     }
     next = api ? await api.set(id, on) : { ...next, [id]: on }
     set({ enabled: next })
-    if (id === 'orchestration' && !on && useModeStore.getState().mode === 'orchestrated') {
-      dropDialToManual()
-    }
+    if (dropsOrchestration) notifyOrchestrationInterlock()
   }
 }))
 

@@ -43,6 +43,7 @@ import { registerGitIpc } from './services/git-service'
 import { registerEditorIpc } from './services/editor-detect'
 import { registerClaudeIpc, restartLiveClaudeSessions } from './adapters/claude'
 import { notify, registerNotifyCenter } from './services/notify-center'
+import { logDispatchedExit } from './memory/event-log'
 // w4/mcp — bus pipe server + tool handlers (SqliteBoardPort = the real board)
 import { startPipeServer, type BusPipeServer } from './bus/pipe-server'
 import { BUS_OPEN_FILE_CHANNEL, createToolHandlers } from './bus/tool-handlers'
@@ -158,7 +159,9 @@ function startPtyHost(): void {
       case 'exit': {
         // pane gone → its journal row no longer represents a live child
         const paneId = msg.paneId as string
-        handleCliUpdateExit(paneId, typeof msg.exitCode === 'number' ? msg.exitCode : -1)
+        const exitCode = typeof msg.exitCode === 'number' ? msg.exitCode : -1
+        handleCliUpdateExit(paneId, exitCode)
+        logDispatchedExit(paneId, exitCode)
         for (const row of journalEntries('pty-spawn')) {
           if ((row.payload as SpawnJournal | null)?.paneId === paneId) journalDelete(row.id)
         }

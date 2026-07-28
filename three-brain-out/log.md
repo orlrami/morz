@@ -1,0 +1,1 @@
+﻿2026-07-27 morz-006-memory — consensus round (AGY+Codex+Fable) on 0.0.6 scope: six slices rejected as written; wave shrinks to 4 agents (renderer-core, context-blocks, supersession, event-log) + 0.0.7 pre-work; SYNTHESIS.md filed

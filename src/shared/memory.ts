@@ -156,6 +156,62 @@ export interface MemoryBootstrapApplyResult {
   skipped: number
 }
 
+export type MemoryEventSessionKind = 'lane' | 'dispatched' | 'planner'
+export type MemoryEventCli = 'claude' | 'codex' | 'agy' | 'opencode'
+export type MemoryEventType = 'spawn' | 'exit' | 'tool' | 'block' | 'interrupt'
+export type MemoryEventOutcome = 'ok' | 'error' | 'blocked' | 'unknown'
+export type MemoryEventMode = 'manual' | 'assisted' | 'orchestrated'
+
+/**
+ * Why a write did or did not land. Callers fire and forget, so the honest
+ * outcome has to be reportable rather than collapsed into a boolean:
+ * `skipped-mode` is the expected Manual/E2E gate, every `dropped-*` is a real
+ * event the log failed to keep. Lives here because the E2E preload returns it
+ * across the IPC boundary.
+ */
+export type MemoryEventWriteStatus =
+  | 'ok'
+  | 'skipped-mode'
+  | 'dropped-invalid'
+  | 'dropped-oversized'
+  | 'dropped-io'
+  | 'dropped-lock'
+
+/**
+ * Allowlisted event metadata. Raw args, env, prompts and file contents never
+ * cross this contract, and neither does the working directory — a path carries
+ * the OS profile name, while agentId/spaceId already attribute the event.
+ */
+export interface MemoryEventMeta {
+  exitCode?: number
+  /** Signal name from a fixed set; anything unrecognized is dropped. */
+  signal?: string
+  phase?: 'start' | 'result'
+  source?: 'structured' | 'pty' | '[redacted]'
+  model?: string
+}
+
+export interface MemoryInvocationEvent {
+  v: 1
+  ts: number
+  sessionKind: MemoryEventSessionKind
+  cli: MemoryEventCli
+  agentId?: string
+  spaceId?: string
+  event: MemoryEventType
+  name?: string
+  outcome?: MemoryEventOutcome
+  durationMs?: number
+  meta?: MemoryEventMeta
+}
+
+export interface MemoryEventLogStats {
+  count: number
+  bytes: number
+  /** Events this session failed to persist (invalid, oversized, or writer lock busy). */
+  dropped: number
+}
+
 export const MemoryApi = {
   list: 'memory:list', // (scope?: MemoryScope, scopeRef?: string) => Promise<MemoryEntry[]>
   get: 'memory:get', // (id) => Promise<MemoryEntry | null>
@@ -171,6 +227,9 @@ export const MemoryApi = {
   restore: 'memory:restore', // (id) => Promise<MemoryEntry>
   bootstrap: 'memory:bootstrap',
   applyBootstrap: 'memory:apply-bootstrap',
+  eventLogStats: 'memory:event-log-stats',
+  clearEventLog: 'memory:event-log-clear',
+  setEventLogMode: 'memory:event-log-set-mode',
   changed: 'memory:changed' // push → void (store or proposals changed)
 } as const
 
@@ -198,5 +257,8 @@ export interface MorzMemoryApi {
   restore(id: string): Promise<MemoryEntry>
   bootstrap(spaces: MemoryBootstrapSpace[]): Promise<MemoryBootstrapReview>
   applyBootstrap(reviewId: string, selectedIds: string[]): Promise<MemoryBootstrapApplyResult>
+  eventLogStats(): Promise<MemoryEventLogStats>
+  clearEventLog(): Promise<void>
+  setEventLogMode(mode: MemoryEventMode): Promise<MemoryEventMode>
   onChanged(cb: () => void): () => void
 }

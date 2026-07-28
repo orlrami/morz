@@ -44,6 +44,10 @@ import { journalEntries } from '../store/db'
 import { PortPool } from './port-pool'
 // Memory launch helper; the marked write-site below is the only behavior change.
 import { memoryPort, prependRenderedMemory } from '../memory/learn-port'
+import {
+  logDispatchedInterrupt,
+  logDispatchedSpawn
+} from '../memory/event-log'
 // w15/model-choice — per-agent CLI model suffix for the visible launch command.
 import { launchSuffixFor } from '../services/model-choice'
 import {
@@ -355,6 +359,10 @@ async function launchAgent(
   if (!spawned.ok) {
     throw new Error(`[dispatch] pane spawn failed for ${agent.agentId}: ${spawned.error ?? 'unknown'}`)
   }
+  logDispatchedSpawn(paneId, {
+    cli: agent.cli,
+    agentId: agent.agentId
+  })
   patchAgent(runId, agent.agentId, { pane_id: paneId })
   patchAgent(runId, agent.agentId, { pid: await findPanePid(paneId) })
 
@@ -426,7 +434,10 @@ async function teardownAgents(runId: string, spaceRoot: string, removeWorktrees 
   const h = requireHost()
   for (const row of getAgentRows(runId)) {
     if (!TERMINAL_AGENT_STATES.includes(row.state)) {
-      if (row.pane_id) await Promise.resolve(h.killPane(row.pane_id)).catch(() => undefined)
+      if (row.pane_id) {
+        logDispatchedInterrupt(row.pane_id)
+        await Promise.resolve(h.killPane(row.pane_id)).catch(() => undefined)
+      }
       if (row.pid !== null) killPidTree(row.pid)
       agentTransition(runId, row.agent_id, 'cancelled')
     }

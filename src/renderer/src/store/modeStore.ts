@@ -7,6 +7,7 @@
  */
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import type { MorzMemoryApi } from '../../../shared/memory'
 
 export type MorzMode = 'manual' | 'assisted' | 'orchestrated'
 
@@ -18,21 +19,39 @@ export const claudeAllowed = (mode: MorzMode): boolean => mode === 'assisted'
 
 interface ModeState {
   mode: MorzMode
-  setMode(mode: MorzMode): void
+  setMode(mode: MorzMode): Promise<boolean>
+}
+
+async function syncEventLogMode(mode: MorzMode): Promise<void> {
+  if (typeof window === 'undefined') return
+  const morz = window.morz as typeof window.morz & { memory?: MorzMemoryApi }
+  if (!morz.memory) throw new Error('Memory bridge unavailable')
+  await morz.memory.setEventLogMode(mode)
 }
 
 export const useModeStore = create<ModeState>()(
   persist(
     (set) => ({
       mode: 'manual',
-      setMode: (mode) => {
-        if (mode === 'orchestrated' && !ORCHESTRATED_AVAILABLE) return
-        set({ mode })
+      setMode: async (mode) => {
+        if (mode === 'orchestrated' && !ORCHESTRATED_AVAILABLE) return false
+        try {
+          await syncEventLogMode(mode)
+          set({ mode })
+          return true
+        } catch (error) {
+          console.warn('[morz-mode] main-process mode sync failed:', error)
+          return false
+        }
       }
     }),
     { name: MODE_STORAGE_KEY, version: 1 }
   )
 )
+
+queueMicrotask(() => {
+  void useModeStore.getState().setMode(useModeStore.getState().mode)
+})
 
 if (import.meta.env.DEV && typeof localStorage !== 'undefined') {
   useModeStore.subscribe(() => {

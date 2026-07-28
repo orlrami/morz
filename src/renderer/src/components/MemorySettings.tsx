@@ -12,6 +12,7 @@ import {
 import type {
   MemoryBootstrapReview,
   MemoryEntry,
+  MemoryEventLogStats,
   MemoryOp,
   MemoryScope,
   MorzMemoryApi
@@ -21,6 +22,17 @@ import { useMemoryStore } from '@/store/memoryStore'
 import { useSpaceStore } from '@/store/spaceStore'
 
 const SCOPES: MemoryScope[] = ['global', 'project', 'space', 'agent']
+
+function memoryApi(): MorzMemoryApi | undefined {
+  return (window as unknown as { morz?: { memory?: MorzMemoryApi } }).morz?.memory
+}
+
+function eventLogLabel(stats: MemoryEventLogStats): string {
+  const size = (stats.bytes / (1024 * 1024)).toFixed(2)
+  // Drops are only shown when there are some, so a healthy log stays quiet.
+  const dropped = stats.dropped > 0 ? ` · ${stats.dropped} dropped` : ''
+  return `${stats.count} events logged · ${size} MB${dropped}`
+}
 
 /** w15/memory-opset — UPDATE/DELETE approval cards render the op diff. */
 function OpDiff({ op }: { op: MemoryOp }): JSX.Element | null {
@@ -256,8 +268,18 @@ export function MemorySettings(): JSX.Element {
   const [bootstrapSelected, setBootstrapSelected] = useState<Set<string>>(new Set())
   const [bootstrapBusy, setBootstrapBusy] = useState<'scan' | 'apply' | null>(null)
   const [bootstrapStatus, setBootstrapStatus] = useState('')
+  const [eventStats, setEventStats] = useState<MemoryEventLogStats | null>(null)
+  const [eventLogBusy, setEventLogBusy] = useState(false)
+  const [eventLogError, setEventLogError] = useState('')
 
   useEffect(() => start(), [start])
+  useEffect(() => {
+    const api = memoryApi()
+    if (!api) return
+    void api.eventLogStats().then(setEventStats).catch((reason: unknown) => {
+      setEventLogError(reason instanceof Error ? reason.message : String(reason))
+    })
+  }, [])
   useEffect(() => {
     const timer = window.setTimeout(() => void search(query), 250)
     return () => window.clearTimeout(timer)
@@ -265,9 +287,6 @@ export function MemorySettings(): JSX.Element {
 
   const pending = proposals.filter((proposal) => proposal.state === 'pending')
   const visibleEntries = query.trim() ? searchResults : entries
-
-  const memoryApi = (): MorzMemoryApi | undefined =>
-    (window as unknown as { morz?: { memory?: MorzMemoryApi } }).morz?.memory
 
   const buildMemory = (): void => {
     const api = memoryApi()
@@ -320,6 +339,20 @@ export function MemorySettings(): JSX.Element {
     }).catch(() => undefined)
   }
 
+  const clearInvocationLog = (): void => {
+    const api = memoryApi()
+    if (!api) return
+    setEventLogBusy(true)
+    setEventLogError('')
+    void api.clearEventLog()
+      .then(() => api.eventLogStats())
+      .then(setEventStats)
+      .catch((reason: unknown) => {
+        setEventLogError(reason instanceof Error ? reason.message : String(reason))
+      })
+      .finally(() => setEventLogBusy(false))
+  }
+
   return (
     <section
       className="mt-5 rounded-xl border p-3"
@@ -346,6 +379,35 @@ export function MemorySettings(): JSX.Element {
           {entries.length} in scope
         </span>
       </div>
+
+      <div
+        className="mt-3 flex min-h-9 items-center gap-3 rounded-lg border px-2.5"
+        style={{ borderColor: 'var(--color-line)' }}
+      >
+        <p
+          className="min-w-0 flex-1 text-[10px]"
+          data-testid="memory-event-log-stats"
+          style={{ color: colors.quartzDim }}
+        >
+          {eventStats ? eventLogLabel(eventStats) : 'Loading event log…'}
+        </p>
+        <button
+          type="button"
+          aria-label="Clear memory event log"
+          onClick={clearInvocationLog}
+          disabled={eventLogBusy || !eventStats || eventStats.count === 0}
+          className="flex min-h-7 shrink-0 items-center gap-1 rounded-md border px-2 text-[9.5px] font-semibold disabled:opacity-40"
+          style={{ borderColor: 'var(--color-line-strong)', color: colors.quartzDim }}
+        >
+          <IconTrash size={11} stroke={1.6} />
+          {eventLogBusy ? 'Clearing…' : 'Clear'}
+        </button>
+      </div>
+      {eventLogError && (
+        <p className="mt-1 text-[9.5px]" role="alert" style={{ color: colors.error }}>
+          {eventLogError}
+        </p>
+      )}
 
       <div className="mt-3 rounded-lg border p-2.5" style={{ borderColor: 'var(--color-line)' }}>
         <div className="flex items-center justify-between gap-2">
