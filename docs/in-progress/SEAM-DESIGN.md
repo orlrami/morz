@@ -59,7 +59,12 @@ Scanning is triggered by a Channel A transition **to** idle or waiting — a tur
 | `agy` | spawn / exit / duration; Gemini glyphs `✦` `⏲` `◇` `✋` when present | none |
 | `opencode` | spawn / exit / duration | none |
 
-The table is a claim about what the classifier *can* resolve, not a promise that every CLI paints titles. When a CLI's title does not classify, the bridge emits nothing and the run card shows no activity chip — the honest empty state, never a guess. The e2e spec asserts exactly this asymmetry.
+The table is a claim about what the classifier *can* resolve, not a promise that every CLI paints titles. A title carrying no agent name at all — every ordinary shell and cwd title — classifies as nothing, and the run card shows no activity chip. That is the honest empty state, and the e2e spec asserts it against a deliberately title-silent agent.
+
+Two precise limits, both found while building this and worth knowing before trusting the chip:
+
+- **The fallback for an agent-named title is `idle`, never `working` or `waiting`.** A title that names an agent but matches no glyph or keyword (a cwd that happens to contain "codex", say) reads as idle. That is chosen, not accidental: `idle` moves no lifecycle state, so the cost of the fallback being wrong is a stale chip, while a `working`/`waiting` fallback would move the agent's state on a guess.
+- **On Windows the glyph channel depends on the CLI declaring UTF-8.** A CLI that writes its spinner under the default OEM code page emits `?` instead of the braille frame, and that title degrades to the `idle` fallback rather than reading as working. The real node-based CLIs set UTF-8 themselves; the e2e fixture has to do it explicitly, and it is the first thing to check if a CLI's activity ever looks stuck at idle.
 
 ## Event contract
 
@@ -123,6 +128,9 @@ They land in the run store and ride the **existing** `run:changed` push. No new 
 | `src/main/orchestrator/dispatcher.ts` | register/unregister panes at launch and teardown |
 | `src/main/index.ts` | the one-line observation tap |
 | `src/renderer/src/components/RunsPanel.tsx` | activity chip + usage row |
+| `e2e/dispatch-seam.spec.ts` | real dispatch, real ConPTY, real OSC titles |
+
+Unit tests for the pure layer and the event mapper live in `src/main/orchestrator/title-seam.test.ts` and `pane-bridge.test.ts` (under `src/main` by repo convention — `src/shared` is compiled by the web tsconfig, which has no node types).
 
 ## Reversibility
 
