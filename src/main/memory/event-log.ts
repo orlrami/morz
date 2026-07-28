@@ -1,9 +1,12 @@
 import { app } from 'electron'
 import {
   appendFileSync,
+  closeSync,
   existsSync,
   mkdirSync,
+  openSync,
   readFileSync,
+  readSync,
   renameSync,
   rmSync,
   statSync,
@@ -257,10 +260,33 @@ export class MemoryEventLog {
 
   private repairTruncatedTail(path: string): void {
     if (!existsSync(path)) return
-    const raw = readFileSync(path)
-    if (raw.length === 0 || raw[raw.length - 1] === 0x0a) return
-    const lastNewline = raw.lastIndexOf(0x0a)
-    truncateSync(path, lastNewline < 0 ? 0 : lastNewline + 1)
+    const size = statSync(path).size
+    if (size === 0) return
+
+    const fd = openSync(path, 'r')
+    let truncateAt: number | undefined
+    try {
+      const finalByte = Buffer.allocUnsafe(1)
+      readSync(fd, finalByte, 0, 1, size - 1)
+      if (finalByte[0] === 0x0a) return
+
+      const chunkBytes = 64 * 1024
+      for (let cursor = size; cursor > 0;) {
+        const start = Math.max(0, cursor - chunkBytes)
+        const chunk = Buffer.allocUnsafe(cursor - start)
+        readSync(fd, chunk, 0, chunk.length, start)
+        const newline = chunk.lastIndexOf(0x0a)
+        if (newline >= 0) {
+          truncateAt = start + newline + 1
+          break
+        }
+        cursor = start
+      }
+      truncateAt ??= 0
+    } finally {
+      closeSync(fd)
+    }
+    truncateSync(path, truncateAt)
   }
 
   private pathFor(generation: number): string {

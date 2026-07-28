@@ -25,10 +25,10 @@ export function ModeDialCompact(): JSX.Element {
   const setMode = useModeStore((s) => s.setMode)
   const orchestrationOn = useModulesStore((s) => s.enabled.orchestration) // w15/modules-core
 
-  const switchMode = (next: MorzMode): void => {
+  const switchMode = async (next: MorzMode): Promise<void> => {
     if (next === 'manual') {
       // Flip Main's authoritative mode before late lane callbacks can arrive.
-      setMode(next)
+      if (!(await setMode(next))) return
       const morz = getMorz()
       for (const lane of useLaneStore.getState().lanes) {
         morz?.claude.interrupt(lane.agentId)
@@ -37,7 +37,7 @@ export function ModeDialCompact(): JSX.Element {
       }
       return
     }
-    setMode(next)
+    await setMode(next)
   }
 
   return (
@@ -62,7 +62,7 @@ export function ModeDialCompact(): JSX.Element {
             aria-label={m.label}
             title={disabled ? 'Requires the Orchestration module' : m.label}
             onClick={() => {
-              if (!disabled) switchMode(m.id)
+              if (!disabled) void switchMode(m.id)
             }}
             className={`relative flex h-[22px] w-9 shrink-0 items-center justify-center overflow-hidden rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-bronze-hot)] focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--color-page)] ${
               disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'
