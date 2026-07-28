@@ -1,12 +1,15 @@
 import { expect, test } from '@playwright/test'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { delimiter, join } from 'node:path'
-import type { MemoryInvocationEvent } from '../src/main/memory/event-log'
+import type {
+  MemoryEventWriteStatus,
+  MemoryInvocationEvent
+} from '../src/main/memory/event-log'
 import type { MorzMemoryApi } from '../src/shared/memory'
 import { closeMorz, launchMorz, ROOT, type MorzApp } from './app'
 
 interface EventLogMemoryApi extends MorzMemoryApi {
-  testLog(event: MemoryInvocationEvent): Promise<boolean>
+  testLog(event: MemoryInvocationEvent): Promise<MemoryEventWriteStatus>
 }
 
 interface EventLogWindow {
@@ -66,7 +69,7 @@ test.describe.serial('Memory invocation event log', () => {
     const stats = await morz.page.evaluate(() =>
       (window as unknown as EventLogWindow).morz.memory.eventLogStats()
     )
-    expect(stats).toEqual({ count: 0, bytes: 0 })
+    expect(stats).toEqual({ count: 0, bytes: 0, dropped: 0 })
     expect(existsSync(join(morz.appDataDir, 'Morz', 'memory-events.jsonl'))).toBe(false)
   })
 

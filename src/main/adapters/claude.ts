@@ -291,7 +291,7 @@ function onStdout(proc: ClaudeProc, chunk: Buffer): void {
 }
 
 function handleEvent(proc: ClaudeProc, event: ClaudeEvent): void {
-  for (const invocation of proc.invocationTracker.observe(event)) logMemoryEvent(invocation)
+  for (const invocation of proc.invocationTracker.observe(event)) void logMemoryEvent(invocation)
   if (event.type === 'system' && (event as { subtype?: string }).subtype === 'init') {
     const init = event as { session_id?: string; model?: string; capabilities?: unknown }
     proc.sessionId = init.session_id ?? null
@@ -321,7 +321,7 @@ function handleControlRequest(proc: ClaudeProc, event: ClaudeEvent): void {
   const request = (event as { request?: { subtype?: string; tool_name?: string; input?: unknown } })
     .request
   if (request?.subtype === 'can_use_tool') {
-    logMemoryEvent({
+    void logMemoryEvent({
       v: 1,
       ts: Date.now(),
       sessionKind: 'lane',
@@ -394,7 +394,7 @@ function start(opts: ClaudeStartOpts): { agentId: string } {
     })()
   }
   procs.set(opts.agentId, proc)
-  logMemoryEvent({
+  void logMemoryEvent({
     v: 1,
     ts: proc.startedAt,
     sessionKind: 'lane',
@@ -413,7 +413,7 @@ function start(opts: ClaudeStartOpts): { agentId: string } {
     // A restart re-registers the agentId before the old child's close fires —
     // The stale close remains silent in the renderer, but is still logged.
     const current = procs.get(opts.agentId)
-    logMemoryEvent({
+    void logMemoryEvent({
       v: 1,
       ts: Date.now(),
       sessionKind: 'lane',
@@ -471,7 +471,7 @@ export function injectPointerPrompt(agentId: string, text: string): boolean {
 function interrupt(agentId: string): void {
   const proc = procs.get(agentId)
   if (!proc) return
-  logMemoryEvent({
+  void logMemoryEvent({
     v: 1,
     ts: Date.now(),
     sessionKind: 'lane',

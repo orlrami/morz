@@ -28,7 +28,10 @@ function memoryApi(): MorzMemoryApi | undefined {
 }
 
 function eventLogLabel(stats: MemoryEventLogStats): string {
-  return `${stats.count} events logged · ${(stats.bytes / (1024 * 1024)).toFixed(2)} MB`
+  const size = (stats.bytes / (1024 * 1024)).toFixed(2)
+  // Drops are only shown when there are some, so a healthy log stays quiet.
+  const dropped = stats.dropped > 0 ? ` · ${stats.dropped} dropped` : ''
+  return `${stats.count} events logged · ${size} MB${dropped}`
 }
 
 /** w15/memory-opset — UPDATE/DELETE approval cards render the op diff. */

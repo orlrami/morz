@@ -650,9 +650,9 @@ export function registerMemoryIpc(): void {
     assertTrustedEventLogSender(event)
     return eventLogStats()
   })
-  ipcMain.handle(MemoryApi.clearEventLog, (event) => {
+  ipcMain.handle(MemoryApi.clearEventLog, async (event) => {
     assertTrustedEventLogSender(event)
-    clearEventLog()
+    await clearEventLog()
   })
   ipcMain.handle(MemoryApi.setEventLogMode, (event, mode: unknown) => {
     assertTrustedEventLogSender(event)
