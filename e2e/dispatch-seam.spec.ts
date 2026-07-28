@@ -166,7 +166,14 @@ test('dispatched panes report real activity and real usage; a silent CLI reports
   const fakeCli = join(fixtureParent, 'fake-agent.ps1')
   writeFakeCli(fakeCli)
 
-  // must be set before launchMorz copies process.env into the app env
+  // Must be set before launchMorz copies process.env into the app env.
+  // MORZ_DISPATCH_STUB is cleared explicitly: runs.spec.ts and lanes-runs.spec.ts
+  // set it at MODULE level, and Playwright imports every test file into the
+  // worker before running any of them — so whichever files share this worker
+  // have already turned the stub on. With the stub set the dispatcher never
+  // types the launch command, the stand-in CLI never runs, and this spec's
+  // whole premise disappears.
+  delete process.env.MORZ_DISPATCH_STUB
   process.env.MORZ_DISPATCH_FAKE_CLI = fakeCli
   process.env.MORZ_E2E = '1'
   process.env.MORZ_E2E_CLAUDE_HOME = claudeHome

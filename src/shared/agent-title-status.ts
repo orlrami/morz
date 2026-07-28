@@ -121,12 +121,22 @@ export function namedClis(title: string): TitleCli[] {
  * second and every frame looks like a fresh event.
  */
 export function normalizeTerminalTitle(title: string): string {
-  let normalized = ''
-  for (const char of title) {
-    const code = char.codePointAt(0) ?? 0
-    normalized += isBraille(code) ? '⠋' : char
+  const collapsed = title.replace(/\s+/g, ' ').trim()
+  // Most titles carry no spinner at all; rebuilding every one codepoint by
+  // codepoint is the hot cost when a chunk arrives carrying thousands of them.
+  let hasSpinner = false
+  for (let i = 0; i < collapsed.length; i += 1) {
+    if (isBraille(collapsed.charCodeAt(i))) {
+      hasSpinner = true
+      break
+    }
   }
-  return normalized.replace(/\s+/g, ' ').trim()
+  if (!hasSpinner) return collapsed
+  let normalized = ''
+  for (const char of collapsed) {
+    normalized += isBraille(char.codePointAt(0) ?? 0) ? '⠋' : char
+  }
+  return normalized
 }
 
 /**
