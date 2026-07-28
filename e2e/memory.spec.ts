@@ -179,7 +179,12 @@ test.describe.serial('Learning memory', () => {
       return {
         edit: await attempt(() => memory.save({ ...value, title: 'Rewritten' })),
         disable: await attempt(() => memory.setEnabled(value.id, false)),
-        remove: await attempt(() => memory.remove(value.id))
+        remove: await attempt(() => memory.remove(value.id)),
+        // Codex round-1 HIGH: clearing the flag and rewriting the fact in ONE
+        // call used to slip through — an unlock must be only an unlock.
+        unlockAndRewrite: await attempt(() =>
+          memory.save({ ...value, readOnly: false, body: 'replacement' })
+        )
       }
     }, locked)
     for (const refusal of Object.values(refusals)) expect(refusal).toContain('read-only')
@@ -189,7 +194,9 @@ test.describe.serial('Learning memory', () => {
       locked.id
     )
     expect(stored?.title).toBe('Locked house rule')
+    expect(stored?.body).toBe(locked.body)
     expect(stored?.enabled).toBe(true)
+    expect(stored?.readOnly).toBe(true)
 
     await morz.page.evaluate(
       (value) => (window as unknown as MemoryWindow).morz.memory.save({ ...value, readOnly: false }),

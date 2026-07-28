@@ -349,12 +349,14 @@ export function saveMemory(value: unknown): MemoryEntry {
   const candidate = value && typeof value === 'object' ? value as Record<string, unknown> : null
   const id = validateId(candidate?.id)
   const existing = getMemory(id)
+  const entry = normalizeEntry(value, existing)
   // w17/context-blocks — read-only is enforced here, on the one path every
   // write funnels through (Settings saves, enable toggles, approved op-set
-  // updates), so no producer can quietly rewrite a locked fact.
-  const rejection = memoryWriteRejection(existing, candidate as { readOnly?: boolean } | null)
+  // updates), so no producer can quietly rewrite a locked fact. The guard runs
+  // on the NORMALIZED candidate so an unlock is compared field by field against
+  // what is stored — unlocking and rewriting in one call is not an unlock.
+  const rejection = memoryWriteRejection(existing, entry)
   if (rejection) throw new Error(rejection)
-  const entry = normalizeEntry(value, existing)
   const target = pathForEntry(entry)
   mkdirSync(dirname(target), { recursive: true })
   const temporary = join(dirname(target), `.${entry.id}.${randomUUID()}.tmp`)

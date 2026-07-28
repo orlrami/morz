@@ -58,18 +58,39 @@ export interface MemoryEntry {
   readOnly?: boolean
 }
 
+/*
+ * Every persisted field except `updatedAt`, which the store always restamps and
+ * therefore cannot carry a meaningful change. Unlock compares against this list,
+ * so a field added later is compared by default rather than silently exempt.
+ */
+const LOCKED_FIELDS = [
+  'id', 'scope', 'scopeRef', 'kind', 'title', 'body', 'origin', 'createdAt',
+  'enabled', 'validAt', 'invalidAt', 'expiredAt', 'sourceRunId', 'source'
+] as const satisfies readonly (keyof MemoryEntry)[]
+
 /**
  * Why a write against `existing` must be refused, or null when it may proceed.
- * Passing a candidate with `readOnly: false` unlocks the fact — without that
- * escape hatch a locked fact could never be edited again.
+ *
+ * `next` is the NORMALIZED candidate (or null for a delete), so both sides are
+ * comparable field by field. Unlocking is the one write a locked fact accepts —
+ * otherwise a lock would be irreversible — but it must be JUST the unlock:
+ * `save({ ...locked, readOnly: false, body: 'replacement' })` would otherwise
+ * clear the flag and rewrite the fact in a single call, which is the whole
+ * protection gone. Unlock first, then edit.
  */
 export function memoryWriteRejection(
   existing: MemoryEntry | null | undefined,
-  next: { readOnly?: boolean } | null
+  next: MemoryEntry | null
 ): string | null {
   if (!existing?.readOnly) return null
-  if (next && next.readOnly === false) return null
-  return `Memory "${existing.id}" is read-only — unlock it in Settings > Memory before changing it.`
+  const locked = `Memory "${existing.id}" is read-only`
+  if (!next) return `${locked} — unlock it in Settings > Memory before deleting it.`
+  // `readOnly` is not compared: dropping it IS the unlock. Anything else moving
+  // in the same write means this was an edit wearing an unlock as a disguise.
+  const changed = LOCKED_FIELDS.filter((field) => next[field] !== existing[field])
+  if (changed.length === 0) return null // a pure unlock, or a no-op re-save
+  if (next.readOnly) return `${locked} — unlock it in Settings > Memory before changing it.`
+  return `${locked} — unlock it on its own first, then change ${changed.join(', ')}.`
 }
 
 /*
