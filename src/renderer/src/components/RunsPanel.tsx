@@ -553,17 +553,21 @@ function RunDetail({
         </div>
       )}
 
-      {status && (status.usage.tokens !== null || status.usage.usd !== null) && (
+      {/* `partial` alone is enough to render. When the very first read timed out
+          there are no numbers at all, and showing nothing would hide a KNOWN
+          undercount behind an empty panel — the one case where silence lies. */}
+      {status &&
+        (status.usage.tokens !== null || status.usage.usd !== null || status.usage.partial) && (
         <dl
           className="mt-3 flex items-center gap-3 border-t pt-2 font-mono text-[8.5px]"
           style={{ borderColor: 'var(--color-line)' }}
           data-testid="run-usage"
         >
-          {status.usage.tokens !== null && (
+          {(status.usage.tokens !== null || status.usage.partial) && (
             <div className="flex items-center gap-1">
               <dt style={{ color: colors.quartzDim }}>tokens</dt>
               <dd style={{ color: colors.quartz }} data-testid="run-usage-tokens">
-                {status.usage.tokens.toLocaleString()}
+                {(status.usage.tokens ?? 0).toLocaleString()}
                 {status.usage.partial ? '+' : ''}
               </dd>
             </div>

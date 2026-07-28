@@ -129,7 +129,15 @@ Stop kills the panes, but the last turn's tokens are still only on disk, and not
 
 **That await is bounded.** A filesystem read cannot be cancelled, so a stalled or locked transcript would otherwise hang Stop indefinitely — an unbounded wait on an uncancellable operation is a deadlock, not a safeguard. `finalizeRun` races the read against a 5s deadline (`DEFAULT_FINALIZE_TIMEOUT_MS`, injectable for tests). On expiry the pane is released and teardown proceeds immediately; the abandoned read still resolves eventually, sees `released`, and records nothing.
 
-A skipped read is reported, never silently treated as final. The run is flagged, `RunStatus.usage.partial` goes true, a `metering-gap` event is emitted, and a warning naming the agent and the wait is logged. The run card then renders the figure as `2,600+` beside an "at least" marker, so the owner sees a floor rather than a number that quietly under-reports.
+A deadline of zero abandons the read outright rather than racing it — a bound has to be a bound, not a coin toss against however fast the disk happens to be. Production never passes zero; the e2e does, to force the unhappy path.
+
+A skipped read is reported, never silently treated as final, and saying so turned out to have three parts that each failed independently:
+
+- **It persists.** The flag is a `metering_partial` column on the run row, not a `Set` in the bridge. Usage totals outlive the process that observed the gap, so an in-memory flag turned a known undercount back into an exact-looking figure on the next launch. The write is one-way: a gap that happened cannot un-happen, and a later successful read does not conjure the tokens it never saw.
+- **It publishes.** `finalize` pushes when the gap is recorded, not only when an activity chip needs clearing. A title-silent pane has no chip, and its liveness watcher can publish the terminal state before the deadline expires — without this push nothing would ever carry `partial` to the renderer.
+- **It renders.** The usage panel draws when `partial` is set even with no numbers at all. A first read that times out leaves `{tokens: null, usd: null, partial: true}`, and a guard checking only the numbers renders an empty panel — the one case where showing nothing actively lies. That state renders as `0+` beside an "at least" marker.
+
+The second e2e covers all three at once: an agent with no transcript, no observed activity, a forced deadline, and a full app restart.
 
 ## Publishing changes to the UI
 

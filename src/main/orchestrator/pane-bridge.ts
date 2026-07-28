@@ -80,6 +80,8 @@ export interface PaneBridgeDeps {
   createUsageReader(worktree: string, since: number): TranscriptReader | null
   /** Broadcast the refreshed RunStatus. */
   push(runId: string): void
+  /** Durably record that this run's usage is a floor — it must outlive this process. */
+  markMeteringGap(runId: string): void
   now(): number
   /** How long teardown may wait on a transcript read before giving up. */
   finalizeTimeoutMs?: number
@@ -115,8 +117,6 @@ export interface PaneBridge {
   /** Final metered read for every pane of a run, then detach. Await before cleanup. */
   finalizeRun(runId: string): Promise<void>
   activity(runId: string, agentId: string): AgentActivity | null
-  /** True when a read was abandoned on deadline, so this run's usage is a floor. */
-  meteringIncomplete(runId: string): boolean
   onEvent(listener: (event: PaneBridgeEvent) => void): () => void
 }
 
@@ -131,6 +131,13 @@ function titleCliFor(cli: PlannedCli): TitleCli {
  * must make a late result harmless rather than rely on it never arriving.
  */
 async function within(work: Promise<unknown>, ms: number): Promise<boolean> {
+  // A deadline of zero grants no time at all, so the work is abandoned without
+  // a race. Racing a 0ms timer against real I/O is a coin toss, and the caller
+  // asked for a bound, not a gamble.
+  if (ms <= 0) {
+    void Promise.resolve(work).catch(() => undefined)
+    return false
+  }
   let timer: NodeJS.Timeout | undefined
   const expired = new Promise<false>((resolve) => {
     timer = setTimeout(() => resolve(false), ms)
@@ -146,8 +153,6 @@ async function within(work: Promise<unknown>, ms: number): Promise<boolean> {
 export function createPaneBridge(deps: PaneBridgeDeps): PaneBridge {
   const panes = new Map<string, PaneState>()
   const listeners = new Set<(event: PaneBridgeEvent) => void>()
-  /** Runs whose usage is known to be a floor because a read was abandoned. */
-  const incompleteRuns = new Set<string>()
   const finalizeTimeoutMs = deps.finalizeTimeoutMs ?? DEFAULT_FINALIZE_TIMEOUT_MS
 
   const emit = (event: PaneBridgeEvent): void => {
@@ -261,7 +266,7 @@ export function createPaneBridge(deps: PaneBridgeDeps): PaneBridge {
     pane.released = true
 
     if (!finished) {
-      incompleteRuns.add(pane.runId)
+      deps.markMeteringGap(pane.runId)
       const waitedMs = deps.now() - startedAt
       console.warn(
         `[morz] metering incomplete for ${pane.agentId} (run ${pane.runId}): transcript read exceeded ${finalizeTimeoutMs}ms — reported usage is a floor, not a total`
@@ -274,8 +279,11 @@ export function createPaneBridge(deps: PaneBridgeDeps): PaneBridge {
         at: deps.now()
       })
     }
-    // The chip must clear even when nothing else pushes for this run.
-    if (hadActivity) deps.push(pane.runId)
+    // Push when the chip must clear, AND when the gap was just recorded: for a
+    // title-silent pane the liveness watcher can publish the terminal state
+    // before this deadline expires, and nothing else would ever carry `partial`
+    // to the renderer.
+    if (hadActivity || !finished) deps.push(pane.runId)
   }
 
   return {
@@ -378,9 +386,6 @@ export function createPaneBridge(deps: PaneBridgeDeps): PaneBridge {
       return null
     },
 
-    meteringIncomplete(runId: string): boolean {
-      return incompleteRuns.has(runId)
-    },
 
     onEvent(listener: (event: PaneBridgeEvent) => void): () => void {
       listeners.add(listener)

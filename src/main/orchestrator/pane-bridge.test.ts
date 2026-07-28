@@ -38,6 +38,8 @@ interface Harness {
   states: string[]
   usage: { agentId: string; tokens: number }[]
   pushes: string[]
+  /** Runs the bridge asked to durably mark as under-metered. */
+  gaps: string[]
   reads: number
   ledger: Map<string, string>
   settle(): Promise<void>
@@ -56,6 +58,7 @@ function harness(
     states: [],
     usage: [],
     pushes: [],
+    gaps: [],
     reads: 0,
     ledger,
     settle: async () => {
@@ -85,6 +88,7 @@ function harness(
         }
       },
     push: (runId) => h.pushes.push(runId),
+    markMeteringGap: (runId) => h.gaps.push(runId),
     now: () => 1000,
     finalizeTimeoutMs: opts.finalizeTimeoutMs
   })
@@ -413,11 +417,7 @@ test('finalizeRun gives up on a hung read, reports the gap, and lets teardown pr
   const waited = Date.now() - startedAt
 
   assert.ok(waited < 2000, `teardown must not block on a hung read (waited ${waited}ms)`)
-  assert.equal(
-    h.bridge.meteringIncomplete('run-1'),
-    true,
-    'the usage figure is a floor and must say so'
-  )
+  assert.deepEqual(h.gaps, ['run-1'], 'the gap is recorded DURABLY, not in memory')
   const gap = h.events.find((e) => e.type === 'metering-gap')
   assert.ok(gap, 'the gap is reported, not silently swallowed')
   assert.equal((gap as { agentId: string }).agentId, 'solo')
@@ -427,8 +427,32 @@ test('a completed finalize never marks the run incomplete', async () => {
   const h = harness([{ inputTokens: 1, outputTokens: 1 }])
   register(h)
   await h.bridge.finalizeRun('run-1')
-  assert.equal(h.bridge.meteringIncomplete('run-1'), false)
+  assert.deepEqual(h.gaps, [])
   assert.deepEqual(h.events.filter((e) => e.type === 'metering-gap'), [])
+})
+
+test('a zero deadline abandons the read outright, without racing it', async () => {
+  // Even a reader that would resolve immediately gets no time — a bound has to
+  // be a bound, not a coin toss against however fast the disk happens to be.
+  const h = harness([{ inputTokens: 5, outputTokens: 5 }], undefined, { finalizeTimeoutMs: 0 })
+  register(h)
+  await h.bridge.finalizeRun('run-1')
+  assert.deepEqual(h.gaps, ['run-1'])
+  assert.deepEqual(h.usage, [])
+})
+
+test('a timed-out finalize pushes even when the pane never showed activity', async () => {
+  // A title-silent pane has no chip to clear, and its liveness watcher can
+  // publish the terminal state before this deadline expires — so without this
+  // push nothing ever carries `partial` to the renderer.
+  const h = harness([], { read: () => new Promise(() => undefined) }, { finalizeTimeoutMs: 30 })
+  register(h)
+  assert.equal(h.bridge.activity('run-1', 'solo'), null, 'nothing was ever observed')
+  h.pushes.length = 0
+
+  await h.bridge.finalizeRun('run-1')
+  assert.deepEqual(h.gaps, ['run-1'])
+  assert.deepEqual(h.pushes, ['run-1'], 'the partial flag has to reach the UI')
 })
 
 test('a hung read that finally resolves cannot record usage after release', async () => {
@@ -439,7 +463,7 @@ test('a hung read that finally resolves cannot record usage after release', asyn
   await h.settle()
 
   await h.bridge.finalizeRun('run-1')
-  assert.equal(h.bridge.meteringIncomplete('run-1'), true)
+  assert.deepEqual(h.gaps, ['run-1'])
 
   // the abandoned read completes long after teardown moved on
   for (const resolve of pending) resolve({ inputTokens: 500, outputTokens: 500 })

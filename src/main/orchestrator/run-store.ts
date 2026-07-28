@@ -89,6 +89,13 @@ function open(): Database.Database {
   if (!runColumns.has('cleared_at')) {
     db.exec('ALTER TABLE orch_runs ADD COLUMN cleared_at TEXT')
   }
+  // w17/adapter-seam — a metering gap must outlive the process that saw it.
+  // Usage totals persist in the cost meter's tables, so a gap kept only in
+  // memory would silently turn a known undercount back into an exact-looking
+  // figure on the next launch.
+  if (!runColumns.has('metering_partial')) {
+    db.exec('ALTER TABLE orch_runs ADD COLUMN metering_partial INTEGER NOT NULL DEFAULT 0')
+  }
   db.exec(`
     DROP INDEX IF EXISTS orch_runs_history;
     CREATE INDEX IF NOT EXISTS orch_runs_history_v2 ON orch_runs (cleared_at, space_root, state, created_at);
@@ -197,6 +204,8 @@ export interface RunRow {
   started_at: string | null
   ended_at: string | null
   cleared_at: string | null
+  /** 1 once a transcript read was abandoned: this run's usage is a floor. */
+  metering_partial: 0 | 1
 }
 
 export interface AgentRow {
@@ -291,6 +300,15 @@ export function getAgentState(runId: string, agentId: AgentId): string | undefin
   return currentAgentState(runId, agentId)
 }
 
+/**
+ * w17/adapter-seam — record that this run's usage is a floor, not a total.
+ * Durable and one-way: a gap that happened cannot un-happen, and a later
+ * successful read does not make the tokens it never saw appear.
+ */
+export function markRunMeteringPartial(runId: string): void {
+  open().prepare('UPDATE orch_runs SET metering_partial = 1 WHERE run_id = ?').run(runId)
+}
+
 export function patchAgent(
   runId: string,
   agentId: AgentId,
@@ -353,7 +371,9 @@ export function getRunStatus(runId: string): RunStatus | null {
     state: run.state,
     agents,
     agentsDetail,
-    usage: readUsage(runId),
+    // The ledger owns `partial`: it survives restarts, while the bridge that
+    // observed the gap does not.
+    usage: { ...readUsage(runId), partial: run.metering_partial === 1 || undefined },
     startedAt: run.started_at,
     endedAt: run.ended_at
   }

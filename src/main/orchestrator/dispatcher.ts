@@ -59,6 +59,7 @@ import {
   getAgentRows,
   getAgentState,
   getApprovedPlan,
+  markRunMeteringPartial,
   getRunRow,
   getRunStatus,
   listLiveRuns,
@@ -259,6 +260,17 @@ function transcriptRoot(): string {
   return testRoot || homedir()
 }
 
+/**
+ * Same gate as the transcript root: the suite forces the deadline to expire so
+ * the incomplete-usage surface can be proven end to end. Undefined in every
+ * shipped build, which leaves DEFAULT_FINALIZE_TIMEOUT_MS in charge.
+ */
+function finalizeTimeoutOverride(): number | undefined {
+  if (process.env.MORZ_E2E !== '1' || app.isPackaged) return undefined
+  const raw = Number(process.env.MORZ_E2E_FINALIZE_TIMEOUT_MS)
+  return Number.isFinite(raw) && raw >= 0 ? raw : undefined
+}
+
 export const paneBridge = createPaneBridge({
   setAgentState: (runId, agentId, state) => agentTransition(runId, agentId, state),
   getAgentState: (runId, agentId) => getAgentState(runId, agentId) ?? null,
@@ -269,7 +281,11 @@ export const paneBridge = createPaneBridge({
   createUsageReader: (worktree, since) =>
     createTranscriptReader({ worktree, root: transcriptRoot(), since }),
   push,
-  now: () => Date.now()
+  // Persisted on the run row: usage totals outlive the bridge that observed the
+  // gap, so an in-memory flag would let a known undercount look exact later.
+  markMeteringGap: (runId) => markRunMeteringPartial(runId),
+  now: () => Date.now(),
+  finalizeTimeoutMs: finalizeTimeoutOverride()
 })
 
 /* ── kickoff bus tasks (DAG deps gate claiming) ── */
@@ -634,11 +650,8 @@ export function registerDispatchIpc(ipcMain: IpcMain, deps: DispatcherHost): voi
   // w17/adapter-seam — run status starts reporting observed activity and the
   // meter's real totals instead of the hardcoded {usd:null,tokens:null}.
   setAgentActivityProvider((runId, agentId) => paneBridge.activity(runId, agentId))
-  setRunUsageProvider((runId) => ({
-    ...costMeter.usage(runId),
-    // A read abandoned on deadline makes the number a floor, not a total.
-    partial: paneBridge.meteringIncomplete(runId) || undefined
-  }))
+  // `partial` is not merged here — the run row owns it, so it survives restarts.
+  setRunUsageProvider((runId) => costMeter.usage(runId))
   ipcMain.handle(RunApi.approvePlan, (_e, plan: SpawnPlan) => approvePlan(plan))
   ipcMain.handle(RunApi.dispatch, (_e, plan: SpawnPlan) => dispatch(plan))
   // w14/orch-scoped — optional spaceRoot filter (no arg = unfiltered)

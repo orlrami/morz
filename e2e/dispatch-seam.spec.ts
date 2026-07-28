@@ -11,7 +11,7 @@
  * recognizable title must produce NO activity, because a guess would be worse
  * than silence. See docs/in-progress/SEAM-DESIGN.md.
  */
-import { expect, test } from '@playwright/test'
+import { expect, test, type Page } from '@playwright/test'
 import { execFileSync } from 'child_process'
 import { mkdirSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
@@ -162,6 +162,40 @@ function seedTranscript(claudeHome: string, worktree: string, turns: number[][])
   writeFileSync(join(dir, 'session-e2e.jsonl'), lines.join('\n') + '\n', 'utf8')
 }
 
+/*
+ * w14/orch-scoped — the Runs tab shows only the ACTIVE space's runs, so the
+ * fixture space has to be active BEFORE dispatching. Seed-verify-retry follows
+ * the space-tabs pattern: a persist flush can wipe the seed during the reload.
+ */
+async function seedFixtureSpace(page: Page, spaceRoot: string): Promise<void> {
+  let seeded = false
+  for (let attempt = 0; attempt < 3 && !seeded; attempt += 1) {
+    await page.evaluate((root) => {
+      localStorage.setItem(
+        'morz.spaces',
+        JSON.stringify({
+          version: 2,
+          state: {
+            spaces: [{ id: 'seam-space', name: 'seam-space', root, agents: [] }],
+            activeSpaceId: 'seam-space',
+            initialized: true
+          }
+        })
+      )
+    }, spaceRoot)
+    await page.reload({ waitUntil: 'domcontentloaded' })
+    try {
+      await expect(
+        page.getByRole('tablist', { name: 'Spaces' }).getByRole('tab', { name: 'seam-space' })
+      ).toHaveAttribute('aria-selected', 'true', { timeout: 5_000 })
+      seeded = true
+    } catch {
+      // persist race wiped the seed — reseed on the fresh page and retry
+    }
+  }
+  expect(seeded, 'seeded fixture space survived reload').toBe(true)
+}
+
 test('dispatched panes report real activity and real usage; a silent CLI reports neither', async () => {
   const fixtureParent = join(ROOT, 'e2e', '.tmp', `dispatch-seam-${Date.now()}`)
   const spaceRoot = makeSpaceFixture(fixtureParent)
@@ -186,35 +220,7 @@ test('dispatched panes report real activity and real usage; a silent CLI reports
   delete process.env.MORZ_E2E_CLAUDE_HOME
 
   try {
-    // w14/orch-scoped — the Runs tab shows only the ACTIVE space's runs, so make
-    // the fixture space active BEFORE dispatching (seed-verify-retry, the
-    // space-tabs pattern: a persist flush can wipe the seed during reload).
-    let seeded = false
-    for (let attempt = 0; attempt < 3 && !seeded; attempt += 1) {
-      await page.evaluate((root) => {
-        localStorage.setItem(
-          'morz.spaces',
-          JSON.stringify({
-            version: 2,
-            state: {
-              spaces: [{ id: 'seam-space', name: 'seam-space', root, agents: [] }],
-              activeSpaceId: 'seam-space',
-              initialized: true
-            }
-          })
-        )
-      }, spaceRoot)
-      await page.reload({ waitUntil: 'domcontentloaded' })
-      try {
-        await expect(
-          page.getByRole('tablist', { name: 'Spaces' }).getByRole('tab', { name: 'seam-space' })
-        ).toHaveAttribute('aria-selected', 'true', { timeout: 5_000 })
-        seeded = true
-      } catch {
-        // persist race wiped the seed — reseed on the fresh page and retry
-      }
-    }
-    expect(seeded, 'seeded fixture space survived reload').toBe(true)
+    await seedFixtureSpace(page, spaceRoot)
     // the reload discarded the page's PTY collector — waitForTerm needs it back
     await installCollector(page)
 
@@ -331,6 +337,91 @@ test('dispatched panes report real activity and real usage; a silent CLI reports
     expect(stopped.usage.tokens, 'the last turn is metered during teardown, once').toBe(2600)
     await page.evaluate((id) => (window as unknown as MorzRunWindow).morz.run.cleanup(id), runId)
   } finally {
+    await closeMorz(app)
+    rmSync(fixtureParent, { recursive: true, force: true })
+  }
+})
+
+/*
+ * The unhappy metering path, which is where an honest tool earns its keep: a
+ * transcript read that never finishes. Teardown abandons it on a deadline, and
+ * the run's usage becomes a FLOOR. Every part of saying so is exercised here —
+ * an agent with no transcript at all (so there are no numbers to hang the
+ * message on), no observed activity (so nothing else pushes), and a full app
+ * restart (so an in-memory flag would be gone).
+ */
+test('an abandoned transcript read is reported as a floor, and survives a restart', async () => {
+  const fixtureParent = join(ROOT, 'e2e', '.tmp', `seam-partial-${Date.now()}`)
+  const spaceRoot = makeSpaceFixture(fixtureParent)
+  const appDataDir = join(fixtureParent, 'appdata')
+  const fakeCli = join(fixtureParent, 'fake-agent.ps1')
+  writeFakeCli(fakeCli)
+
+  delete process.env.MORZ_DISPATCH_STUB
+  process.env.MORZ_DISPATCH_FAKE_CLI = fakeCli
+  process.env.MORZ_E2E = '1'
+  // force every finalize to exceed its deadline
+  process.env.MORZ_E2E_FINALIZE_TIMEOUT_MS = '0'
+  let launched = await launchMorz({ appDataDir })
+  let app = launched.app
+  let page = launched.page
+  delete process.env.MORZ_DISPATCH_FAKE_CLI
+  delete process.env.MORZ_E2E_FINALIZE_TIMEOUT_MS
+
+  let runId = ''
+  try {
+    await seedFixtureSpace(page, spaceRoot)
+
+    // no EMIT_TITLES: this agent never announces itself, so it has no activity
+    // chip to clear — the case where only the gap itself can trigger a push
+    const plan = makePlan(spaceRoot, `plan-partial-${Date.now()}`, [
+      { agentId: 'silent', cli: 'claude', promptSeed: 'You are silent. Say nothing structured.' }
+    ])
+    const { planHash } = await page.evaluate(
+      (p) => (window as unknown as MorzRunWindow).morz.run.approvePlan(p),
+      plan
+    )
+    runId = (
+      await page.evaluate((p) => (window as unknown as MorzRunWindow).morz.run.dispatch(p), {
+        ...(plan as Record<string, unknown>),
+        planHash
+      })
+    ).runId
+
+    await page.getByRole('radio', { name: 'Orchestrated' }).click()
+    await page.getByRole('tab', { name: 'Runs' }).click()
+    await expect(page.getByTestId('run-agent')).toHaveCount(1)
+
+    const stopped = await page.evaluate(
+      (id) => (window as unknown as MorzRunWindow).morz.run.stopRun(id),
+      runId
+    )
+    expect(stopped.state).toBe('aborted')
+    expect(stopped.usage.partial, 'an abandoned read must be admitted').toBe(true)
+    expect(stopped.usage.tokens, 'this agent produced no transcript at all').toBeNull()
+
+    // With no tokens and no dollars, a guard that only checks the numbers
+    // renders NOTHING — an empty panel where a known undercount should be.
+    await expect(page.getByTestId('run-usage-partial')).toBeVisible({ timeout: 20_000 })
+    await expect(page.getByTestId('run-usage-partial')).toHaveText('at least')
+    await expect(page.getByTestId('run-usage-tokens')).toHaveText('0+')
+
+    // ── restart: the flag lives with the run, not with the process ──
+    await closeMorz(app)
+    launched = await launchMorz({ appDataDir })
+    app = launched.app
+    page = launched.page
+
+    const afterRestart = await page.evaluate(
+      (id) => (window as unknown as MorzRunWindow).morz.run.runStatus(id),
+      runId
+    )
+    expect(
+      afterRestart?.usage.partial,
+      'a known undercount must not look exact after a restart'
+    ).toBe(true)
+  } finally {
+    delete process.env.MORZ_E2E
     await closeMorz(app)
     rmSync(fixtureParent, { recursive: true, force: true })
   }
