@@ -44,7 +44,8 @@ import { scanBootstrapMarkdown, splitMarkdownCandidates } from './bootstrap'
 import {
   clearEventLog,
   eventLogStats,
-  logMemoryEvent
+  logMemoryEvent,
+  setMemoryEventMode
 } from './event-log'
 
 const MEMORY_E2E_PROPOSE = 'memory:e2e-propose'
@@ -652,6 +653,10 @@ export function registerMemoryIpc(): void {
   ipcMain.handle(MemoryApi.clearEventLog, (event) => {
     assertTrustedEventLogSender(event)
     clearEventLog()
+  })
+  ipcMain.handle(MemoryApi.setEventLogMode, (event, mode: unknown) => {
+    assertTrustedEventLogSender(event)
+    return setMemoryEventMode(mode)
   })
 
   if (process.env.MORZ_E2E === '1') {

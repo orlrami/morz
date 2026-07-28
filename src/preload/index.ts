@@ -515,6 +515,7 @@ import {
   type MemoryBootstrapSpace,
   type MemoryEntry,
   type MemoryEventLogStats,
+  type MemoryEventMode,
   type MemoryInvocationEvent,
   type MemoryOpAuditRow,
   type MemoryProposal,
@@ -554,6 +555,8 @@ const memoryApi: MemoryE2eApi = {
   eventLogStats: (): Promise<MemoryEventLogStats> =>
     ipcRenderer.invoke(MemoryChannels.eventLogStats),
   clearEventLog: (): Promise<void> => ipcRenderer.invoke(MemoryChannels.clearEventLog),
+  setEventLogMode: (mode: MemoryEventMode): Promise<MemoryEventMode> =>
+    ipcRenderer.invoke(MemoryChannels.setEventLogMode, mode),
   onChanged: (callback) => {
     const listener = (): void => callback()
     ipcRenderer.on(MemoryChannels.changed, listener)

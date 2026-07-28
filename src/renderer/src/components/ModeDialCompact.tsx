@@ -27,14 +27,15 @@ export function ModeDialCompact(): JSX.Element {
 
   const switchMode = (next: MorzMode): void => {
     if (next === 'manual') {
-      // Last Claude calls happen HERE, while still leaving Assisted; once the
-      // mode flips, nothing in the renderer touches window.morz.claude.
+      // Flip Main's authoritative mode before late lane callbacks can arrive.
+      setMode(next)
       const morz = getMorz()
       for (const lane of useLaneStore.getState().lanes) {
         morz?.claude.interrupt(lane.agentId)
         useLayoutStore.getState().removePane(lane.paneId)
         useLaneStore.getState().removeLane(lane.paneId)
       }
+      return
     }
     setMode(next)
   }

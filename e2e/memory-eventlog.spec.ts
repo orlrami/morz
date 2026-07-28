@@ -70,7 +70,34 @@ test.describe.serial('Memory invocation event log', () => {
     expect(existsSync(join(morz.appDataDir, 'Morz', 'memory-events.jsonl'))).toBe(false)
   })
 
+  test('switching to Manual denies late lane telemetry', async () => {
+    await morz.page.getByRole('radio', { name: 'Assisted', exact: true }).click()
+    await morz.page.evaluate(
+      (cwd) => (window as unknown as EventLogWindow).morz.claude.start({
+        agentId: 'manual-transition',
+        cwd
+      }),
+      fixtureRoot
+    )
+    await expect.poll(async () =>
+      morz.page.evaluate(() =>
+        (window as unknown as EventLogWindow).morz.memory.eventLogStats()
+      ).then((stats) => stats.count)
+    ).toBe(1)
+
+    await morz.page.getByRole('radio', { name: 'Manual', exact: true }).click()
+    await morz.page.evaluate(() =>
+      (window as unknown as EventLogWindow).morz.claude.interrupt('manual-transition')
+    )
+    await morz.page.waitForTimeout(500)
+    const after = await morz.page.evaluate(() =>
+      (window as unknown as EventLogWindow).morz.memory.eventLogStats()
+    )
+    expect(after.count).toBe(1)
+  })
+
   test('events of every type leave memory proposals byte-identical', async () => {
+    await morz.page.getByRole('radio', { name: 'Assisted', exact: true }).click()
     const before = await morz.page.evaluate(() =>
       (window as unknown as EventLogWindow).morz.memory.proposals()
     )
@@ -131,6 +158,33 @@ test.describe.serial('Memory invocation event log', () => {
     expect(events.some((event) => event.event === 'exit' && event.outcome === 'ok')).toBe(true)
     expect(readFileSync(path, 'utf8')).not.toContain('secret file contents')
     expect(readFileSync(path, 'utf8')).not.toContain('.env')
+  })
+
+  test('restarting a Claude lane records both invocation exits', async () => {
+    await morz.page.evaluate(() =>
+      (window as unknown as EventLogWindow).morz.memory.clearEventLog()
+    )
+    await morz.page.evaluate(
+      async (cwd) => {
+        const api = (window as unknown as EventLogWindow).morz.claude
+        await api.start({ agentId: 'restart-builder', cwd })
+        await api.start({ agentId: 'restart-builder', cwd })
+        api.send('restart-builder', 'Run the fixture tool.')
+      },
+      fixtureRoot
+    )
+
+    await expect.poll(() => {
+      const path = join(morz.appDataDir, 'Morz', 'memory-events.jsonl')
+      if (!existsSync(path)) return 0
+      return readFileSync(path, 'utf8')
+        .trim()
+        .split('\n')
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as MemoryInvocationEvent)
+        .filter((event) => event.agentId === 'restart-builder' && event.event === 'exit')
+        .length
+    }).toBe(2)
   })
 
   test('Memory settings shows counters and Clear empties the log', async () => {

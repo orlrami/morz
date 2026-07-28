@@ -411,13 +411,8 @@ function start(opts: ClaudeStartOpts): { agentId: string } {
   child.on('error', (err) => emit(opts.agentId, { type: 'process_error', message: err.message }))
   child.on('close', (code) => {
     // A restart re-registers the agentId before the old child's close fires —
-    // stay silent then, or the fresh lane would be flagged dead.
+    // The stale close remains silent in the renderer, but is still logged.
     const current = procs.get(opts.agentId)
-    if (current && current !== proc) return
-    procs.delete(opts.agentId)
-    for (const [rid, p] of pendingPermissions) {
-      if (p.agentId === opts.agentId) pendingPermissions.delete(rid)
-    }
     logMemoryEvent({
       v: 1,
       ts: Date.now(),
@@ -429,6 +424,12 @@ function start(opts: ClaudeStartOpts): { agentId: string } {
       durationMs: Date.now() - proc.startedAt,
       meta: { source: 'structured', ...(code === null ? {} : { exitCode: code }) }
     })
+    // Preserve a restarted invocation's telemetry without marking its replacement dead.
+    if (current && current !== proc) return
+    procs.delete(opts.agentId)
+    for (const [rid, p] of pendingPermissions) {
+      if (p.agentId === opts.agentId) pendingPermissions.delete(rid)
+    }
     emit(opts.agentId, { type: 'process_exit', code, sessionId: proc.sessionId })
   })
   return { agentId: opts.agentId }

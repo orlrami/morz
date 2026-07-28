@@ -152,6 +152,7 @@ export type MemoryEventSessionKind = 'lane' | 'dispatched' | 'planner'
 export type MemoryEventCli = 'claude' | 'codex' | 'agy' | 'opencode'
 export type MemoryEventType = 'spawn' | 'exit' | 'tool' | 'block' | 'interrupt'
 export type MemoryEventOutcome = 'ok' | 'error' | 'blocked' | 'unknown'
+export type MemoryEventMode = 'manual' | 'assisted' | 'orchestrated'
 
 /** Allowlisted event metadata. Raw args, env, prompts and file contents never cross this contract. */
 export interface MemoryEventMeta {
@@ -199,6 +200,7 @@ export const MemoryApi = {
   applyBootstrap: 'memory:apply-bootstrap',
   eventLogStats: 'memory:event-log-stats',
   clearEventLog: 'memory:event-log-clear',
+  setEventLogMode: 'memory:event-log-set-mode',
   changed: 'memory:changed' // push → void (store or proposals changed)
 } as const
 
@@ -228,5 +230,6 @@ export interface MorzMemoryApi {
   applyBootstrap(reviewId: string, selectedIds: string[]): Promise<MemoryBootstrapApplyResult>
   eventLogStats(): Promise<MemoryEventLogStats>
   clearEventLog(): Promise<void>
+  setEventLogMode(mode: MemoryEventMode): Promise<MemoryEventMode>
   onChanged(cb: () => void): () => void
 }

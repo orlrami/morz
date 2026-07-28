@@ -6,7 +6,8 @@ import {
   readFileSync,
   renameSync,
   rmSync,
-  statSync
+  statSync,
+  truncateSync
 } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -14,6 +15,7 @@ import type {
   MemoryEventCli,
   MemoryEventLogStats,
   MemoryEventMeta,
+  MemoryEventMode,
   MemoryEventOutcome,
   MemoryEventSessionKind,
   MemoryEventType,
@@ -25,11 +27,11 @@ export const EVENT_LOG_MAX_BYTES = 5 * 1024 * 1024
 export const EVENT_LOG_MAX_RECORD_BYTES = 64 * 1024
 export const EVENT_LOG_KEEP_FILES = 2
 
-export type MemoryEventMode = 'manual' | 'assisted' | 'orchestrated'
 export type {
   MemoryEventCli,
   MemoryEventLogStats,
   MemoryEventMeta,
+  MemoryEventMode,
   MemoryEventOutcome,
   MemoryEventSessionKind,
   MemoryEventType,
@@ -41,15 +43,12 @@ export interface MemoryEventFilter {
   cli?: MemoryEventCli
 }
 
-export interface MemoryEventWriteContext {
-  mode?: MemoryEventMode
-}
-
 export interface MemoryEventLogOptions {
   directory: string
   maxFileBytes?: number
   maxRecordBytes?: number
   keepFiles?: number
+  getMode?: () => MemoryEventMode
 }
 
 export interface ClaudeInvocationContext {
@@ -71,6 +70,9 @@ const EVENT_TYPES = new Set<MemoryEventType>(['spawn', 'exit', 'tool', 'block', 
 const OUTCOMES = new Set<MemoryEventOutcome>(['ok', 'error', 'blocked', 'unknown'])
 const SAFE_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:/~-]*$/
 const SAFE_TOOL_NAME = /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/
+const MEMORY_EVENT_MODES = new Set<MemoryEventMode>(['manual', 'assisted', 'orchestrated'])
+const MAX_PENDING_TOOL_IDS = 256
+const MAX_TOOL_ID_LENGTH = 256
 
 const SECRET_PATTERNS: RegExp[] = [
   /\bsk-(?:proj-)?[A-Za-z0-9_-]{16,}\b/gi,
@@ -163,8 +165,14 @@ function normalizeEvent(value: unknown): MemoryInvocationEvent | null {
   return normalized
 }
 
-function writeAllowed(context: MemoryEventWriteContext): boolean {
-  if (context.mode === 'manual') return false
+function writeAllowed(getMode: () => MemoryEventMode): boolean {
+  let mode: MemoryEventMode
+  try {
+    mode = getMode()
+  } catch {
+    return false
+  }
+  if (mode === 'manual') return false
   return process.env.MORZ_E2E !== '1' || process.env.MORZ_E2E_MEMORY_EVENT_LOG === '1'
 }
 
@@ -172,15 +180,17 @@ export class MemoryEventLog {
   private readonly maxFileBytes: number
   private readonly maxRecordBytes: number
   private readonly keepFiles: number
+  private readonly getMode: () => MemoryEventMode
 
   constructor(private readonly options: MemoryEventLogOptions) {
     this.maxFileBytes = Math.max(1, Math.floor(options.maxFileBytes ?? EVENT_LOG_MAX_BYTES))
     this.maxRecordBytes = Math.max(1, Math.floor(options.maxRecordBytes ?? EVENT_LOG_MAX_RECORD_BYTES))
     this.keepFiles = Math.max(1, Math.floor(options.keepFiles ?? EVENT_LOG_KEEP_FILES))
+    this.getMode = options.getMode ?? (() => 'manual')
   }
 
-  append(value: MemoryInvocationEvent, context: MemoryEventWriteContext = {}): boolean {
-    if (!writeAllowed(context)) return false
+  append(value: MemoryInvocationEvent): boolean {
+    if (!writeAllowed(this.getMode)) return false
     const normalized = normalizeEvent(value)
     if (!normalized) return false
     const line = `${JSON.stringify(normalized)}\n`
@@ -189,6 +199,7 @@ export class MemoryEventLog {
 
     mkdirSync(this.options.directory, { recursive: true })
     const current = this.pathFor(0)
+    this.repairTruncatedTail(current)
     const currentBytes = existsSync(current) ? statSync(current).size : 0
     if (currentBytes > 0 && currentBytes + bytes > this.maxFileBytes) this.rotate()
     appendFileSync(current, line, { encoding: 'utf8', mode: 0o600 })
@@ -244,6 +255,14 @@ export class MemoryEventLog {
     }
   }
 
+  private repairTruncatedTail(path: string): void {
+    if (!existsSync(path)) return
+    const raw = readFileSync(path)
+    if (raw.length === 0 || raw[raw.length - 1] === 0x0a) return
+    const lastNewline = raw.lastIndexOf(0x0a)
+    truncateSync(path, lastNewline < 0 ? 0 : lastNewline + 1)
+  }
+
   private pathFor(generation: number): string {
     return join(
       this.options.directory,
@@ -275,12 +294,25 @@ export class ClaudeInvocationTracker {
       if (!item || typeof item !== 'object' || Array.isArray(item)) continue
       const block = item as Record<string, unknown>
       if (input.type === 'assistant' && block.type === 'tool_use') {
-        const id = typeof block.id === 'string' ? block.id : undefined
+        const id =
+          typeof block.id === 'string' && block.id.length <= MAX_TOOL_ID_LENGTH
+            ? block.id
+            : undefined
         const name = cleanToolName(block.name)
-        if (id && name) this.toolNames.set(id, name)
+        if (id && name) {
+          this.toolNames.set(id, name)
+          while (this.toolNames.size > MAX_PENDING_TOOL_IDS) {
+            const oldest = this.toolNames.keys().next().value
+            if (typeof oldest !== 'string') break
+            this.toolNames.delete(oldest)
+          }
+        }
         events.push(this.toolEvent(ts, name, 'unknown', 'start'))
       } else if (input.type === 'user' && block.type === 'tool_result') {
-        const id = typeof block.tool_use_id === 'string' ? block.tool_use_id : undefined
+        const id =
+          typeof block.tool_use_id === 'string' && block.tool_use_id.length <= MAX_TOOL_ID_LENGTH
+            ? block.tool_use_id
+            : undefined
         const name = id ? this.toolNames.get(id) : undefined
         if (id) this.toolNames.delete(id)
         events.push(this.toolEvent(ts, name, block.is_error === true ? 'error' : 'ok', 'result'))
@@ -368,22 +400,34 @@ export class DispatchedInvocationTracker {
 }
 
 let activeLog: MemoryEventLog | null = null
+let activeMode: MemoryEventMode = 'manual'
 const dispatchedTracker = new DispatchedInvocationTracker()
+
+export function setMemoryEventMode(value: unknown): MemoryEventMode {
+  if (!MEMORY_EVENT_MODES.has(value as MemoryEventMode)) {
+    activeMode = 'manual'
+    throw new Error('Invalid memory event mode')
+  }
+  activeMode = value as MemoryEventMode
+  return activeMode
+}
 
 function defaultLog(): MemoryEventLog {
   if (!activeLog) {
-    activeLog = new MemoryEventLog({ directory: join(app.getPath('appData'), 'Morz') })
+    activeLog = new MemoryEventLog({
+      directory: join(app.getPath('appData'), 'Morz'),
+      getMode: () => activeMode
+    })
   }
   return activeLog
 }
 
 /** Fire-and-forget call sites use this fail-closed wrapper; events never break a run. */
 export function logMemoryEvent(
-  value: MemoryInvocationEvent,
-  context: MemoryEventWriteContext = {}
+  value: MemoryInvocationEvent
 ): boolean {
   try {
-    return defaultLog().append(value, context)
+    return defaultLog().append(value)
   } catch (error) {
     const message = error instanceof Error ? redactText(error.message, 200) : 'unknown error'
     console.warn(`[morz] memory event log write failed: ${message}`)

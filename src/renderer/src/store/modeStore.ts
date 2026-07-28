@@ -7,6 +7,7 @@
  */
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import type { MorzMemoryApi } from '../../../shared/memory'
 
 export type MorzMode = 'manual' | 'assisted' | 'orchestrated'
 
@@ -21,18 +22,29 @@ interface ModeState {
   setMode(mode: MorzMode): void
 }
 
+function syncEventLogMode(mode: MorzMode): void {
+  if (typeof window === 'undefined') return
+  const morz = window.morz as typeof window.morz & { memory?: MorzMemoryApi }
+  void morz.memory?.setEventLogMode(mode).catch((error: unknown) => {
+    console.warn('[morz-mode] main-process mode sync failed:', error)
+  })
+}
+
 export const useModeStore = create<ModeState>()(
   persist(
     (set) => ({
       mode: 'manual',
       setMode: (mode) => {
         if (mode === 'orchestrated' && !ORCHESTRATED_AVAILABLE) return
+        syncEventLogMode(mode)
         set({ mode })
       }
     }),
     { name: MODE_STORAGE_KEY, version: 1 }
   )
 )
+
+queueMicrotask(() => syncEventLogMode(useModeStore.getState().mode))
 
 if (import.meta.env.DEV && typeof localStorage !== 'undefined') {
   useModeStore.subscribe(() => {
