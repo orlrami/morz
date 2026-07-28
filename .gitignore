@@ -35,3 +35,4 @@ Thumbs.db
 
 # runtime agent-bus mailbox (visible on disk, never tracked in this repo)
 .morz/
+three-brain-out/
