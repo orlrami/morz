@@ -1,12 +1,21 @@
 # Morz
 
-Windows-first (macOS later) desktop app: a **terminal wrapper + lightweight IDE + pop-in file explorer + opt-in multi-agent CLI orchestration**. Personal-first — the union of what we love in **Warp** and **Herdr**, minus what each misses.
+> **Status: parked.** I stopped working on Morz for now to focus on my main project, OnBase. I plan to come back to it.
 
-> **Guiding principle — "assist, don't take over."** Morz is a *dial*, not an autopilot: Manual (just a terminal) → Assisted (routing + auto-handoff) → Orchestrated (delegate a goal, propose → approve → spawn, scoped). Every automation is opt-in, scoped, and reversible.
+Morz is a Windows desktop app I am building for myself. It is a terminal, a small code editor, a file explorer and an optional tool to run several AI coding agents (Claude Code, Codex, Gemini and others) at the same time, each in its own git worktree.
 
-## Status
+The main idea is "assist, do not take over". Morz has three levels. Manual is just a terminal. Assisted adds routing and handoff between agents. Orchestrated lets you give a goal, see a plan, approve it, and then the agents start. Every automation is opt in and can be undone.
 
-**v0.1 — scaffold.** Boots an Electron + React shell with the locked design tokens. UI shell + terminal + orchestration land next (see `BUILD-BREAKDOWN.md`).
+## Where it is now
+
+- Version 0.0.6, about 360 commits between July 11 and July 28, 2026.
+- Working terminal with ConPTY, tabs, split panes and a command palette.
+- Agent orchestration with a planner, per agent model choice and a review step before anything runs.
+- A shared memory system for the agents, with a redacted event log and safe atomic updates.
+- An MCP server package (`packages/morz-mcp`).
+- 218 end to end tests passing with Playwright at the last release.
+
+As a full end to end demo, Morz's agents built a small Snake game in Python and the web.
 
 ## Stack
 
@@ -47,10 +56,10 @@ All docs live under [`docs/`](docs/):
 - [`docs/research/`](docs/research/) — competitive + technical research (rounds 1–4).
 - [`docs/archive/`](docs/archive/) — superseded plans (history only).
 
-## Build process
+## How I built it
 
-Built by a coordinated **multi-model agent network** (Claude Opus 4.8, Fable 5, GPT-5.6 / 5.6T, and others) working in parallel, each in its own git worktree per module/phase so they don't collide. UI is designed in **Figma** + a UI builder; core/backend in this repo.
+I designed Morz and made the product and architecture decisions. I used AI coding agents (Claude and Codex) to help build it, each one working in its own git worktree, and I had every change reviewed by a different model before merging. Morz itself is a tool for working this way.
 
 ## License
 
-UNLICENSED (open-source vs commercial decision pending).
+All rights reserved for now. I have not decided on an open source license yet.
